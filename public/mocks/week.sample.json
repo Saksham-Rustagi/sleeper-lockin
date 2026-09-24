@@ -1,0 +1,310 @@
+{
+  "league": {
+    "weekStartUtc": "2024-10-14T00:00:00.000Z",
+    "weekEndUtc": "2024-10-21T00:00:00.000Z",
+    "startingSlots": ["PG", "SG", "G", "SF", "PF", "F", "C", "UTIL", "UTIL"],
+    "slotEligibility": {
+      "PG": ["PG"],
+      "SG": ["SG"],
+      "G": ["PG", "SG"],
+      "SF": ["SF"],
+      "PF": ["PF"],
+      "F": ["SF", "PF"],
+      "C": ["C"],
+      "UTIL": ["PG", "SG", "SF", "PF", "C"]
+    }
+  },
+  "players": [
+    { "id": "p1", "name": "Luka Doncic", "eligible": ["PG", "SG"] },
+    { "id": "p2", "name": "Stephen Curry", "eligible": ["PG", "SG"] },
+    { "id": "p3", "name": "LeBron James", "eligible": ["SF", "PF"] },
+    { "id": "p4", "name": "Kevin Durant", "eligible": ["SF", "PF"] },
+    { "id": "p5", "name": "Giannis Antetokounmpo", "eligible": ["PF", "C"] },
+    { "id": "p6", "name": "Nikola Jokic", "eligible": ["C"] },
+    { "id": "p7", "name": "Damian Lillard", "eligible": ["PG"] },
+    { "id": "p8", "name": "Jayson Tatum", "eligible": ["SF", "PF"] },
+    { "id": "p9", "name": "Anthony Davis", "eligible": ["PF", "C"] },
+    { "id": "p10", "name": "Joel Embiid", "eligible": ["C"] },
+    { "id": "p11", "name": "Devin Booker", "eligible": ["SG"] },
+    { "id": "p12", "name": "Kawhi Leonard", "eligible": ["SF", "PF"] },
+    { "id": "p13", "name": "Trae Young", "eligible": ["PG"] },
+    { "id": "p14", "name": "Jimmy Butler", "eligible": ["SF", "SG"] }
+  ],
+  "games": [
+    {
+      "gameId": "g1",
+      "playerId": "p1",
+      "tipoffUtc": "2024-10-14T19:00:00.000Z",
+      "opponent": "LAL",
+      "projection": 42.5,
+      "variance": 8.2,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g2",
+      "playerId": "p2",
+      "tipoffUtc": "2024-10-14T19:30:00.000Z",
+      "opponent": "BOS",
+      "projection": 38.3,
+      "variance": 7.5,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g3",
+      "playerId": "p3",
+      "tipoffUtc": "2024-10-14T20:00:00.000Z",
+      "opponent": "GSW",
+      "projection": 40.1,
+      "variance": 6.8,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g4",
+      "playerId": "p6",
+      "tipoffUtc": "2024-10-14T20:00:00.000Z",
+      "opponent": "PHX",
+      "projection": 48.2,
+      "variance": 9.1,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g5",
+      "playerId": "p7",
+      "tipoffUtc": "2024-10-14T22:00:00.000Z",
+      "opponent": "MIA",
+      "projection": 35.6,
+      "variance": 7.2,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g6",
+      "playerId": "p1",
+      "tipoffUtc": "2024-10-15T19:00:00.000Z",
+      "opponent": "DEN",
+      "projection": 44.8,
+      "variance": 8.5,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g7",
+      "playerId": "p4",
+      "tipoffUtc": "2024-10-15T19:30:00.000Z",
+      "opponent": "DAL",
+      "projection": 39.4,
+      "variance": 7.8,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g8",
+      "playerId": "p5",
+      "tipoffUtc": "2024-10-15T20:00:00.000Z",
+      "opponent": "CHI",
+      "projection": 46.3,
+      "variance": 8.9,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g9",
+      "playerId": "p8",
+      "tipoffUtc": "2024-10-15T20:30:00.000Z",
+      "opponent": "NYK",
+      "projection": 37.2,
+      "variance": 6.5,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g10",
+      "playerId": "p2",
+      "tipoffUtc": "2024-10-16T19:00:00.000Z",
+      "opponent": "MEM",
+      "projection": 40.5,
+      "variance": 7.9,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g11",
+      "playerId": "p3",
+      "tipoffUtc": "2024-10-16T19:30:00.000Z",
+      "opponent": "SAS",
+      "projection": 38.7,
+      "variance": 6.9,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g12",
+      "playerId": "p9",
+      "tipoffUtc": "2024-10-16T20:00:00.000Z",
+      "opponent": "POR",
+      "projection": 43.1,
+      "variance": 8.3,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g13",
+      "playerId": "p10",
+      "tipoffUtc": "2024-10-16T20:00:00.000Z",
+      "opponent": "ATL",
+      "projection": 41.9,
+      "variance": 8.7,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g14",
+      "playerId": "p11",
+      "tipoffUtc": "2024-10-16T21:00:00.000Z",
+      "opponent": "LAC",
+      "projection": 36.8,
+      "variance": 7.1,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g15",
+      "playerId": "p1",
+      "tipoffUtc": "2024-10-17T19:00:00.000Z",
+      "opponent": "OKC",
+      "projection": 41.2,
+      "variance": 8.0,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g16",
+      "playerId": "p6",
+      "tipoffUtc": "2024-10-17T20:00:00.000Z",
+      "opponent": "MIN",
+      "projection": 49.5,
+      "variance": 9.3,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g17",
+      "playerId": "p12",
+      "tipoffUtc": "2024-10-17T20:30:00.000Z",
+      "opponent": "UTA",
+      "projection": 38.9,
+      "variance": 7.4,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g18",
+      "playerId": "p13",
+      "tipoffUtc": "2024-10-17T21:00:00.000Z",
+      "opponent": "WAS",
+      "projection": 37.5,
+      "variance": 7.6,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g19",
+      "playerId": "p4",
+      "tipoffUtc": "2024-10-18T19:00:00.000Z",
+      "opponent": "HOU",
+      "projection": 40.8,
+      "variance": 8.1,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g20",
+      "playerId": "p5",
+      "tipoffUtc": "2024-10-18T19:30:00.000Z",
+      "opponent": "IND",
+      "projection": 45.7,
+      "variance": 8.8,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g21",
+      "playerId": "p7",
+      "tipoffUtc": "2024-10-18T20:00:00.000Z",
+      "opponent": "SAC",
+      "projection": 36.3,
+      "variance": 7.3,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g22",
+      "playerId": "p8",
+      "tipoffUtc": "2024-10-18T20:30:00.000Z",
+      "opponent": "CLE",
+      "projection": 38.6,
+      "variance": 6.7,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g23",
+      "playerId": "p14",
+      "tipoffUtc": "2024-10-18T21:00:00.000Z",
+      "opponent": "ORL",
+      "projection": 35.4,
+      "variance": 6.9,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g24",
+      "playerId": "p2",
+      "tipoffUtc": "2024-10-19T19:00:00.000Z",
+      "opponent": "NOP",
+      "projection": 39.7,
+      "variance": 7.7,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g25",
+      "playerId": "p3",
+      "tipoffUtc": "2024-10-19T19:30:00.000Z",
+      "opponent": "DET",
+      "projection": 41.5,
+      "variance": 7.0,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g26",
+      "playerId": "p9",
+      "tipoffUtc": "2024-10-19T20:00:00.000Z",
+      "opponent": "CHA",
+      "projection": 44.2,
+      "variance": 8.4,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g27",
+      "playerId": "p10",
+      "tipoffUtc": "2024-10-19T20:00:00.000Z",
+      "opponent": "BKN",
+      "projection": 42.8,
+      "variance": 8.6,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g28",
+      "playerId": "p11",
+      "tipoffUtc": "2024-10-19T21:00:00.000Z",
+      "opponent": "TOR",
+      "projection": 37.1,
+      "variance": 7.2,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g29",
+      "playerId": "p1",
+      "tipoffUtc": "2024-10-20T19:00:00.000Z",
+      "opponent": "MIL",
+      "projection": 43.6,
+      "variance": 8.3,
+      "status": "UPCOMING"
+    },
+    {
+      "gameId": "g30",
+      "playerId": "p6",
+      "tipoffUtc": "2024-10-20T20:00:00.000Z",
+      "opponent": "LAL",
+      "projection": 47.8,
+      "variance": 9.0,
+      "status": "UPCOMING"
+    }
+  ],
+  "roster": {
+    "starters": ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"],
+    "bench": ["p10", "p11", "p12", "p13", "p14"]
+  }
+}
+

@@ -1,103 +1,107 @@
-import Image from "next/image";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function Home() {
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
+      <div className="container mx-auto px-4 py-16">
+        <div className="max-w-4xl mx-auto text-center space-y-8">
+          {/* Hero Section */}
+          <div className="space-y-4">
+            <h1 className="text-5xl font-bold tracking-tight text-gray-900 dark:text-white">
+              Sleeper Lock-In Optimizer
+            </h1>
+            <p className="text-xl text-gray-600 dark:text-gray-300">
+              Maximize your fantasy basketball points with intelligent daily start and lock decisions
+            </p>
+          </div>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+          {/* Feature Cards */}
+          <div className="grid md:grid-cols-3 gap-6 mt-12">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">🎯 Smart Matching</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <CardDescription>
+                  Advanced bipartite matching algorithm optimizes player-slot assignments based on projections and scarcity
+                </CardDescription>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">🔒 Lock Decisions</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <CardDescription>
+                  Real-time recommendations on when to lock a game result vs. waiting for future opportunities
+                </CardDescription>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">📊 What-If Analysis</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <CardDescription>
+                  Compare policy vs. exact DP solutions, adjust risk tolerance, and simulate different scenarios
+                </CardDescription>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Lock-In Rules */}
+          <Card className="text-left mt-12">
+            <CardHeader>
+              <CardTitle>How Lock-In Mode Works</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <p>
+                <strong>1. Weekly Roster Lock:</strong> Each starting slot must have exactly one locked game by week's end.
+              </p>
+              <p>
+                <strong>2. Per-Player Lock:</strong> A player can only be locked to one slot for the entire week.
+              </p>
+              <p>
+                <strong>3. Tip-Off Locking:</strong> Players must be in the starting lineup at tip-off to be eligible for lock.
+              </p>
+              <p>
+                <strong>4. Sequential Locking:</strong> You can only lock the most recent finished game for a player.
+              </p>
+              <p>
+                <strong>5. Position Eligibility:</strong> Player must be eligible for the slot you're locking them to.
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* CTA Buttons */}
+          <div className="flex flex-col sm:flex-row gap-4 justify-center mt-12">
+            <Link href="/setup?source=sleeper">
+              <Button size="lg" className="w-full sm:w-auto">
+                Import from Sleeper
+              </Button>
+            </Link>
+            <Link href="/setup?source=file">
+              <Button size="lg" variant="outline" className="w-full sm:w-auto">
+                Upload CSV/JSON
+              </Button>
+            </Link>
+            <Link href="/setup?source=demo">
+              <Button size="lg" variant="secondary" className="w-full sm:w-auto">
+                Try Demo Data
+              </Button>
+            </Link>
+          </div>
+
+          {/* Info */}
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-8">
+            Built for Sleeper fantasy basketball Lock-In mode. All data stored locally in your browser.
+          </p>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      </div>
     </div>
   );
 }
