@@ -397,7 +397,7 @@ function MatchupsView({ leagueId, rosterId }: { leagueId: string; rosterId: numb
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div><div className="text-lg font-semibold">Week {w.week} matchups · {w.dates[0]?.slice(5)} → {w.dates[w.dates.length - 1]?.slice(5)}</div>
-          <div className="text-xs text-gray-500">Projected Lock-In totals: {w.sims} simulated weeks per team, assuming each team locks optimally from its real current locks and scores. Teams that don't play Lock-In well will score below this. {w.cached ? "Nothing changed — reusing the last result." : "Just recalculated."}</div></div>
+          <div className="text-xs text-gray-500">Projected Lock-In totals: {w.sims} simulated weeks per team, assuming each team locks well from its real current locks and scores (future locks use the fast rule; the full per-decision simulation adds about +3 pts to every team on average, which cancels out in win %). Teams that don't play Lock-In well will score below this. {w.cached ? "Nothing changed — reusing the last result." : "Just recalculated."}</div></div>
         <Button size="sm" variant="outline" onClick={load} disabled={loading}>{loading ? "Simulating…" : "Refresh"}</Button>
       </div>
       {w.matchups.map((m) => (
