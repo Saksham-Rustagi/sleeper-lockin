@@ -5,6 +5,8 @@ import * as E from "../engine/core";
 import { gameDist, injuryPlayProb, fantasyPoints } from "../engine/model";
 import { sleeper, type GameRow } from "./sources";
 import { buildWeek, resolveWeek, POLICY, type LiveTeam } from "./week";
+import { cachedCompute, fingerprint } from "./cache";
+import { teamFingerprint } from "./advise";
 
 export interface WaiverPlayer { pid: string; name: string; pos: string; team: string | null; age: number | null; injury: string | null; dynastyAdp: number | null; gamesThisWeek: number; gamesNextWeek: number; projPerGame: number | null; note?: string }
 export interface WaiverMove { add: WaiverPlayer; drop: WaiverPlayer | null; gainThisWeek: number; gainNextWeek: number; total: number; se: number; confident: boolean }
@@ -12,6 +14,7 @@ export interface WaiverAdvice {
   generatedAt: number; week: number; nextWeek: number | null; rosterFull: boolean; openSpots: number;
   moves: WaiverMove[]; droppable: (WaiverPlayer & { loss: number; protected: boolean; reason: string | null })[];
   candidates: (WaiverPlayer & { gainNoDrop: number })[]; rules: string[]; notes: string[];
+  cached?: boolean; checkedAt?: number;
 }
 
 function hashStr(s: string) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
@@ -46,7 +49,7 @@ function weekValues(T: LiveTeam, N: number, salt: number, asOf: number): Float64
   return v;
 }
 
-export async function waiverAdvice(o: { leagueId: string; rosterId: number; protect?: string[]; N?: number; asOf?: number; maxCandidates?: number }): Promise<WaiverAdvice> {
+export async function waiverAdvice(o: { leagueId: string; rosterId: number; protect?: string[]; N?: number; asOf?: number; maxCandidates?: number; force?: boolean }): Promise<WaiverAdvice> {
   const N = o.N ?? 300; const asOf = o.asOf ?? Date.now();
   const league = await sleeper.league(o.leagueId); const season = league.season; const S = league.scoring_settings;
   const week = await resolveWeek(season, asOf);
@@ -91,6 +94,21 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   for (const t of txs) if (t.status === "complete" && t.drops) for (const pid of Object.keys(t.drops)) recentlyDropped.set(pid, Math.max(recentlyDropped.get(pid) || 0, t.created));
   const pool = [...byPid.entries()].sort((a, b) => b[1] - a[1]).slice(0, o.maxCandidates ?? 12).map(([pid]) => pid);
 
+  // ---- recompute only if an input changed (rosters, projections, injuries, waiver status, my live state) ----
+  const baseCtxNow = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week, asOf, skipOpp: true });
+  const rel = new Set([...pool, ...baseCtxNow.me.pids]);
+  const fp = o.force ? String(Math.random()) : fingerprint({
+    v: 2, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
+    rosters: rosters.map((r) => [r.roster_id, r.players, r.taxi, r.reserve]),
+    proj: projRows.filter((r) => rel.has(r.player_id)).map((r) => [r.player_id, r.date, fantasyPoints(r.stats, S)]),
+    inj: [...rel].map((p) => [p, players[p]?.injury_status ?? null]),
+    dropped: [...recentlyDropped.entries()].filter(([p]) => rel.has(p)),
+    me: teamFingerprint(baseCtxNow.me),
+  });
+  const res = await cachedCompute(`waivers-${o.leagueId}-${o.rosterId}`, fp, () => simulateWaivers());
+  return { ...res.value, cached: res.cached, checkedAt: Date.now() };
+
+  async function simulateWaivers(): Promise<WaiverAdvice> {
   // ---- simulate variants ----
   const variant = async (edit?: { add?: string[]; drop?: string[] }) => {
     const a = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week, asOf, rosterEdit: edit, skipOpp: true });
@@ -148,4 +166,5 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   const notes = [`Values = change in expected Lock-In points over the rest of week ${week}${nextWeek ? ` + week ${nextWeek}` : ""}, ${N} paired simulations each. "±" is the simulation noise; only moves clearly above it are marked worth doing.`,
     "Players aged ≤23 or with dynasty ADP ≤120 are never suggested as drops (dynasty value). Protect others from the list below."];
   return { generatedAt: Date.now(), week, nextWeek, rosterFull: openSpots === 0, openSpots, moves: moves.slice(0, 12), droppable, candidates, rules, notes };
+  }
 }

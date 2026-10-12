@@ -133,7 +133,7 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <div><CardTitle>Do now</CardTitle><CardDescription>Updated {tipTime(a.generatedAt)} · refreshes every 2 min</CardDescription></div>
+          <div><CardTitle>Do now</CardTitle><CardDescription>{a.cached ? `Nothing changed since ${tipTime(a.generatedAt)} — reusing that result` : `Recalculated ${tipTime(a.generatedAt)}`} · checks for changes every 2 min</CardDescription></div>
           <Button size="sm" variant="outline" onClick={load} disabled={loading}>{loading ? "Simulating…" : "Refresh"}</Button>
         </CardHeader>
         <CardContent>
@@ -306,8 +306,8 @@ function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: numbe
     <div className="space-y-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <div><CardTitle>Best waiver moves</CardTitle><CardDescription>Week {w.week}{w.nextWeek ? ` + week ${w.nextWeek}` : ""} · {w.rosterFull ? "roster full: each add needs a drop" : `${w.openSpots} open spot(s)`}</CardDescription></div>
-          <Button size="sm" variant="outline" onClick={() => load(true)} disabled={loading}>{loading ? "Simulating…" : "Refresh"}</Button>
+          <div><CardTitle>Best waiver moves</CardTitle><CardDescription>Week {w.week}{w.nextWeek ? ` + week ${w.nextWeek}` : ""} · {w.rosterFull ? "roster full: each add needs a drop" : `${w.openSpots} open spot(s)`} · {w.cached ? `no changes since ${tipTime(w.generatedAt)}` : `recalculated ${tipTime(w.generatedAt)}`}</CardDescription></div>
+          <Button size="sm" variant="outline" onClick={() => load(false)} disabled={loading}>{loading ? "Checking…" : "Refresh"}</Button>
         </CardHeader>
         <CardContent>
           <table className="w-full text-sm">

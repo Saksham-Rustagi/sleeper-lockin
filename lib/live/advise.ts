@@ -6,6 +6,7 @@
 //  - replay: run the full strategy over a finished week with the real results and log every decision.
 import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
+import { cachedCompute, fingerprint } from "./cache";
 
 const fmtTime = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }).format(ms);
 
@@ -18,6 +19,7 @@ export interface TipPlan { tip: number; when: string; starts: { slot: string; pl
 export interface Advice {
   generatedAt: number; asOf: number; mode: "live" | "replay"; league: string; season: string; week: number; dates: string[];
   me: TeamView; opp: TeamView | null; outlook: Outlook; decisions: Decision[]; plan: TipPlan[]; actions: string[]; notes: string[];
+  cached?: boolean; checkedAt?: number;
 }
 export interface TeamView {
   rosterId: number; name: string; lockedTotal: number;
@@ -162,9 +164,25 @@ function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] 
   return a;
 }
 
-export async function advise(o: { leagueId: string; rosterId: number; week?: number; asOf?: number; lockOverrides?: Record<number, string | null>; K?: number }): Promise<Advice> {
+// Everything that can change the advice: roster, games (status/score/projection), lineup & lock state, injury
+// overrides, which events have passed, and which tip-offs fall inside the planning window.
+export function teamFingerprint(T: LiveTeam) {
+  const st = T.st;
+  return { pids: T.pids, injury: T.injury, lineup: T.lineup, evIdx: T.evIdx, pNext: T.tw.pNext ?? null,
+    games: T.games.map((g) => [g.pid, g.tip, g.status, g.actual, Math.round(g.proj * 10) / 10, g.played]),
+    st: [st.lockedBy, st.lockedPts, st.pinned, st.pendingX, st.inGame, st.lastPlayed] };
+}
+
+export async function advise(o: { leagueId: string; rosterId: number; week?: number; asOf?: number; lockOverrides?: Record<number, string | null>; K?: number; force?: boolean }): Promise<Advice> {
   const ctx = await buildWeek({ ...o, mode: "live" });
   const K = o.K ?? 300;
+  const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 3, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K));
+  return { ...value, cached, checkedAt: Date.now() };
+}
+
+function computeAdvice(ctx: WeekContext, K: number): Advice {
   // Seed from the game state (finished games, locks, pending scores), not the clock: numbers only change when
   // something actually happens, instead of jittering on every refresh.
   let h = 2166136261 ^ ctx.week;
@@ -189,8 +207,14 @@ export interface Replay { league: string; season: string; week: number; dates: s
 
 export async function replay(o: { leagueId: string; rosterId: number; week: number; K?: number }): Promise<Replay> {
   const ctx = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week: o.week, mode: "replay" });
-  const T = ctx.me; const tw = T.tw; const K = o.K ?? 150;
-  const hooks = E.rolloutHooks(tw, POLICY, T.events, "points", K, 12, o.week * 1000 + o.rosterId, T.real);
+  const K = o.K ?? 150;
+  const fp = fingerprint({ v: 2, K, pids: ctx.me.pids, games: ctx.me.games.map((g) => [g.pid, g.tip, g.actual, g.played, Math.round(g.proj * 10) / 10]), human: ctx.me.sleeperPoints, opp: ctx.opp?.sleeperPoints ?? null });
+  return (await cachedCompute(`replay-${o.leagueId}-${o.rosterId}-${o.week}`, fp, () => computeReplay(ctx, o.rosterId, o.week, K))).value;
+}
+
+function computeReplay(ctx: WeekContext, rosterId: number, week: number, K: number): Replay {
+  const T = ctx.me; const tw = T.tw;
+  const hooks = E.rolloutHooks(tw, POLICY, T.events, "points", K, 12, week * 1000 + rosterId, T.real);
   let st = E.initState(tw); const log: ReplayLog[] = [];
   const times = [...new Set(T.events.map((e) => e.t))].sort((a, b) => a - b);
   let ev = 0;
