@@ -58,3 +58,8 @@
 `python3 /root/sleeper/research/fetch_season.py && python3 /root/sleeper/research/build_dataset.py`
 then `npx tsx research/backtest.ts 1 23 APP,P1,P2,P3,P4S research/out/x.json 200` and `python3 research/analyze.py research/out/x.json`.
 Engine: `research/engine.ts`.
+
+## Lock-aware placement (added later)
+- Starters are placed in the slot where they'd be locked after a good game.
+- When a lock in the player's current slot is within noise of the best slot, he's locked in place. UTIL 1 and UTIL 2 count as interchangeable.
+- Full strategy with simulation: locks needing a slot move first fell from 58% to 35%. Points/week 274.2 vs 274.6 (−0.5 ± 1.25, not significant).

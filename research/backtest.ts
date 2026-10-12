@@ -12,6 +12,8 @@ const POLICIES: Record<string, E.Policy> = {
   P1: { name: "P1", matching: "exact", value: "stop", defer: false, reserve: false, chain: true },
   P2: { name: "P2", matching: "exact", value: "stop", defer: true, reserve: true, chain: true },
   P2_NOCHAIN: { name: "P2_NOCHAIN", matching: "exact", value: "stop", defer: true, reserve: true, chain: false },
+  P2LA: { name: "P2LA", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true },
+  P3LA: { name: "P3LA", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, rollout: { objective: "points", K, margin: 12 } },
   P2_NORES: { name: "P2_NORES", matching: "exact", value: "stop", defer: true, reserve: false, chain: true },
   P3: { name: "P3", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, rollout: { objective: "points", K, margin: 12 } },
   P4S: { name: "P4S", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, rollout: { objective: "softwin", K, margin: 12 } },
@@ -94,13 +96,13 @@ for (let week = Number(wFrom); week <= Number(wTo); week++) {
       const evs = E.buildEvents(tw, pol.chain);
       let hooks: E.Hooks | undefined;
       if (pol.rollout) {
-        const base = POLICIES.P2;
+        const base = pol.lockAware ? POLICIES.P2LA : POLICIES.P2;
         const o = oppOf.get(rid);
         const opp = o ? (() => { const ob = built.get(o)!; return { tw: ob.tw, events: E.buildEvents(ob.tw, true), pol: base, realised: ob.real }; })() : undefined;
         hooks = E.rolloutHooks(tw, base, evs, pol.rollout.objective, pol.rollout.K, pol.rollout.margin, week * 1000 + Number(rid), real, opp);
       }
       const res = E.simulate(tw, pol, evs, real.actual, real.played, E.initState(tw), 0, hooks);
-      row[pn] = Math.round(res.total * 10) / 10; row[pn + "_ms"] = Date.now() - t0;
+      row[pn] = Math.round(res.total * 10) / 10; row[pn + "_ms"] = Date.now() - t0; row[pn + "_locks"] = res.st.locks; row[pn + "_moves"] = res.st.lockMoves;
     }
     results.push(row);
     process.stderr.write(`w${week} r${rid} ${pols.map((p) => p + "=" + row[p]).join(" ")} human=${row.human} hs=${row.hindsight.toFixed(0)}\n`);

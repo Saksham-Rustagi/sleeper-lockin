@@ -129,3 +129,11 @@ test("locks a dual-position player where he doesn't strand a teammate (C/PF -> P
   assert.equal(t.slotNames[ev.lockSlot], "PF");
   assert.ok(ev.lockBest >= ev.cont);
 });
+
+test("lock-aware placement: a C/PF starts in PF when a C-only teammate still needs C", () => {
+  const POL_LA: E.Policy = { ...POL, lockAware: true };
+  // slot order puts PF before C, so plain placement would be fine here; flip it: slots [C, PF] -> plain picks C first
+  const t = tw(["C", "PF"], [{ pos: ["C", "PF"], games: [{ tip: T0, mu: 25, actual: 40 }] }, { pos: ["C"], games: [{ tip: T0 + 24 * H, mu: 30, actual: 30 }] }]);
+  const run1 = (pol: E.Policy) => { const st = E.initState(t); E.simulate(t, pol, E.buildEvents(t, true), Float64Array.from(t.games.map((g) => g.actual)), Uint8Array.from(t.games.map(() => 1)), st, 0, undefined, T0); return t.slotNames[Array.from(st.pinned).indexOf(0)]; };
+  assert.equal(run1(POL_LA), "PF");
+});

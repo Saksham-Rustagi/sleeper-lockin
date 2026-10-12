@@ -68,6 +68,7 @@ export interface Policy {
   reserve: boolean;   // at tip-off, reserve slots for overlapping later games
   chain: boolean;     // allow re-using a slot later the same day after a game ends
   rollout?: { objective: "points" | "win" | "softwin"; K: number; margin: number };
+  lockAware?: boolean; // place starters in the slot they'd be locked into after a good game (fewer moves, no blocked slots)
   eps?: number;
 }
 
@@ -111,6 +112,8 @@ export interface State {
   inGame: Int32Array;     // player -> game idx or -1
   lastPlayed: Uint8Array; // player
   started: Uint8Array;    // game -> started?
+  lastSlot: Int32Array;   // player -> slot he occupied during his most recent started game (-1 none)
+  locks: number; lockMoves: number; // stats: locks made, and locks that required moving him to another slot first
 }
 export function initState(tw: TeamWeek): State {
   const nS = tw.slots.length, nP = tw.pmask.length;
@@ -118,6 +121,7 @@ export function initState(tw: TeamWeek): State {
     lockedBy: new Int32Array(nS).fill(-1), lockedPts: new Float64Array(nS), pinned: new Int32Array(nS).fill(-1),
     pinnedUntil: new Float64Array(nS), isLocked: new Uint8Array(nP), pendingX: new Float64Array(nP).fill(NaN),
     inGame: new Int32Array(nP).fill(-1), lastPlayed: Uint8Array.from(tw.lastPlayed0), started: new Uint8Array(tw.games.length),
+    lastSlot: new Int32Array(nP).fill(-1), locks: 0, lockMoves: 0,
   };
   return s;
 }
@@ -125,7 +129,7 @@ export function cloneState(s: State): State {
   return {
     lockedBy: s.lockedBy.slice(), lockedPts: s.lockedPts.slice(), pinned: s.pinned.slice(), pinnedUntil: s.pinnedUntil.slice(),
     isLocked: s.isLocked.slice(), pendingX: s.pendingX.slice(), inGame: s.inGame.slice(), lastPlayed: s.lastPlayed.slice(),
-    started: s.started.slice(),
+    started: s.started.slice(), lastSlot: s.lastSlot.slice(), locks: s.locks, lockMoves: s.lockMoves,
   };
 }
 
@@ -252,6 +256,12 @@ export function unpinnedOpen(st: State) { let m = 0; st.lockedBy.forEach((p, s) 
 
 // ---------------- decisions ----------------
 export interface LockEval { lockBest: number; lockSlot: number; cont: number }
+// Among interchangeable slots (same eligibility, e.g. UTIL 1/UTIL 2) use the one the player already sits in.
+export function sameTypeHere(tw: TeamWeek, st: State, p: number, s: number, lockable: number): number {
+  const here = st.lastSlot ? st.lastSlot[p] : -1;
+  return here >= 0 && here !== s && tw.slots[here] === tw.slots[s] && ((lockable >> here) & 1) ? here : s;
+}
+
 export function evalLock(tw: TeamWeek, pol: Policy, st: State, p: number, t: number): LockEval {
   const x = st.pendingX[p];
   const nP = tw.pmask.length; const w = new Float64Array(nP); const others: number[] = [];
@@ -265,12 +275,20 @@ export function evalLock(tw: TeamWeek, pol: Policy, st: State, p: number, t: num
   for (const s of slotOrder(tw.slots)) {
     if (!((lockable >> s) & 1) || !(tw.slots[s] & tw.pmask[p]) || seen.has(tw.slots[s])) continue;
     seen.add(tw.slots[s]);
-    const v = x + assign(pol, tw, open & ~(1 << s), others, w).total;
-    if (v > lockBest + 1e-9) { lockBest = v; lockSlot = s; }
+    const si = sameTypeHere(tw, st, p, s, lockable);
+    const v = x + assign(pol, tw, open & ~(1 << si), others, w).total;
+    if (v > lockBest + 1e-9) { lockBest = v; lockSlot = si; }
+  }
+  // Prefer locking him where he already sits when that's (practically) as good: no shuffling needed in Sleeper.
+  const here = st.lastSlot ? st.lastSlot[p] : -1;
+  if (pol.lockAware && here >= 0 && here !== lockSlot && ((lockable >> here) & 1) && (tw.slots[here] & tw.pmask[p])) {
+    const v = x + assign(pol, tw, open & ~(1 << here), others, w).total;
+    if (v >= lockBest - 0.25) { lockSlot = here; }
   }
   return { lockBest, lockSlot, cont };
 }
 export function doLock(st: State, p: number, s: number) {
+  st.locks++; if (st.lastSlot && st.lastSlot[p] >= 0 && st.lastSlot[p] !== s) st.lockMoves++;
   st.lockedBy[s] = p; st.lockedPts[s] = st.pendingX[p]; st.isLocked[p] = 1; st.pendingX[p] = NaN;
 }
 
@@ -385,17 +403,53 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
       if (hooks?.decideLock) { const h = hooks.decideLock(st, p, t - 1, evIdx - 1, ev); if (h !== undefined) s = h; }
       if (s !== null && s >= 0 && ((freeMask >> s) & 1)) { doLock(st, p, s); freeMask &= ~(1 << s); cs = cs.filter((q) => q !== p); changed = true; break; }
     }
-    if (!changed) { applyStarts(tw, st, a.slotOf, tipping, pendingPlayers, gameOf); return; }
+    if (!changed) { if (pol.lockAware) lockAwarePlacement(tw, pol, st, a.slotOf, tipping, gameOf); applyStarts(tw, st, a.slotOf, tipping, pendingPlayers, gameOf); return; }
   }
   const a = assignExact(tw.slots, freeMask, cs, tw.pmask, w);
+  if (pol.lockAware) lockAwarePlacement(tw, pol, st, a.slotOf, tipping, gameOf);
   applyStarts(tw, st, a.slotOf, tipping, pendingPlayers.filter((p) => !st.isLocked[p]), gameOf);
+}
+
+// Re-arrange (by valid moves/swaps only) the slots of players starting now so each sits where he'd be locked
+// after a good game. The set of starters doesn't change. Pending/reserved candidates in the map are flexible.
+export function lockAwarePlacement(tw: TeamWeek, pol: Policy, st: State, slotOf: Map<number, number>, tipping: number[], gameOf: Map<number, number>) {
+  const starters = tipping.filter((p) => slotOf.has(p));
+  if (!starters.length) return;
+  const used = new Set(slotOf.values());
+  const pref = new Map<number, number>();
+  for (const p of starters) {
+    const g = tw.games[gameOf.get(p)!];
+    const c = cloneState(st);
+    for (const q of starters) c.inGame[q] = -1;
+    c.pendingX[p] = g.mu + g.sd; // "if he has a good game, where would we lock him?"
+    const ev = evalLock(tw, pol, c, p, g.end);
+    if (ev.lockSlot >= 0) pref.set(p, tw.slots[ev.lockSlot]);
+  }
+  const owner = new Map<number, number>(); for (const [p, s] of slotOf) owner.set(s, p);
+  for (let iter = 0; iter < 20; iter++) {
+    let improved = false;
+    for (const p of starters) {
+      const want = pref.get(p); const cur = slotOf.get(p)!;
+      if (want === undefined || tw.slots[cur] === want) continue;
+      for (let s2 = 0; s2 < tw.slots.length; s2++) {
+        if (tw.slots[s2] !== want || st.lockedBy[s2] >= 0 || st.pinned[s2] >= 0) continue;
+        const q = owner.get(s2);
+        if (q === undefined) {
+          if (!used.has(s2) || owner.get(s2) === undefined) { slotOf.set(p, s2); owner.delete(cur); owner.set(s2, p); improved = true; break; }
+        } else if ((tw.slots[cur] & tw.pmask[q]) && !(starters.includes(q) && pref.get(q) === tw.slots[s2])) {
+          slotOf.set(p, s2); slotOf.set(q, cur); owner.set(s2, p); owner.set(cur, q); improved = true; break;
+        }
+      }
+    }
+    if (!improved) break;
+  }
 }
 function applyStarts(tw: TeamWeek, st: State, slotOf: Map<number, number>, tipping: number[], pending: number[], gameOf: Map<number, number>) {
   for (const p of pending) if (!gameOf.has(p) && !slotOf.has(p)) st.pendingX[p] = NaN; // benched to make room => forfeited
   for (const p of tipping) {
     const s = slotOf.get(p);
     if (s === undefined) continue;
-    const gi = gameOf.get(p)!; st.inGame[p] = gi; st.started[gi] = 1; st.pinned[s] = p; st.pinnedUntil[s] = tw.games[gi].end;
+    const gi = gameOf.get(p)!; st.inGame[p] = gi; st.started[gi] = 1; st.pinned[s] = p; st.pinnedUntil[s] = tw.games[gi].end; st.lastSlot[p] = s;
     st.pendingX[p] = NaN;
   }
 }
@@ -436,8 +490,10 @@ export function rolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], obj: "poi
       const lockable = unpinnedOpen(st); const seen = new Set<number>();
       for (const s of slotOrder(tw.slots)) {
         if (!((lockable >> s) & 1) || !(tw.slots[s] & tw.pmask[p]) || seen.has(tw.slots[s])) continue;
-        seen.add(tw.slots[s]); alts.push(s);
+        seen.add(tw.slots[s]); alts.push(sameTypeHere(tw, st, p, s, lockable));
       }
+      const here = st.lastSlot ? st.lastSlot[p] : -1;
+      if (base.lockAware && here >= 0 && ((lockable >> here) & 1) && (tw.slots[here] & tw.pmask[p]) && !alts.includes(here)) alts.push(here);
       const scores = new Float64Array(alts.length);
       for (let k = 0; k < K; k++) {
         const scen = sampleScenario(tw, st, t, r, realised);
@@ -456,6 +512,11 @@ export function rolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], obj: "poi
         });
       }
       let bi = 0; for (let ai = 1; ai < alts.length; ai++) if (scores[ai] > scores[bi] + 1e-9) bi = ai;
+      // locking where he already sits wins near-ties (within 0.5 pts for points, 1% for win prob): no shuffling
+      if (base.lockAware && alts[bi] !== null && here >= 0 && alts[bi] !== here) {
+        const hi = alts.indexOf(here); const tol = obj === "points" ? 0.5 * K : 0.01 * K;
+        if (hi >= 0 && scores[hi] >= scores[bi] - tol) bi = hi;
+      }
       return alts[bi];
     },
   };

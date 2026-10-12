@@ -3,7 +3,7 @@ import * as E from "../engine/core";
 import { gameDist, injuryPlayProb, fantasyPoints, MODEL } from "../engine/model";
 import { sleeper, espnDay, type League, type GameRow, type SleeperPlayer, type Matchup } from "./sources";
 
-export const POLICY: E.Policy = { name: "P2", matching: "exact", value: "stop", defer: true, reserve: true, chain: true };
+export const POLICY: E.Policy = { name: "P2", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true };
 const GAME_LEN = 2.5 * 3600e3;
 
 export interface LiveGame {

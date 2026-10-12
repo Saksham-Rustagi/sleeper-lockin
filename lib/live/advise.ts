@@ -112,7 +112,13 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
     const lockable = E.unpinnedOpen(T.st); const seen = new Set<number>();
     for (const s of E.slotOrder(T.tw.slots)) {
       if (!((lockable >> s) & 1) || !(T.tw.slots[s] & T.tw.pmask[p]) || seen.has(T.tw.slots[s])) continue;
-      seen.add(T.tw.slots[s]); alts.push({ action: "LOCK", slot: s });
+      seen.add(T.tw.slots[s]); alts.push({ action: "LOCK", slot: E.sameTypeHere(T.tw, T.st, p, s, lockable) });
+    }
+    // where he sits now (from Sleeper's lineup): offer "lock in place" explicitly
+    const hereIdx = T.lineup.indexOf(T.pids[p]);
+    if (hereIdx >= 0 && ((lockable >> hereIdx) & 1) && (T.tw.slots[hereIdx] & T.tw.pmask[p])) {
+      const dup = alts.findIndex((x) => x.action === "LOCK" && x.slot !== null && T.tw.slots[x.slot] === T.tw.slots[hereIdx]);
+      if (dup >= 0) alts[dup].slot = hereIdx; else alts.push({ action: "LOCK", slot: hereIdx });
     }
     if (!next) alts.splice(0, 2, { action: "HOLD", slot: null }); // final game: holding == auto-count
     const pts = new Float64Array(alts.length); const win = new Float64Array(alts.length);
@@ -135,6 +141,11 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
       const b = options[best];
       if (o.expPoints > b.expPoints + 0.5 || (Math.abs(o.expPoints - b.expPoints) <= 0.5 && (o.winProb ?? 0) > (b.winProb ?? 0))) best = i;
     });
+    // a LOCK in his current slot wins near-ties against a LOCK elsewhere (no shuffling in Sleeper)
+    if (alts[best].action === "LOCK" && hereIdx >= 0 && alts[best].slot !== hereIdx) {
+      const hi = alts.findIndex((x) => x.action === "LOCK" && x.slot === hereIdx);
+      if (hi >= 0 && options[hi].expPoints >= options[best].expPoints - 0.5) best = hi;
+    }
     const th = lockThreshold(T, E.cloneState(T.st), p, ctx.asOf);
     const o = options[best];
     const deadline = next ? next.tip : null;
@@ -210,7 +221,7 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const ctx = await buildWeek({ ...o, mode: "live" });
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 4, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 5, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K));
   return { ...value, cached, checkedAt: Date.now() };
 }
