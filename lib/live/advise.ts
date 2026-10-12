@@ -165,12 +165,20 @@ function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] 
 export async function advise(o: { leagueId: string; rosterId: number; week?: number; asOf?: number; lockOverrides?: Record<number, string | null>; K?: number }): Promise<Advice> {
   const ctx = await buildWeek({ ...o, mode: "live" });
   const K = o.K ?? 300;
-  const seed = Math.floor(ctx.asOf / 60000);
+  // Seed from the game state (finished games, locks, pending scores), not the clock: numbers only change when
+  // something actually happens, instead of jittering on every refresh.
+  let h = 2166136261 ^ ctx.week;
+  const mix = (x: number) => { h = Math.imul(h ^ Math.round(x * 10), 16777619) >>> 0; };
+  for (const T of [ctx.me, ctx.opp]) if (T) {
+    T.games.forEach((g) => mix(g.status === "post" ? 1000 + (g.actual ?? 0) : g.status === "in" ? 7 : 3));
+    T.st.lockedPts.forEach(mix); T.st.lockedBy.forEach(mix); T.st.pendingX.forEach((x) => mix(Number.isNaN(x) ? -1 : x));
+  }
+  const seed = h;
   const ds = decisions(ctx, K, seed);
   const pl = plan(ctx, 30);
   return {
     generatedAt: Date.now(), asOf: ctx.asOf, mode: "live", league: ctx.league.name, season: ctx.season, week: ctx.week, dates: ctx.dates,
-    me: teamView(ctx, ctx.me), opp: ctx.opp ? teamView(ctx, ctx.opp) : null, outlook: outlook(ctx, Math.max(200, K), seed + 1),
+    me: teamView(ctx, ctx.me), opp: ctx.opp ? teamView(ctx, ctx.opp) : null, outlook: outlook(ctx, 2000, seed + 1), // 2000 weeks: win-prob 95% margin ≈ ±2 pts (300 gave ±5.7)
     decisions: ds, plan: pl, actions: actionsFrom(ctx, ds, pl), notes: ctx.notes,
   };
 }
