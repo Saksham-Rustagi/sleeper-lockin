@@ -335,9 +335,9 @@ function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: numbe
       </Card>
       <div className="grid lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader><CardTitle className="text-lg">Your droppable players</CardTitle><CardDescription>Points you&apos;d lose over the two weeks by dropping each (≈0 = never makes your lineup). Tick to protect.</CardDescription></CardHeader>
+          <CardHeader><CardTitle className="text-lg">Your droppable players</CardTitle><CardDescription>Points over this week + next if you drop each (2,000 simulated weeks, ± = 95% range). ≈0 = doesn&apos;t matter. A real positive number means the app&apos;s start/sit rule tends to misuse him. Tick to protect.</CardDescription></CardHeader>
           <CardContent><table className="w-full text-sm"><tbody>{w.droppable.map((d) => (
-            <tr key={d.pid}><td><input type="checkbox" checked={protect.includes(d.pid)} onChange={() => toggle(d.pid)} /></td><td>{pl(d)}</td><td>{sign(-d.loss)}</td><td className="text-xs text-gray-500">{d.reason || ""}</td></tr>))}</tbody></table></CardContent>
+            <tr key={d.pid}><td><input type="checkbox" checked={protect.includes(d.pid)} onChange={() => toggle(d.pid)} /></td><td>{pl(d)}</td><td className="tabular-nums">{Math.abs(d.loss) < 2 * (d.se ?? 0) ? <span className="text-gray-500">≈0 <span className="text-xs">(±{fmt(2 * (d.se ?? 0))})</span></span> : <>{sign(-d.loss)} <span className="text-xs text-gray-500">±{fmt(2 * (d.se ?? 0))}</span></>}</td><td className="text-xs text-gray-500">{d.reason || ""}</td></tr>))}</tbody></table></CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle className="text-lg">Top free agents</CardTitle><CardDescription>Value if added without dropping anyone.</CardDescription></CardHeader>

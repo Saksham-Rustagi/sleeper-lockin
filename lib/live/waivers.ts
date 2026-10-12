@@ -6,13 +6,13 @@ import { gameDist, injuryPlayProb, fantasyPoints } from "../engine/model";
 import { sleeper, type GameRow } from "./sources";
 import { buildWeek, resolveWeek, POLICY, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
-import { teamFingerprint, weekValues } from "./teamsim";
+import { teamFingerprint, weekValues, parallelWeekValues } from "./teamsim";
 
 export interface WaiverPlayer { pid: string; name: string; pos: string; team: string | null; age: number | null; injury: string | null; dynastyAdp: number | null; gamesThisWeek: number; gamesNextWeek: number; projPerGame: number | null; note?: string }
 export interface WaiverMove { add: WaiverPlayer; drop: WaiverPlayer | null; gainThisWeek: number; gainNextWeek: number; total: number; se: number; confident: boolean }
 export interface WaiverAdvice {
   generatedAt: number; week: number; nextWeek: number | null; rosterFull: boolean; openSpots: number;
-  moves: WaiverMove[]; droppable: (WaiverPlayer & { loss: number; protected: boolean; reason: string | null })[];
+  moves: WaiverMove[]; droppable: (WaiverPlayer & { loss: number; se: number; protected: boolean; reason: string | null })[];
   candidates: (WaiverPlayer & { gainNoDrop: number })[]; rules: string[]; notes: string[];
   cached?: boolean; checkedAt?: number;
 }
@@ -20,7 +20,7 @@ export interface WaiverAdvice {
 export { weekValues } from "./teamsim";
 
 export async function waiverAdvice(o: { leagueId: string; rosterId: number; protect?: string[]; N?: number; asOf?: number; maxCandidates?: number; force?: boolean }): Promise<WaiverAdvice> {
-  const N = o.N ?? 300; const asOf = o.asOf ?? Date.now();
+  const N = o.N ?? 2000; const asOf = o.asOf ?? Date.now(); // N: ±0.6 pts on a drop/add effect (300 gave ±1.7); spread over worker threads
   const league = await sleeper.league(o.leagueId); const season = league.season; const S = league.scoring_settings;
   const week = await resolveWeek(season, asOf);
   const sched = await sleeper.schedule(season);
@@ -68,7 +68,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   const baseCtxNow = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week, asOf, skipOpp: true });
   const rel = new Set([...pool, ...baseCtxNow.me.pids]);
   const fp = o.force ? String(Math.random()) : fingerprint({
-    v: 2, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
+    v: 3, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
     rosters: rosters.map((r) => [r.roster_id, r.players, r.taxi, r.reserve]),
     proj: projRows.filter((r) => rel.has(r.player_id)).map((r) => [r.player_id, r.date, fantasyPoints(r.stats, S)]),
     inj: [...rel].map((p) => [p, players[p]?.injury_status ?? null]),
@@ -83,7 +83,8 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   const variant = async (edit?: { add?: string[]; drop?: string[] }) => {
     const a = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week, asOf, rosterEdit: edit, skipOpp: true });
     const b = nextWeek ? await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week: nextWeek, asOf, rosterEdit: edit, skipOpp: true }) : null;
-    return { a: weekValues(a.me, N, week * 7919, asOf), b: b ? weekValues(b.me, N, nextWeek! * 7919, asOf) : null, ctx: a };
+    const [va, vb] = await Promise.all([parallelWeekValues(a.me, N, week * 7919, asOf), b ? parallelWeekValues(b.me, N, nextWeek! * 7919, asOf) : Promise.resolve(null)]);
+    return { a: va, b: vb, ctx: a };
   };
   const base = await variant();
   const diff = (x: { a: Float64Array; b: Float64Array | null }) => {
@@ -102,7 +103,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
     const d = diff(await variant({ drop: [pid] }));
     const inf = info(pid);
     const young = (inf.age ?? 99) <= 23 || (inf.dynastyAdp ?? 999) <= 120;
-    droppable.push({ ...inf, loss: -d.total, protected: protect.has(pid) || young, reason: protect.has(pid) ? "protected by you" : young ? `dynasty asset (age ${inf.age ?? "?"}, ADP ${inf.dynastyAdp ? Math.round(inf.dynastyAdp) : "?"})` : null });
+    droppable.push({ ...inf, loss: -d.total, se: d.se, protected: protect.has(pid) || young, reason: protect.has(pid) ? "protected by you" : young ? `dynasty asset (age ${inf.age ?? "?"}, ADP ${inf.dynastyAdp ? Math.round(inf.dynastyAdp) : "?"})` : null });
   }
   droppable.sort((x, y) => x.loss - y.loss);
   const dropPick = droppable.filter((d) => !d.protected).slice(0, 3);
