@@ -48,3 +48,14 @@ test("lock instructions: swap into the best slot without benching anyone", async
   m = lockMoves(slotNames, slots, pmask, names, pids, ["m", "c", "k", null], st, 0, 0);
   assert.match(m[0], /already there/);
 });
+
+test("reminder tells you to MOVE a held player (not bench him) when a new starter needs his slot", () => {
+  const a: any = JSON.parse(JSON.stringify(advice));
+  a.decisions = [];
+  a.me.slots = [{ pid: "2259", player: "Evan Mobley", injury: null, locked: false }, { pid: "2007", player: "Darius Garland", injury: null, locked: false }];
+  a.plan[0].starts = [{ slot: "C", player: "Donovan Clingan", pid: "2728", proj: 30, lockIf: 28 }];
+  a.plan[0].holds = [{ player: "Evan Mobley", pid: "2259", score: 24.5, slot: "UTIL 2", from: "C", move: true }];
+  const m = messages(a, now);
+  assert.equal(m.length, 1);
+  assert.match(m[0].body, /Move held Evan Mobley \(24\.5\) → UTIL 2 - NOT to the bench/);
+});

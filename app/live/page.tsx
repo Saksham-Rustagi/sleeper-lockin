@@ -177,6 +177,8 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
               <table className="w-full text-sm mt-1"><tbody>
                 {p.starts.map((s) => <tr key={s.pid}><td className="w-16 font-mono">{s.slot}</td><td>{s.player}</td><td>proj {fmt(s.proj)}</td><td>lock if ≥ <b>{fmt(s.lockIf)}</b></td></tr>)}
               </tbody></table>
+              {p.holds?.length > 0 && <div className="text-sm mt-1 text-purple-700 dark:text-purple-300">Holding (keep in a starting slot, never the bench): {p.holds.map((h) => `${h.player} ${fmt(h.score)} in ${h.slot}${h.move ? ` (move from ${h.from ?? "?"})` : ""}`).join("; ")}</div>}
+              {p.forfeits?.length > 0 && <div className="text-xs text-orange-600 mt-1">Let go to free a slot: {p.forfeits.map((f) => `${f.player} (${fmt(f.score)})`).join(", ")}</div>}
               {p.benched.length > 0 && <div className="text-xs text-gray-500 mt-1">Bench: {p.benched.map((b) => `${b.player} (${fmt(b.proj)})`).join(", ")}</div>}
             </div>
           ))}

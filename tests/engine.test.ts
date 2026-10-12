@@ -137,3 +137,26 @@ test("lock-aware placement: a C/PF starts in PF when a C-only teammate still nee
   const run1 = (pol: E.Policy) => { const st = E.initState(t); E.simulate(t, pol, E.buildEvents(t, true), Float64Array.from(t.games.map((g) => g.actual)), Uint8Array.from(t.games.map(() => 1)), st, 0, undefined, T0); return t.slotNames[Array.from(st.pinned).indexOf(0)]; };
   assert.equal(run1(POL_LA), "PF");
 });
+
+test("holding: a finished score stays held in a starting slot while a teammate uses the other slot", () => {
+  // A scores 30 Monday (next game Friday); B tips Tuesday. Two slots: A should be held, B started - no forced decision.
+  const t = tw(["UTIL", "UTIL"], [{ pos: ["SF"], games: [{ tip: T0, mu: 25, actual: 30 }, { tip: T0 + 96 * H, mu: 25, actual: 10 }] }, { pos: ["PG"], games: [{ tip: T0 + 24 * H, mu: 20, actual: 22 }] }]);
+  const st = E.initState(t); const ev = E.buildEvents(t, true);
+  const A = Float64Array.from(t.games.map((g) => g.actual)), P = Uint8Array.from(t.games.map(() => 1));
+  E.simulate(t, POL, ev, A, P, st, 0, undefined, T0 + 24 * H + 1);
+  assert.equal(st.pendingX[0], 30, "A's 30 is still held");
+  assert.ok(st.inGame[1] >= 0, "B started in the other slot");
+  const fin = E.simulate(t, POL, ev, A, P, E.initState(t)).total;
+  assert.equal(fin, 52, "A's 30 locked before his Friday game + B's 22 auto-counted");
+});
+
+test("end of week: held final-game scores count without being locked, even with idle slots", () => {
+  const t = tw(["UTIL", "UTIL", "UTIL"], [{ pos: ["SF"], games: [{ tip: T0, mu: 20, actual: 18 }] }, { pos: ["C"], games: [{ tip: T0 + 24 * H, mu: 20, actual: 26 }] }]);
+  assert.equal(run(t).total, 44);
+});
+
+test("crowded night: a held score yields its slot only when the new game is worth more (and is locked first if that's better)", () => {
+  // one slot; A holds 35 (next game in 3 days, proj 20); B tips tonight (proj 20). Keep/lock A, don't start B.
+  const t = tw(["UTIL"], [{ pos: ["SF"], games: [{ tip: T0, mu: 20, actual: 35 }, { tip: T0 + 72 * H, mu: 20, actual: 15 }] }, { pos: ["PG"], games: [{ tip: T0 + 24 * H, mu: 20, actual: 40 }] }]);
+  assert.equal(run(t).total, 35);
+});

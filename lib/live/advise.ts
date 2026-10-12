@@ -16,7 +16,12 @@ export interface Decision {
   recommended: string; recommendedSlot: string | null; threshold: number | null; reason: string;
   moves: string[]; // step-by-step Sleeper moves to execute the recommendation (e.g. swap into the lock slot first)
 }
-export interface TipPlan { tip: number; when: string; starts: { slot: string; player: string; pid: string; proj: number; lockIf: number | null }[]; benched: { player: string; proj: number }[]; tentative: boolean }
+export interface TipPlan {
+  tip: number; when: string; starts: { slot: string; player: string; pid: string; proj: number; lockIf: number | null }[]; benched: { player: string; proj: number }[]; tentative: boolean;
+  // players holding a finished, unlocked score: where they sit during this tip-off (any starting slot - never the bench)
+  holds: { player: string; pid: string; score: number; slot: string; from: string | null; move: boolean }[];
+  forfeits: { player: string; score: number }[]; // held scores the plan gives up to make room (only if locking them isn't better)
+}
 export interface Advice {
   generatedAt: number; asOf: number; mode: "live" | "replay"; league: string; season: string; week: number; dates: string[];
   me: TeamView; opp: TeamView | null; outlook: Outlook; decisions: Decision[]; plan: TipPlan[]; actions: string[]; notes: string[];
@@ -182,10 +187,27 @@ function plan(ctx: WeekContext, hours: number): TipPlan[] {
       const s = Array.from(st.pinned).indexOf(p);
       if (s >= 0 && st.inGame[p] === g.gi) {
         const th = lockThreshold(T, E.cloneState(st), p, g.end);
-        starts.push({ slot: ctx.slotNames[s], player: T.names[p], pid: T.pids[p], proj: Math.round(g.proj * 10) / 10, lockIf: th ? Math.round(th.threshold * 10) / 10 : null });
+        starts.push({ slot: slotLabels(ctx.slotNames)[s], player: T.names[p], pid: T.pids[p], proj: Math.round(g.proj * 10) / 10, lockIf: th ? Math.round(th.threshold * 10) / 10 : null });
       } else if (!st.isLocked[p]) benched.push({ player: T.names[p], proj: Math.round(g.proj * 10) / 10 });
     }
-    out.push({ tip, when: fmtTime(tip), starts, benched, tentative: !first });
+    // held scores: everyone still lockable but not playing now keeps a starting slot (assigned among free slots)
+    const L = slotLabels(ctx.slotNames);
+    const held: number[] = []; const w = new Float64Array(T.pids.length);
+    for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0) { held.push(p); w[p] = st.pendingX[p] + 1000; }
+    const ha = E.assignExact(T.tw.slots, E.unpinnedOpen(st), held, T.tw.pmask, w);
+    const holds: TipPlan["holds"] = [];
+    for (const p of held) {
+      const s = ha.slotOf.get(p); if (s === undefined) continue;
+      const cur = first ? T.lineup.indexOf(T.pids[p]) : -1;
+      // keep him where he is if that slot is still free for him; otherwise move him to the assigned free slot
+      const stay = cur >= 0 && st.pinned[cur] < 0 && st.lockedBy[cur] < 0 && (T.tw.slots[cur] & T.tw.pmask[p]) && ![...ha.slotOf.entries()].some(([q, sq]) => q !== p && sq === cur);
+      const slotIdx = stay ? cur : s;
+      holds.push({ player: T.names[p], pid: T.pids[p], score: st.pendingX[p], slot: L[slotIdx], from: cur >= 0 ? L[cur] : null, move: first && !stay });
+    }
+    const before = first ? T.st : null;
+    const forfeits: TipPlan["forfeits"] = [];
+    if (before) for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(before.pendingX[p]) && Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0) forfeits.push({ player: T.names[p], score: before.pendingX[p] });
+    out.push({ tip, when: fmtTime(tip), starts, benched, tentative: !first, holds, forfeits });
     first = false;
   }
   return out;
@@ -202,7 +224,10 @@ function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] 
   if (nxt) {
     const current = new Set(ctx.me.lineup.filter(Boolean) as string[]);
     const moves = nxt.starts.filter((s) => !current.has(s.pid));
+    const hm = nxt.holds.filter((h) => h.move);
+    if (hm.length) a.push(`Before ${nxt.when}: move held ${hm.map((h) => `${h.player} (${h.score.toFixed(1)}) ${h.from ?? ""} → ${h.slot}`).join(", ")} - keep them in starting slots, NOT the bench.`);
     if (moves.length) a.push(`Before ${nxt.when}: start ${moves.map((m) => `${m.player} (${m.slot})`).join(", ")}.`);
+    if (nxt.forfeits.length) a.push(`At ${nxt.when} the plan lets go of ${nxt.forfeits.map((f) => `${f.player}'s ${f.score.toFixed(1)}`).join(", ")} (locking isn't worth the slot).`);
     if (nxt.starts.length) a.push(`Tonight's cut-offs: ${nxt.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} lock if >= ${s.lockIf}`).join("; ")}.`);
   }
   return a;
@@ -221,7 +246,7 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const ctx = await buildWeek({ ...o, mode: "live" });
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 5, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 6, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K));
   return { ...value, cached, checkedAt: Date.now() };
 }
