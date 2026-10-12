@@ -10,6 +10,9 @@
 - **Lineup plan:** who to start at each tip-off in the next 30 hours, including same-night slot reuse once a game
   ends, and a "lock if ≥ X" cut-off for every starter.
 - **Outlook:** projected totals and win probability.
+- **Waivers tab:** best add/drop moves valued by the same simulation (rest of this week + next week, paired, with
+  a noise band). Young/dynasty players are never suggested as drops, and you can protect others. The notifier checks
+  daily around noon ET and right away when one of your players is ruled out, and reminds you if a move is worth 3+ pts.
 - **Replay:** run the strategy through any finished week with the real results and compare it with what you scored.
 - **Reminders:** `scripts/notify.ts` (launchd, every 5 min) creates Apple Reminders that sync to iPhone, for lineup
   changes before tip-off, lock/hold/bench calls after games, and final calls before deadlines.

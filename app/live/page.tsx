@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Advice, Replay } from "@/lib/live/advise";
+import type { WaiverAdvice, WaiverPlayer } from "@/lib/live/waivers";
 
 type LeagueOpt = { league_id: string; name: string; season: string; status: string; roster_id: number | null };
 const CFG_KEY = "lockin-live-config";
@@ -84,12 +85,14 @@ function Live() {
           <Card><CardContent className="py-10 text-center text-gray-500">Enter your Sleeper username and press Connect.</CardContent></Card>
         ) : (
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="grid w-full grid-cols-3 max-w-xl">
+            <TabsList className="grid w-full grid-cols-4 max-w-2xl">
               <TabsTrigger value="week">This week</TabsTrigger>
+              <TabsTrigger value="waivers">Waivers</TabsTrigger>
               <TabsTrigger value="replay">Replay a week</TabsTrigger>
               <TabsTrigger value="how">How it decides</TabsTrigger>
             </TabsList>
             <TabsContent value="week" className="mt-6"><WeekView leagueId={leagueId} rosterId={rosterId} season={league?.season} /></TabsContent>
+            <TabsContent value="waivers" className="mt-6"><WaiversView leagueId={leagueId} rosterId={rosterId} /></TabsContent>
             <TabsContent value="replay" className="mt-6"><ReplayView leagues={pastLeagues} initialLeague={params.get("league") || pastLeagues.find((l) => l.status === "complete")?.league_id || leagueId} initialWeek={Number(params.get("week") || 23)} /></TabsContent>
             <TabsContent value="how" className="mt-6"><HowItWorks /></TabsContent>
           </Tabs>
@@ -275,6 +278,64 @@ function ReplayView({ leagues, initialLeague, initialWeek }: { leagues: LeagueOp
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: number }) {
+  const KEY = `lockin-protect-${leagueId}`;
+  const [w, setW] = useState<WaiverAdvice | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [protect, setProtect] = useState<string[]>([]);
+  useEffect(() => { setProtect(JSON.parse(localStorage.getItem(KEY) || "[]")); }, [KEY]);
+  const load = useCallback(async (fresh = false) => {
+    setLoading(true); setErr(null);
+    try {
+      const q = new URLSearchParams({ league: leagueId, roster: String(rosterId), protect: protect.join(",") }); if (fresh) q.set("fresh", "1");
+      const r = await fetch(`/api/waivers?${q}`); const j = await r.json(); if (!r.ok) throw new Error(j.error); setW(j);
+    } catch (e: any) { setErr(e.message); } finally { setLoading(false); }
+  }, [leagueId, rosterId, protect]);
+  useEffect(() => { load(); }, [load]);
+  const toggle = (pid: string) => { const n = protect.includes(pid) ? protect.filter((x) => x !== pid) : [...protect, pid]; setProtect(n); localStorage.setItem(KEY, JSON.stringify(n)); };
+  const pl = (p: WaiverPlayer) => `${p.name} (${p.pos}${p.team ? " " + p.team : ""})`;
+  const sign = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
+  if (err) return <div className="p-3 rounded bg-red-50 text-red-700 text-sm">{err}</div>;
+  if (!w) return <div className="text-gray-500">Simulating every add/drop over this week and next… (~20-40 s)</div>;
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div><CardTitle>Best waiver moves</CardTitle><CardDescription>Week {w.week}{w.nextWeek ? ` + week ${w.nextWeek}` : ""} · {w.rosterFull ? "roster full: each add needs a drop" : `${w.openSpots} open spot(s)`}</CardDescription></div>
+          <Button size="sm" variant="outline" onClick={() => load(true)} disabled={loading}>{loading ? "Simulating…" : "Refresh"}</Button>
+        </CardHeader>
+        <CardContent>
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-gray-500"><th>Add</th><th>Drop</th><th>Games (this/next)</th><th>This wk</th><th>Next wk</th><th>Total</th><th></th></tr></thead>
+            <tbody>{w.moves.map((m, i) => (
+              <tr key={i} className={m.confident ? "font-semibold" : "text-gray-500"}>
+                <td>{pl(m.add)}{m.add.injury && <Badge variant="outline" className="ml-1 text-xs">{m.add.injury}</Badge>}<div className="text-[11px] font-normal text-gray-500">{m.add.projPerGame ?? "–"} pts/g · {m.add.note}</div></td>
+                <td>{m.drop ? pl(m.drop) : "—"}</td><td>{m.add.gamesThisWeek}/{m.add.gamesNextWeek}</td>
+                <td>{sign(m.gainThisWeek)}</td><td>{sign(m.gainNextWeek)}</td><td>{sign(m.total)} <span className="text-xs font-normal">±{(2 * m.se).toFixed(1)}</span></td>
+                <td>{m.confident ? <Badge>worth it</Badge> : <span className="text-xs">within noise</span>}</td>
+              </tr>))}</tbody>
+          </table>
+          {w.notes.map((n, i) => <p key={i} className="text-xs text-gray-500 mt-2">{n}</p>)}
+          <ul className="text-xs text-gray-500 mt-2 list-disc pl-5">{w.rules.map((r, i) => <li key={i}>{r}</li>)}</ul>
+        </CardContent>
+      </Card>
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader><CardTitle className="text-lg">Your droppable players</CardTitle><CardDescription>Points you&apos;d lose over the two weeks by dropping each (≈0 = never makes your lineup). Tick to protect.</CardDescription></CardHeader>
+          <CardContent><table className="w-full text-sm"><tbody>{w.droppable.map((d) => (
+            <tr key={d.pid}><td><input type="checkbox" checked={protect.includes(d.pid)} onChange={() => toggle(d.pid)} /></td><td>{pl(d)}</td><td>{sign(-d.loss)}</td><td className="text-xs text-gray-500">{d.reason || ""}</td></tr>))}</tbody></table></CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle className="text-lg">Top free agents</CardTitle><CardDescription>Value if added without dropping anyone.</CardDescription></CardHeader>
+          <CardContent><table className="w-full text-sm"><tbody>{w.candidates.map((c) => (
+            <tr key={c.pid}><td>{pl(c)}</td><td>{c.gamesThisWeek}/{c.gamesNextWeek} g</td><td>{c.projPerGame ?? "–"}/g</td><td>{sign(c.gainNoDrop)}</td><td className="text-xs text-gray-500">{c.age ? `age ${c.age}` : ""}{c.dynastyAdp ? ` · ADP ${Math.round(c.dynastyAdp)}` : ""}</td></tr>))}</tbody></table></CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

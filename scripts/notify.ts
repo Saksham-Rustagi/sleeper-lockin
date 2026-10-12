@@ -8,6 +8,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import { advise, type Advice } from "../lib/live/advise";
 import { collect, logAdvice } from "../lib/live/collector";
+import { waiverAdvice } from "../lib/live/waivers";
 
 const DIR = path.join(os.homedir(), ".sleeper-lockin");
 const CFG = path.join(DIR, "config.json");
@@ -87,6 +88,27 @@ async function main() {
   for (const m of msgs) {
     if (sent[m.key]) continue;
     remind(m.title, m.body); sent[m.key] = now; n++;
+  }
+  // waiver check: once a day around noon ET, and right away when one of your players is newly ruled out
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(now);
+  const injuredNow = a.me.players.filter((p) => /^(out|doubtful|sus)/i.test(p.injury || "")).map((p) => p.pid).sort().join(",");
+  const injKey = `injset|${injuredNow}`;
+  const newInjury = injuredNow !== "" && !sent[injKey];
+  if ((h >= 12 && !sent[`waiverday|${today}`]) || newInjury || process.env.WAIVERS) {
+    try {
+      const w = await waiverAdvice({ leagueId: cfg.leagueId, rosterId: cfg.rosterId, protect: cfg.protect || [] });
+      const best = w.moves.find((m) => m.confident && m.total >= 3);
+      if (best) {
+        const key = `waiver|${w.week}|${best.add.pid}|${best.drop?.pid ?? "-"}`;
+        if (!sent[key]) {
+          remind(`💡 Waiver: add ${best.add.name}${best.drop ? `, drop ${best.drop.name}` : ""} (+${best.total.toFixed(1)} pts)`,
+            `${best.add.pos} ${best.add.team}, ${best.add.gamesThisWeek} games this week / ${best.add.gamesNextWeek} next, ${best.add.projPerGame ?? "?"} pts/g. +${best.gainThisWeek.toFixed(1)} this week, +${best.gainNextWeek.toFixed(1)} next. ${best.add.note ?? ""}`);
+          sent[key] = now; n++;
+        }
+      }
+      log(`waivers: best ${best ? `${best.add.name} for ${best.drop?.name ?? "-"} +${best.total.toFixed(1)}` : "none worth it"}`);
+    } catch (e: any) { log("waivers ERROR", e?.message || e); }
+    sent[`waiverday|${today}`] = now; if (injuredNow) sent[injKey] = now;
   }
   for (const [k, t] of Object.entries(sent)) if (now - t > 10 * 86400e3) delete sent[k];
   if (!process.env.DRY_RUN) fs.writeFileSync(SENT, JSON.stringify(sent));

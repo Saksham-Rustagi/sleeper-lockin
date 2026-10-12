@@ -35,7 +35,8 @@ export async function resolveWeek(season: string, asOf: number): Promise<number>
   return ordered[ordered.length - 1].w;
 }
 
-interface BuildOpts { leagueId: string; rosterId: number; week?: number; asOf?: number; mode?: "live" | "replay"; lockOverrides?: Record<number, string | null> }
+export interface BuildOpts { leagueId: string; rosterId: number; week?: number; asOf?: number; mode?: "live" | "replay"; lockOverrides?: Record<number, string | null>;
+  rosterEdit?: { add?: string[]; drop?: string[] }; skipOpp?: boolean }
 
 export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   const mode = o.mode ?? "live";
@@ -74,6 +75,10 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
     let pids: string[];
     if (mode === "replay" && mu?.players?.length) pids = mu.players.filter((p) => p !== "0");
     else pids = (roster.players || []).filter((p) => !(roster.taxi || []).includes(p) && !(roster.reserve || []).includes(p));
+    if (rosterId === o.rosterId && o.rosterEdit) {
+      pids = pids.filter((p) => !(o.rosterEdit!.drop || []).includes(p));
+      for (const a of o.rosterEdit.add || []) if (!pids.includes(a)) pids.push(a);
+    }
     const pl = (p: string): SleeperPlayer => players[p] || ({ player_id: p, team: null, fantasy_positions: ["UTIL"], injury_status: null } as SleeperPlayer);
     const games: LiveGame[] = [];
     pids.forEach((pid) => {
@@ -167,8 +172,8 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
 
   const me = build(o.rosterId);
   const myMu = matchups.find((m) => m.roster_id === o.rosterId);
-  const oppMu = myMu?.matchup_id ? matchups.find((m) => m.matchup_id === myMu.matchup_id && m.roster_id !== o.rosterId) : undefined;
+  const oppMu = !o.skipOpp && myMu?.matchup_id ? matchups.find((m) => m.matchup_id === myMu.matchup_id && m.roster_id !== o.rosterId) : undefined;
   const opp = oppMu ? build(oppMu.roster_id) : null;
-  if (!opp) notes.push("No opponent found for this week; win probability unavailable.");
+  if (!opp && !o.skipOpp) notes.push("No opponent found for this week; win probability unavailable.");
   return { league, season, week, dates, asOf, mode, slotNames, me, opp, notes };
 }
