@@ -5,6 +5,36 @@ import * as E from "../engine/core";
 import { POLICY, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
 
+// Spread K scenarios over worker threads (scenario k is keyed by its index, so the result is identical however it's
+// split). Falls back to the current thread in the browser, in tests, or if the worker bundle is missing.
+let pool: { run: (T: LiveTeam, N: number, salt: number, asOf: number, k0: number) => Promise<Float64Array>; size: number } | null | undefined;
+async function getPool() {
+  if (pool !== undefined) return pool;
+  pool = null;
+  try {
+    if (typeof window !== "undefined" || process.env.LOCKIN_NO_WORKERS) return pool;
+    const { Worker } = await import("worker_threads"); const os = await import("os"); const fs = await import("fs"); const path = await import("path");
+    const file = [process.env.LOCKIN_SIMWORKER, path.join(process.cwd(), "scripts/dist/simworker.cjs"), typeof __dirname !== "undefined" ? path.join(__dirname, "simworker.cjs") : undefined]
+      .find((f) => f && fs.existsSync(f));
+    if (!file) { console.log(`[teamsim] no simworker.cjs found (cwd ${process.cwd()}), simulating on one core`); return pool; }
+    const size = Math.max(1, Math.min(12, os.cpus().length - 2));
+    const workers = Array.from({ length: size }, () => { const w = new Worker(file); w.unref(); return w; });
+    let next = 0, id = 0; const waiting = new Map<number, (v: Float64Array) => void>();
+    workers.forEach((w) => w.on("message", (m: { id: number; v: Float64Array }) => { waiting.get(m.id)?.(m.v); waiting.delete(m.id); }));
+    pool = { size, run: (T, N, salt, asOf, k0) => new Promise((res) => { const i = ++id; waiting.set(i, res); workers[next++ % size].postMessage({ id: i, T, N, salt, asOf, k0 }); }) };
+    console.log(`[teamsim] ${size} simulation workers from ${file}`);
+  } catch (e) { console.log("[teamsim] workers unavailable, simulating on one core:", e); pool = null; }
+  return pool;
+}
+export async function parallelWeekValues(T: LiveTeam, K: number, salt: number, asOf: number): Promise<Float64Array> {
+  const p = await getPool();
+  if (!p || K < 4000) return weekValues(T, K, salt, asOf);
+  const chunk = Math.ceil(K / p.size); const parts: Promise<Float64Array>[] = [];
+  for (let k0 = 0; k0 < K; k0 += chunk) parts.push(p.run(T, Math.min(chunk, K - k0), salt, asOf, k0));
+  const out = new Float64Array(K); let o = 0; for (const v of await Promise.all(parts)) { out.set(v, o); o += v.length; }
+  return out;
+}
+
 
 function hashStr(s: string) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
 
@@ -29,17 +59,18 @@ export function scenario(T: LiveTeam, k: number, salt: number, asOf: number) {
   return { actual, played };
 }
 
-export function weekValues(T: LiveTeam, N: number, salt: number, asOf: number): Float64Array {
+export function weekValues(T: LiveTeam, N: number, salt: number, asOf: number, k0 = 0): Float64Array {
   const v = new Float64Array(N);
   for (let k = 0; k < N; k++) {
-    const sc = scenario(T, k, salt, asOf);
+    const sc = scenario(T, k0 + k, salt, asOf);
     v[k] = E.simulate(T.tw, POLICY, T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
   }
   return v;
 }
 
 
-export const TEAM_SIMS = 2000; // win-prob 95% margin about ±2 pts
+// simulated weeks per team. Monte-Carlo error ≈ sd/√K: at 20k, ±0.35 pts on a total and ±0.7% on a win prob (95%).
+export const TEAM_SIMS = Number(process.env.LOCKIN_SIMS || 20000);
 
 // Everything that can change a team's outlook / the advice: roster, games (status/score/projection), lineup & lock
 // state, injury overrides, which events have passed.
@@ -52,7 +83,7 @@ export function teamFingerprint(T: LiveTeam) {
 
 export async function teamSims(T: LiveTeam, week: number, asOf: number, K = TEAM_SIMS): Promise<Float64Array> {
   const fp = fingerprint({ v: 1, K, week, team: teamFingerprint(T) });
-  const r = await cachedCompute(`team-${T.rosterId}-w${week}`, fp, () => Array.from(weekValues(T, K, week * 7919, asOf)));
+  const r = await cachedCompute(`team-${T.rosterId}-w${week}`, fp, async () => Array.from(await parallelWeekValues(T, K, week * 7919, asOf), (x) => Math.round(x * 100) / 100));
   return Float64Array.from(r.value);
 }
 

@@ -40,7 +40,7 @@ export async function leagueWeek(o: { leagueId: string; rosterId: number; week?:
 
   // recompute only if something that affects a projection changed (games, scores, locks, lineups, injuries, projections)
   const sims = new Map<number, Float64Array>();
-  for (const T of teams) sims.set(T.rosterId, await teamSims(T, week, asOf, K)); // shared with the This week tab; per-team cache
+  await Promise.all(teams.map(async (T) => sims.set(T.rosterId, await teamSims(T, week, asOf, K)))); // shared with the This week tab; per-team cache
   const fp = fingerprint({ v: 2, K, week, teams: teams.map((t) => [t.rosterId, teamFingerprint(t), t.sleeperPoints]), mu: matchups.map((m) => [m.roster_id, m.matchup_id]) });
   const res = await cachedCompute(`league-${o.leagueId}-w${week}`, fp, (): LeagueWeek => {
     const view = new Map<number, LeagueTeam>();
