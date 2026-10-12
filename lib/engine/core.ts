@@ -42,7 +42,10 @@ export interface TeamWeek {
   // optional: empirical shape of standardized score residuals (sorted quantiles of (actual-mu)/sd).
   // Real fantasy scores are right-skewed; when set, valuation and sampling use this instead of a Normal.
   resid?: ResidualShape;
+  // optional roster windows (in-week streaming): player usable only for avail[p] <= t < gone[p]
+  avail?: Float64Array; gone?: Float64Array;
 }
+export function usable(tw: TeamWeek, p: number, t: number) { return !tw.avail || (tw.avail[p] <= t && t < tw.gone![p]); }
 export interface ResidualShape { q: Float64Array; g: Float64Array; t0: number; dt: number } // g(t) = E[max(Z,t)] on a grid
 export function makeResidualShape(z: number[], nq = 400): ResidualShape {
   const s = [...z].sort((a, b) => a - b);
@@ -265,7 +268,7 @@ export function sameTypeHere(tw: TeamWeek, st: State, p: number, s: number, lock
 export function evalLock(tw: TeamWeek, pol: Policy, st: State, p: number, t: number): LockEval {
   const x = st.pendingX[p];
   const nP = tw.pmask.length; const w = new Float64Array(nP); const others: number[] = [];
-  for (let q = 0; q < nP; q++) if (!st.isLocked[q] && q !== p) { w[q] = playerValue(tw, pol, st, q, t); others.push(q); }
+  for (let q = 0; q < nP; q++) if (!st.isLocked[q] && q !== p && (usable(tw, q, t) || !Number.isNaN(st.pendingX[q]) || st.inGame[q] >= 0)) { w[q] = playerValue(tw, pol, st, q, t); others.push(q); }
   const open = openMaskOf(st);
   w[p] = futureValue(tw, pol, st, p, t);
   const cont = assign(pol, tw, open, [...others, p], w).total;
@@ -344,7 +347,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
 
 export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: Ev[], evIdx: number, hooks?: Hooks) {
   const t = e.t; const nP = tw.pmask.length;
-  const tipping = e.group!.map((g) => tw.games[g].p).filter((p) => !st.isLocked[p]);
+  const tipping = e.group!.map((g) => tw.games[g].p).filter((p) => !st.isLocked[p] && usable(tw, p, t));
   if (!tipping.length) return;
   const gameOf = new Map<number, number>(); e.group!.forEach((g) => gameOf.set(tw.games[g].p, g));
   const free = unpinnedOpen(st);
@@ -384,7 +387,7 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
     const horizon = pol.chain ? t + 2.5 * 3600e3 : dayEnd(t);
     const seen = new Set(cands);
     for (const g of tw.games) {
-      if (g.tip <= t || g.tip >= horizon || st.isLocked[g.p] || seen.has(g.p)) continue;
+      if (g.tip <= t || g.tip >= horizon || st.isLocked[g.p] || seen.has(g.p) || !usable(tw, g.p, g.tip)) continue;
       const k = tw.byPlayer[g.p].indexOf(tw.games.indexOf(g));
       const withV = stopValue(tw, g.p, k, st.lastPlayed[g.p]);
       const without = stopValue(tw, g.p, k + 1, st.lastPlayed[g.p]);

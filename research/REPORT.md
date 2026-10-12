@@ -63,3 +63,12 @@ Engine: `research/engine.ts`.
 - Starters are placed in the slot where they'd be locked after a good game.
 - When a lock in the player's current slot is within noise of the best slot, he's locked in place. UTIL 1 and UTIL 2 count as interchangeable.
 - Full strategy with simulation: locks needing a slot move first fell from 58% to 35%. Points/week 274.2 vs 274.6 (−0.5 ± 1.25, not significant).
+
+## In-week free-agent streaming (tested, not adopted)
+- Test: each game day, swap "dead" roster spots for the best free agent with games left.
+  - Dead spot = a churnable player who is finished for the week, or (variant B) already locked.
+  - Real FA pool and box scores, walk-forward, 230 team-weeks.
+- Result: +0.29 ± 0.61 (A) and +0.25 ± 0.65 (B) pts/week.
+- Even churning 10 roster players against a 60-FA pool: +0.44 ± 0.80 / +0.72 ± 1.09.
+- Why: when a dead spot appears, the median team still has 14 usable players for 3 open slots. Rosters were thin (10 or fewer live players mid-week) in 1 of 230 team-weeks.
+- Verdict: not worth roster churn. Manual tactic only after injury pile-ups.
