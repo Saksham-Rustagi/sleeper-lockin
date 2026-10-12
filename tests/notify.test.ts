@@ -17,7 +17,18 @@ test("notifier builds lock / hold / final-call / lineup reminders", () => {
   assert.match(titles, /LOCK Evan Mobley \(41\.5\) at C/);
   assert.match(titles, /HOLD Jalen Green/);
   assert.match(titles, /Final call on Jalen Green/);
-  assert.match(titles, /Set lineup before Tue 7:00 PM: start Donovan Clingan \(UTIL\)/);
+  assert.match(titles, /🏀 Before Tue 7:00 PM: start Donovan Clingan \(UTIL\)/);
   assert.ok(!/Garland \(PG\)/.test(titles), "Garland is already in the lineup");
   assert.equal(new Set(m.map((x) => x.key)).size, m.length, "dedupe keys unique");
+});
+
+test("late scratch reminder explains the swap", () => {
+  const a: any = JSON.parse(JSON.stringify(advice));
+  a.decisions = [];
+  a.me.slots = [{ pid: "2007", player: "Darius Garland", injury: null, locked: false }, { pid: "2259", player: "Evan Mobley", injury: "Out", locked: false }];
+  a.plan[0].starts = [{ slot: "C", player: "Donovan Clingan", pid: "2728", proj: 30, lockIf: 28 }, { slot: "PG", player: "Darius Garland", pid: "2007", proj: 25, lockIf: 24 }];
+  const m = messages(a, now);
+  assert.equal(m.length, 1);
+  assert.match(m[0].title, /⚠️ Evan Mobley OUT → Before Tue 7:00 PM: start Donovan Clingan \(C\)/);
+  assert.match(m[0].body, /Bench Evan Mobley \(ruled out\)/);
 });

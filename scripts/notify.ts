@@ -55,7 +55,10 @@ export function messages(a: Advice, now: number): Msg[] {
     const current = new Set(a.me.slots.map((s) => s.pid).filter(Boolean) as string[]);
     const moves = next.starts.filter((s) => !current.has(s.pid));
     const cut = next.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} ≥ ${s.lockIf}`).join(", ");
-    if (moves.length) out.push({ key: `lineup|${next.tip}|${moves.map((m) => m.pid + m.slot).join(",")}`, title: `🏀 Set lineup before ${next.when}: start ${moves.map((m) => `${m.player} (${m.slot})`).join(", ")}`, body: `Lock cut-offs tonight: ${cut || "–"}. Bench: ${next.benched.map((b) => b.player).join(", ") || "–"}.` });
+    const startingIds = new Set(next.starts.map((s) => s.pid));
+    const scratched = a.me.slots.filter((s) => s.pid && !s.locked && /^(out|doubtful|inactive|sus)/i.test(s.injury || "") && !startingIds.has(s.pid));
+    const why = scratched.length ? `⚠️ ${scratched.map((s) => `${s.player} ${String(s.injury).toUpperCase()}`).join(", ")} → ` : "🏀 ";
+    if (moves.length) out.push({ key: `lineup|${next.tip}|${moves.map((m) => m.pid + m.slot).join(",")}`, title: `${why}Before ${next.when}: start ${moves.map((m) => `${m.player} (${m.slot})`).join(", ")}`, body: `${scratched.length ? `Bench ${scratched.map((s) => s.player).join(", ")} (ruled out). ` : ""}Lock cut-offs tonight: ${cut || "–"}. Bench: ${next.benched.map((b) => b.player).join(", ") || "–"}.` });
     else if (cut) out.push({ key: `cutoffs|${next.tip}`, title: `🏀 ${next.when} tip-off — lineup is set`, body: `Lock if: ${cut}.` });
   }
   return out;

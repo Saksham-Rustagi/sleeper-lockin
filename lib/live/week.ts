@@ -43,8 +43,8 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   const season = league.season;
   const asOf0 = o.asOf ?? Date.now();
   const week = o.week ?? (await resolveWeek(season, asOf0));
-  const [sched, players, users, rosters, wproj, wstats, sproj] = await Promise.all([
-    sleeper.schedule(season), sleeper.players(), sleeper.users(o.leagueId), sleeper.rosters(o.leagueId),
+  const [sched, users, rosters, wproj, wstats, sproj] = await Promise.all([
+    sleeper.schedule(season), sleeper.users(o.leagueId), sleeper.rosters(o.leagueId),
     sleeper.weekProjections(season, week).catch(() => [] as GameRow[]), sleeper.weekStats(season, week).catch(() => [] as GameRow[]),
     sleeper.seasonProjections(season).catch(() => ({} as Record<string, Record<string, number>>)),
   ]);
@@ -57,6 +57,9 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   await Promise.all(dates.map(async (d) => {
     for (const g of await espnDay(d).catch(() => [])) for (const t of g.teams) espn.set(`${d}|${t}`, { tip: g.tip, state: g.state });
   }));
+  // Injury tags: refresh every 4 min when any game tips within 2h (late scratches), otherwise hourly.
+  const soon = [...espn.values()].some((g) => g.state !== "post" && g.tip - asOf0 < 2 * 3600e3 && g.tip - asOf0 > -30 * 60e3);
+  const players = await sleeper.players(mode === "live" && soon ? 4 * 60e3 : 60 * 60e3);
   // replay mode defaults to "end of week"
   const asOf = mode === "replay" && o.asOf === undefined ? Date.parse(dates[dates.length - 1] + "T23:59:00Z") + 12 * 3600e3 : asOf0;
   const slotNames = league.roster_positions.filter((s) => s !== "BN" && s !== "IR" && s !== "TAXI");

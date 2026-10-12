@@ -41,7 +41,7 @@ export async function collect(o: { leagueId: string; baseDir: string; now?: numb
 
   const week = await resolveWeek(season, now);
   const weeks = [week - 1, week, week + 1].filter((w) => w >= 1);
-  const [sched, rosters, players] = await Promise.all([sleeper.schedule(season), sleeper.rosters(o.leagueId), sleeper.players(30 * 60e3)]);
+  const [sched, rosters] = await Promise.all([sleeper.schedule(season), sleeper.rosters(o.leagueId)]);
   const owner = new Map<string, number>(); rosters.forEach((r) => (r.players || []).forEach((p) => owner.set(p, r.roster_id)));
 
   // ESPN game states for every date in the tracked weeks
@@ -58,6 +58,8 @@ export async function collect(o: { leagueId: string; baseDir: string; now?: numb
       }
     }
   }
+  const soon = [...espn.values()].some((g) => g.state !== "post" && g.tip - now < 2 * 3600e3 && g.tip - now > -30 * 60e3);
+  const players = await sleeper.players(soon ? 4 * 60e3 : 60 * 60e3);
   const tracked = new Set<string>(owner.keys());
 
   // projections: only while the game hasn't started

@@ -90,3 +90,17 @@ test("weekly JSON with duplicate UTIL slots (UTIL_2) validates", () => {
   const r = validateWeekData(JSON.parse(fs.readFileSync(p, "utf8")));
   assert.ok(r.success, r.success ? "" : r.error.message);
 });
+
+test("late scratch: an OUT player loses his slot to a healthy player at the same tip-off", () => {
+  const t = tw(["C"], [{ pos: ["C"], games: [{ tip: T0, mu: 30, actual: 0 }] }, { pos: ["C"], games: [{ tip: T0, mu: 18, actual: 18 }] }]);
+  t.nextGameIdx = [t.byPlayer[0][0], t.byPlayer[1][0]];
+  t.pNext = [0.03, null]; // star ruled Out 30 min before tip
+  const st = E.initState(t); const ev = E.buildEvents(t, true);
+  E.simulate(t, POL, ev, Float64Array.from(t.games.map((g) => g.actual)), Uint8Array.from(t.games.map(() => 1)), st, 0, undefined, T0);
+  const startedIdx = st.inGame.findIndex((g) => g >= 0);
+  assert.equal(startedIdx, 1, "the healthy backup should be started");
+  t.pNext = [null, null]; // same night without the injury -> the star starts
+  const st2 = E.initState(t);
+  E.simulate(t, POL, ev, Float64Array.from(t.games.map((g) => g.actual)), Uint8Array.from(t.games.map(() => 1)), st2, 0, undefined, T0);
+  assert.equal(st2.inGame.findIndex((g) => g >= 0), 0);
+});

@@ -21,7 +21,7 @@ export interface Advice {
 }
 export interface TeamView {
   rosterId: number; name: string; lockedTotal: number;
-  slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string }[];
+  slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string; injury?: string | null }[];
   players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null }[] }[];
 }
 export interface Outlook { myMean: number; myP10: number; myP90: number; oppMean: number | null; oppP10: number | null; oppP90: number | null; winProb: number | null; sims: number }
@@ -33,7 +33,7 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
     if (lp >= 0) return { slot, player: T.names[lp], pid: T.pids[lp], locked: true, points: st.lockedPts[s], source: T.lockSource[s], state: "locked" };
     const pid = T.lineup[s]; const i = pid ? T.pids.indexOf(pid) : -1;
     const state = i < 0 ? "empty" : st.inGame[i] >= 0 ? "playing" : !Number.isNaN(st.pendingX[i]) ? "lockable" : "idle";
-    return { slot, player: i >= 0 ? T.names[i] : null, pid, locked: false, points: i >= 0 && !Number.isNaN(st.pendingX[i]) ? st.pendingX[i] : null, source: null, state };
+    return { slot, player: i >= 0 ? T.names[i] : null, pid, locked: false, points: i >= 0 && !Number.isNaN(st.pendingX[i]) ? st.pendingX[i] : null, source: null, state, injury: i >= 0 ? T.injury[i] : null };
   });
   return {
     rosterId: T.rosterId, name: T.teamName, lockedTotal: Array.from(st.lockedBy).reduce((a, p, s) => a + (p >= 0 ? st.lockedPts[s] : 0), 0), slots,
