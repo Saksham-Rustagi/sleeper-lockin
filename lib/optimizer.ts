@@ -144,13 +144,18 @@ export function computeBestRemaining(
   for (const player of availablePlayers) {
     const playerGames = futureGames.filter((g) => g.playerId === player.id);
     if (playerGames.length > 0) {
-      const bestGame = playerGames.reduce((best, game) => {
-        const ev = computeEV(game.projection, game.variance, varianceLambda);
-        const bestEv = computeEV(best.projection, best.variance, varianceLambda);
-        return ev > bestEv ? game : best;
-      });
-      const ev = computeEV(bestGame.projection, bestGame.variance, varianceLambda);
-      weights.set(player.id, ev);
+      // Value of keeping this player unlocked = optimal-stopping value over his remaining games:
+      // V_last = proj_last (final game counts automatically); V_k = E[max(X_k, V_{k+1})]
+      const gs = [...playerGames].sort((a, b) => compareTimes(a.tipoffUtc, b.tipoffUtc));
+      let v = gs[gs.length - 1].projection;
+      for (let k = gs.length - 2; k >= 0; k--) {
+        const mu = gs[k].projection, sd = Math.max(1e-6, gs[k].variance ?? 8);
+        const z = (mu - v) / sd;
+        const phi = Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
+        const Phi = 0.5 * (1 + erf(z / Math.SQRT2));
+        v = v + (mu - v) * Phi + sd * phi;
+      }
+      weights.set(player.id, v);
       playersWithGames.add(player.id);
     }
   }
@@ -299,3 +304,9 @@ export function recommendLock(
   }
 }
 
+
+function erf(x: number): number {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return x >= 0 ? y : -y;
+}

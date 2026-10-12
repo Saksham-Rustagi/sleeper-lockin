@@ -5,7 +5,11 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
-    "start": "next start"
+    "start": "next start",
+    "test": "tsx --test tests/*.test.ts",
+    "backtest": "tsx research/backtest.ts 1 23 APP,P1,P2 research/out/backtest.json && python3 research/analyze.py research/out/backtest.json",
+    "notify": "node scripts/dist/notify.cjs",
+    "build:notify": "esbuild scripts/notify.ts --bundle --platform=node --format=cjs --outfile=scripts/dist/notify.cjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -38,7 +42,9 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "tw-animate-css": "^1.4.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "esbuild": "^0.28.2"
   }
 }

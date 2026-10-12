@@ -120,54 +120,6 @@ export function transformRoster(roster: SleeperRoster): Roster {
 }
 
 /**
- * Create mock game projections for a week
- * In a real implementation, this would fetch from a projections API
- */
-export function createMockGameProjections(
-  playerIds: string[],
-  weekStartUtc: string,
-  weekEndUtc: string
-): GameProjection[] {
-  const games: GameProjection[] = [];
-  const startDate = new Date(weekStartUtc);
-  const endDate = new Date(weekEndUtc);
-  const daysInWeek = Math.ceil(
-    (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
-  );
-
-  // Mock: each player gets 3-4 games during the week
-  for (const playerId of playerIds) {
-    const numGames = 3 + Math.floor(Math.random() * 2); // 3-4 games
-
-    for (let i = 0; i < numGames; i++) {
-      const dayOffset = Math.floor((i / numGames) * daysInWeek);
-      const gameDate = new Date(startDate);
-      gameDate.setDate(gameDate.getDate() + dayOffset);
-      gameDate.setHours(19 + Math.floor(Math.random() * 4), 0, 0, 0); // 7pm-11pm
-
-      games.push({
-        gameId: `${playerId}_game_${i}`,
-        playerId,
-        tipoffUtc: gameDate.toISOString(),
-        opponent: ["LAL", "BOS", "GSW", "MIA", "PHX", "DAL", "DEN"][
-          Math.floor(Math.random() * 7)
-        ],
-        projection: 15 + Math.random() * 30, // 15-45 points
-        variance: 5 + Math.random() * 10, // 5-15 variance
-        status: "UPCOMING",
-      });
-    }
-  }
-
-  // Sort by tipoff
-  games.sort(
-    (a, b) => new Date(a.tipoffUtc).getTime() - new Date(b.tipoffUtc).getTime()
-  );
-
-  return games;
-}
-
-/**
  * Main transformation: Sleeper league + roster -> WeekData
  */
 export async function transformToWeekData(
@@ -181,9 +133,8 @@ export async function transformToWeekData(
   const leagueSettings = transformLeague(league, weekStartUtc, weekEndUtc);
   const rosterData = transformRoster(roster);
 
-  // Create mock projections
-  // In production, integrate with a real projections source
-  const games = createMockGameProjections(allPlayerIds, weekStartUtc, weekEndUtc);
+  // Games/projections come from Lock-In Live (lib/live); this legacy transform returns roster data only.
+  const games: GameProjection[] = [];
 
   return {
     league: leagueSettings,

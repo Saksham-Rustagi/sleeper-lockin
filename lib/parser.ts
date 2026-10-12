@@ -105,7 +105,7 @@ export async function parseJSON(file: File): Promise<WeekData> {
     throw new Error(`Invalid week data: ${validation.error.message}`);
   }
 
-  return validation.data;
+  return validation.data as WeekData;
 }
 
 /**

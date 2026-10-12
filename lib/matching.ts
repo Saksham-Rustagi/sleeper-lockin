@@ -1,59 +1,46 @@
 import { Player, Position, GameProjection } from "@/types";
 import { isEligible } from "./eligibility";
 
-/**
- * Hungarian Algorithm for maximum weight bipartite matching
- * Simplified implementation for small graphs (N <= 20)
- */
-export function hungarianAlgorithm(weights: number[][]): number[] {
+// Exact max-weight assignment (rows = players, cols = slots). Leaves rows/cols unmatched
+// when that is better. DP over slot bitmask: O(rows * 2^cols * cols) — trivial for 9 slots.
+function exactAssignment(weights: number[][]): number[] {
   const n = weights.length;
   const m = weights[0]?.length || 0;
-  
-  if (n === 0 || m === 0) return [];
-  
-  // Convert to minimization problem by negating weights
-  const cost = weights.map(row => row.map(w => -w));
-  
-  // Pad to square matrix if needed
-  const size = Math.max(n, m);
-  const matrix: number[][] = [];
-  for (let i = 0; i < size; i++) {
-    matrix[i] = [];
-    for (let j = 0; j < size; j++) {
-      if (i < n && j < m) {
-        matrix[i][j] = cost[i][j];
-      } else {
-        matrix[i][j] = 0;
+  const full = 1 << m;
+  // best[i][mask] = best total using rows i.. with slots in mask already taken
+  const best: Float64Array[] = Array.from({ length: n + 1 }, () => new Float64Array(full));
+  const choice: Int16Array[] = Array.from({ length: n + 1 }, () => new Int16Array(full).fill(-1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let mask = 0; mask < full; mask++) {
+      let b = best[i + 1][mask];
+      let c = -1;
+      for (let j = 0; j < m; j++) {
+        if (mask & (1 << j)) continue;
+        const w = weights[i][j];
+        if (w === -Infinity || !Number.isFinite(w)) continue;
+        const v = w + best[i + 1][mask | (1 << j)];
+        if (v > b + 1e-9) { b = v; c = j; }
       }
+      best[i][mask] = b;
+      choice[i][mask] = c;
     }
   }
-  
-  // Simple greedy assignment for now (can be improved with full Hungarian)
-  const assignment: number[] = new Array(n).fill(-1);
-  const usedCols = new Set<number>();
-  
-  // Create priority list of (weight, row, col) tuples
-  const edges: Array<[number, number, number]> = [];
+  const out = new Array(n).fill(-1);
+  let mask = 0;
   for (let i = 0; i < n; i++) {
-    for (let j = 0; j < m; j++) {
-      if (weights[i][j] !== -Infinity) {
-        edges.push([weights[i][j], i, j]);
-      }
-    }
+    const c = choice[i][mask];
+    out[i] = c;
+    if (c >= 0) mask |= 1 << c;
   }
-  
-  // Sort by weight descending
-  edges.sort((a, b) => b[0] - a[0]);
-  
-  // Greedily assign
-  for (const [, row, col] of edges) {
-    if (assignment[row] === -1 && !usedCols.has(col)) {
-      assignment[row] = col;
-      usedCols.add(col);
-    }
-  }
-  
-  return assignment;
+  return out;
+}
+
+/**
+ * Maximum-weight assignment (rows = players, cols = slots). Exact (DP over slot bitmask), slots may stay empty.
+ * (The previous version was a greedy approximation despite its name.)
+ */
+export function hungarianAlgorithm(weights: number[][]): number[] {
+  return exactAssignment(weights);
 }
 
 /**
@@ -131,7 +118,7 @@ export function buildWeightMatrix(
     for (const slot of slots) {
       if (isEligible(player, slot, slotEligibility)) {
         const baseWeight = weights.get(player.id) || 0;
-        const penalty = allPlayers.length > 0 
+        const penalty = 0 && allPlayers.length > 0 
           ? scarcityPenalty(slot, remainingGames, allPlayers, slotEligibility)
           : 0;
         row.push(baseWeight - penalty);

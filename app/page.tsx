@@ -79,9 +79,9 @@ export default function Home() {
 
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row gap-4 justify-center mt-12">
-            <Link href="/setup?source=sleeper">
+            <Link href="/live">
               <Button size="lg" className="w-full sm:w-auto">
-                Import from Sleeper
+                Lock-In Live (Sleeper)
               </Button>
             </Link>
             <Link href="/setup?source=file">

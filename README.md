@@ -1,5 +1,46 @@
 # Sleeper Lock-In Optimizer
 
+## Lock-In Live (recommended)
+
+`/live` connects to your Sleeper league and does everything from live data: no manual entry.
+
+- **Data:** Sleeper roster, lineup, locks, per-game projections and box scores, plus ESPN tip-off times and live game status.
+- **Decisions:** for every lockable starter it simulates the rest of the week a few hundred times for you *and your
+  opponent*, and compares LOCK (per slot), HOLD (keep him in a starting slot until his next tip-off) and BENCH (free the slot).
+- **Lineup plan:** who to start at each tip-off in the next 30 hours, including same-night slot reuse once a game
+  ends, and a "lock if ≥ X" cut-off for every starter.
+- **Outlook:** projected totals and win probability.
+- **Replay:** run the strategy through any finished week with the real results and compare it with what you scored.
+- **Reminders:** `scripts/notify.ts` (launchd, every 5 min) creates Apple Reminders that sync to iPhone, for lineup
+  changes before tip-off, lock/hold/bench calls after games, and final calls before deadlines.
+  Config lives in `~/.sleeper-lockin/config.json`. Test with `LOCKIN_TEST=1 npm run notify`.
+
+**Rules modelled** (Sleeper support article 6522833):
+- A game is lockable only if the player started it.
+- You can lock any time before his next tip-off, as long as he never touches the bench (benching forfeits it).
+- An unlocked starter's final game of the week counts automatically.
+- A slot can be reused the same night once a game ends.
+
+**Validated** on the full 2025-26 season of this league (230 team-weeks, walk-forward, no look-ahead). See
+`research/REPORT.md`. The strategy averaged 274.6 pts/week vs 262.5 for the old logic and 232.5 for the real managers.
+
+**Known limits:**
+- Locks are inferred from Sleeper's per-slot points. Use the "mark locked" toggles if Sleeper reports them differently.
+- Game length is assumed to be 2.5h for planning.
+- The Mac must be awake for reminders.
+
+```bash
+npm install
+npm run build && npx next start -p 3100   # open http://localhost:3100/live
+npm test                                  # engine + notifier tests
+npm run backtest                          # season backtest (needs research data)
+```
+
+---
+
+## Manual mode (original)
+
+
 A production-quality React + TypeScript web app that recommends optimal daily starts and lock decisions for **Sleeper fantasy basketball Lock-In mode**.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)

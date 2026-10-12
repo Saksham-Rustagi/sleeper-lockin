@@ -58,7 +58,7 @@ export default function WeekTimeline() {
         return (
           <Card key={day}>
             <CardHeader>
-              <CardTitle className="text-lg">{getDayLabel(day + "T00:00:00.000Z")}</CardTitle>
+              <CardTitle className="text-lg">{getDayLabel(day)}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {uniqueTimes.map((time) => {

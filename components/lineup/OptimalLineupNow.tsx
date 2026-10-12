@@ -44,8 +44,11 @@ export default function OptimalLineupNow() {
     
     // Build weight map based on best upcoming game for each player
     const weights = new Map<string, number>();
+    // Only players with a game on the next game day compete for today's slots: an unlocked starter who
+    // isn't playing today costs nothing to swap out, so every open slot should hold someone playing today.
+    const nextDay = nextGames[0] ? new Date(nextGames[0].tipoffUtc).toDateString() : null;
     for (const player of availablePlayers) {
-      const playerGames = nextGames.filter(g => g.playerId === player.id);
+      const playerGames = nextGames.filter(g => g.playerId === player.id && new Date(g.tipoffUtc).toDateString() === nextDay);
       if (playerGames.length > 0) {
         // Use projection from next game
         const nextGame = playerGames[0];

@@ -35,7 +35,7 @@ export default function HelpDialog() {
               <div className="flex gap-3">
                 <div className="font-bold text-blue-600 min-w-[24px]">1.</div>
                 <div>
-                  <strong>Weekly Roster Lock:</strong> Each starting slot must have exactly one locked game by week's end (9 total).
+                  <strong>Week End:</strong> Any starter you never lock gets his final game of the week automatically (0 if he doesn&apos;t play). Benching a player forfeits his last game.
                 </div>
               </div>
               <div className="flex gap-3">
@@ -53,7 +53,7 @@ export default function HelpDialog() {
               <div className="flex gap-3">
                 <div className="font-bold text-blue-600 min-w-[24px]">4.</div>
                 <div>
-                  <strong>Sequential Locking:</strong> You can only lock the most recent finished game. Can't go back after a later game starts.
+                  <strong>Sequential Locking:</strong> You can only lock the most recent finished game, before his next tip-off. A slot can be reused the same night once a player&apos;s game has ended.
                 </div>
               </div>
               <div className="flex gap-3">

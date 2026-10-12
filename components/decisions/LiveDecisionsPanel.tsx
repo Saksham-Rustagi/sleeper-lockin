@@ -17,9 +17,15 @@ export default function LiveDecisionsPanel() {
 
   const finishedGames = useMemo(() => {
     if (!weekData) return [];
-    return weekData.games.filter(
-      (g) => g.status === "FINAL" && g.actual !== undefined && !lockedState.lockedPlayers.has(g.playerId)
-    );
+    // Sleeper only lets you lock a player's most recent finished game (before his next tip-off).
+    const latest = new Map<string, (typeof weekData.games)[number]>();
+    for (const g of weekData.games) {
+      if (g.status !== "FINAL" || g.actual === undefined || lockedState.lockedPlayers.has(g.playerId)) continue;
+      const cur = latest.get(g.playerId);
+      if (!cur || new Date(g.tipoffUtc) > new Date(cur.tipoffUtc)) latest.set(g.playerId, g);
+    }
+    const now = Date.now();
+    return Array.from(latest.values()).filter((g) => !weekData.games.some((n) => n.playerId === g.playerId && new Date(n.tipoffUtc) > new Date(g.tipoffUtc) && new Date(n.tipoffUtc).getTime() <= now));
   }, [weekData, lockedState.lockedPlayers]);
 
   if (!weekData) return null;
@@ -46,6 +52,7 @@ export default function LiveDecisionsPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Games Ready for Lock Decision</CardTitle>
+          <p className="text-xs text-gray-500">Only lockable if the player was in your starting lineup at tip-off and hasn&apos;t touched the bench since.</p>
         </CardHeader>
         <CardContent>
           {finishedGames.length === 0 ? (

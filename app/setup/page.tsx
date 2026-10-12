@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,13 +10,19 @@ import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { parseCSV, parseJSON } from "@/lib/parser";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { fetchUser, fetchUserLeagues, fetchRosters } from "@/lib/sleeper/api";
-import { transformToWeekData } from "@/lib/sleeper/transform";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import GameScheduleEditor from "@/components/schedule/GameScheduleEditor";
 import { GameProjection } from "@/types";
 
 export default function SetupPage() {
+  return (
+    <Suspense fallback={<div className="p-8">Loading…</div>}>
+      <SetupInner />
+    </Suspense>
+  );
+}
+
+function SetupInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const source = searchParams.get("source") || "sleeper";
@@ -77,103 +83,20 @@ export default function SetupPage() {
     }
   };
 
+  // Sleeper import now lives in Lock-In Live (real schedule, tip-off times, projections and lineup sync).
+  // The old path generated random placeholder games, so it has been removed.
   const handleSleeperImport = async () => {
     if (!sleeperUsername) {
       toast.error("Please enter a Sleeper username");
       return;
     }
-
-    try {
-      setLoading(true);
-      const user = await fetchUser(sleeperUsername);
-      setSleeperUserId(user.user_id); // Save user ID
-      
-      // Get current NBA season year
-      // In October 2025, we're in the 2025-26 season, Sleeper calls it "2025"
-      const currentYear = new Date().getFullYear(); // 2025
-      const currentMonth = new Date().getMonth(); // 0-11, October = 9
-      // NBA season runs Oct-June, so if Oct or later use current year, else previous
-      const currentSeason = currentMonth >= 9 ? currentYear : currentYear - 1;
-      
-      // Fetch current season and previous season to show both
-      const [currentLeagues, previousLeagues] = await Promise.all([
-        fetchUserLeagues(user.user_id, "nba", currentSeason.toString()),
-        fetchUserLeagues(user.user_id, "nba", (currentSeason - 1).toString()).catch(() => [])
-      ]);
-      
-      const allLeagues = [...currentLeagues, ...previousLeagues];
-      
-      if (allLeagues.length === 0) {
-        toast.error(`No NBA leagues found`);
-        return;
-      }
-
-      // Sort: current season first, then by status (in_season > pre_draft > drafting > complete)
-      const sortedLeagues = allLeagues.sort((a, b) => {
-        // First sort by season (current year first)
-        const seasonDiff = parseInt(b.season) - parseInt(a.season);
-        if (seasonDiff !== 0) return seasonDiff;
-        
-        // Then by status
-        const statusOrder = { in_season: 0, pre_draft: 1, drafting: 2, complete: 3 };
-        const aOrder = statusOrder[a.status as keyof typeof statusOrder] ?? 4;
-        const bOrder = statusOrder[b.status as keyof typeof statusOrder] ?? 4;
-        return aOrder - bOrder;
-      });
-
-      setSleeperLeagues(sortedLeagues);
-      toast.success(`Found ${allLeagues.length} league(s) for ${user.display_name || user.username}`);
-    } catch (error: any) {
-      toast.error(error.message || "Failed to fetch Sleeper data");
-    } finally {
-      setLoading(false);
-    }
+    const key = "lockin-live-config";
+    const c = JSON.parse(localStorage.getItem(key) || "{}");
+    localStorage.setItem(key, JSON.stringify({ ...c, username: sleeperUsername }));
+    router.push("/live");
   };
 
-  const handleLeagueSelect = async (leagueId: string) => {
-    setSelectedLeague(leagueId);
-
-    try {
-      setLoading(true);
-      const league = sleeperLeagues.find(l => l.league_id === leagueId);
-      if (!league) return;
-
-      const rosters = await fetchRosters(leagueId);
-      
-      // Find the user's roster by matching owner_id
-      const userRoster = rosters.find(r => r.owner_id === sleeperUserId);
-      
-      if (!userRoster) {
-        toast.error("Could not find your roster in this league");
-        return;
-      }
-      
-      // Use current week dates
-      const now = new Date();
-      const weekStart = new Date(now);
-      weekStart.setDate(now.getDate() - now.getDay() + 1); // Monday
-      weekStart.setHours(0, 0, 0, 0);
-      
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekStart.getDate() + 7);
-
-      const weekData = await transformToWeekData(
-        league,
-        userRoster,
-        weekStart.toISOString(),
-        weekEnd.toISOString()
-      );
-
-      // Save to temp state and show schedule editor
-      setTempWeekData(weekData);
-      setShowScheduleEditor(true);
-      toast.success(`Roster loaded! Now add game schedules for ${weekData.players.length} players`);
-    } catch (error: any) {
-      toast.error(error.message || "Failed to import league data");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleLeagueSelect = async (_leagueId: string) => {};
 
   const handleGamesUpdate = (games: GameProjection[]) => {
     if (tempWeekData) {
@@ -269,7 +192,7 @@ export default function SetupPage() {
                       onKeyDown={(e) => e.key === "Enter" && handleSleeperImport()}
                     />
                     <Button onClick={handleSleeperImport} disabled={loading}>
-                      {loading ? "Loading..." : "Fetch Leagues"}
+                      {loading ? "Loading..." : "Open Lock-In Live →"}
                     </Button>
                   </div>
                 </div>

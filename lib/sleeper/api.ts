@@ -103,7 +103,7 @@ export async function fetchUser(username: string): Promise<SleeperUser> {
 export async function fetchUserLeagues(
   userId: string,
   sport: string = "nba",
-  season: string = "2024"
+  season: string = String(new Date().getMonth() >= 8 ? new Date().getFullYear() : new Date().getFullYear() - 1)
 ): Promise<SleeperLeague[]> {
   const response = await rateLimitedFetch(
     `${BASE_URL}/user/${userId}/leagues/${sport}/${season}`

@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# lock-in live
+research/out/
+research/dist/
+scripts/dist/
+export-*.json
+node_modules.nosync/
+.next.nosync/

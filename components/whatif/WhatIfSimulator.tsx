@@ -57,12 +57,12 @@ export default function WhatIfSimulator() {
       {dpSolution && (
         <Card>
           <CardHeader>
-            <CardTitle>Exact DP Solution</CardTitle>
+            <CardTitle>Best possible with hindsight</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               <div className="flex justify-between items-center p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <span className="font-semibold">Optimal Total (DP):</span>
+                <span className="font-semibold">Hindsight optimum:</span>
                 <span className="text-3xl font-bold text-green-600">
                   {dpSolution.total.toFixed(1)}
                 </span>

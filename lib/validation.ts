@@ -7,7 +7,7 @@ export const PositionSchema = z.enum(["PG", "SG", "SF", "PF", "C", "G", "F", "UT
 export const LeagueSettingsSchema = z.object({
   weekStartUtc: z.string().datetime(),
   weekEndUtc: z.string().datetime(),
-  startingSlots: z.array(PositionSchema),
+  startingSlots: z.array(z.string().regex(/^(PG|SG|SF|PF|C|G|F|UTIL)(_\d+)?$/)),
   slotEligibility: z.record(PositionSchema, z.array(PositionSchema)),
 });
 
@@ -42,7 +42,7 @@ export const WeekDataSchema = z.object({
   roster: RosterSchema,
 });
 
-export function validateWeekData(data: unknown): z.SafeParseReturnType<unknown, z.infer<typeof WeekDataSchema>> {
+export function validateWeekData(data: unknown): ReturnType<typeof WeekDataSchema.safeParse> {
   return WeekDataSchema.safeParse(data);
 }
 
