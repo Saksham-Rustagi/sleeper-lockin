@@ -195,7 +195,11 @@ export async function replay(o: { leagueId: string; rosterId: number; week: numb
       if (st.pinned[s] >= 0 && before.pinned[s] !== st.pinned[s]) { const p = st.pinned[s]; const g = T.games[st.inGame[p]]; log.push({ t, when: fmtTime(t), kind: "start", text: `Start ${tw.names[p]} at ${ctx.slotNames[s]} (proj ${g.proj.toFixed(1)} vs ${g.opp})` }); }
     }
     for (let p = 0; p < tw.pmask.length; p++) {
-      if (!Number.isNaN(before.pendingX[p]) && Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) log.push({ t, when: fmtTime(t), kind: "pass", text: `Pass on ${tw.names[p]}'s ${before.pendingX[p].toFixed(1)}` });
+      if (!Number.isNaN(before.pendingX[p]) && Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) {
+        const last = tw.byPlayer[p].map((gi) => T.games[gi]).filter((g) => g.end <= t).pop();
+        const dnp = last && !last.played;
+        log.push({ t, when: fmtTime(t), kind: "pass", text: dnp ? `${tw.names[p]} didn't play (${last!.opp}) - slot freed` : `Pass on ${tw.names[p]}'s ${before.pendingX[p].toFixed(1)}` });
+      }
     }
   }
   const fin = E.simulate(tw, POLICY, T.events, T.real.actual, T.real.played, st, T.events.length);

@@ -240,7 +240,7 @@ function ReplayView({ leagues, initialLeague, initialWeek }: { leagues: LeagueOp
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader><CardTitle>Replay a finished week</CardTitle><CardDescription>Runs the full strategy through the week with the real results, using only information available at each moment. Compare it with what you actually scored.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Replay a finished week</CardTitle><CardDescription>Runs the full strategy through the week with the real results, using only information available at each moment. Compare it with what you actually scored. Historical injury reports aren&apos;t available, so a replay may &quot;start&quot; a player who was ruled out; live mode uses Sleeper&apos;s injury status.</CardDescription></CardHeader>
         <CardContent className="flex flex-wrap gap-2 items-center">
           <select className="border rounded px-2 py-2 text-sm bg-white dark:bg-gray-800" value={lid} onChange={(e) => setLid(e.target.value)}>
             {leagues.map((x) => <option key={x.league_id} value={x.league_id}>{x.name} · {x.season}</option>)}
