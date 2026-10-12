@@ -103,3 +103,28 @@ Engine: `research/engine.ts`.
   - Lock and wait are compared on the same scenarios with the same future play, so errors in imagined future decisions mostly cancel.
   - Each later decision gets its own full simulation when it actually comes up.
 - Verdict: keep P3LA. Engine supports `Policy.cutoff`, off by default.
+
+## Model & search variants (tested, none adopted)
+Whole 2025-26 season, 230 team-weeks, paired against the same baseline.
+
+**Per-game score model** (walk-forward, held-out prediction on 10,437 played games, weeks 3–23):
+
+| Variant | Per-game error (RMSE) | Log-likelihood |
+|---|---|---|
+| Baseline | 10.214 | −2.8132 |
+| Recent form (last 10 games, weight 0.16) | 10.176 | −2.8085 (better) |
+| Per-player volatility (shrunk) | 10.214 | −2.8179 (worse) |
+
+**Base strategy P2LA, points per week vs baseline:**
+- Recent form: −2.26 ± 1.60. Better prediction, worse decisions.
+- Per-player volatility: +0.46 ± 1.49.
+- Skewed (empirical) residuals: −0.06 ± 0.36.
+- Form + skew: −1.88 ± 1.61.
+
+**Full simulation P3LA (baseline 274.2):**
+- Wider simulation net (25-pt margin): −0.52 ± 1.14, at 4.4× the compute.
+- 500 instead of 200 sims per decision: −0.03 ± 1.26, at 4.7× the compute.
+
+**Verdict:** the current strategy is at a plateau for what the data can show. Remaining ideas not yet testable:
+- simulation-based start/sit at crowded tip-offs
+- injury-report inputs, once the live logger has a season of data

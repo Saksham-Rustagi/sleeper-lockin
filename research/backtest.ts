@@ -34,6 +34,7 @@ function polFor(pn: string, week: number): E.Policy {
 }
 // dynamic variants: P2LAe<eps> / P3LAe<eps>: lock only if lockBest >= cont + eps (eps in points)
 for (const pn of pols) { const m = pn.match(/^(P2LA|P3LA)e([\d.]+)$/); if (m && !POLICIES[pn]) POLICIES[pn] = { ...POLICIES[m[1]], name: pn, eps: Number(m[2]) }; }
+for (const pn of pols) { const m = pn.match(/^P3LAm(\d+)$/); if (m && !POLICIES[pn]) POLICIES[pn] = { ...POLICIES.P3LA, name: pn, rollout: { objective: "points", K, margin: Number(m[1]) } }; }
 for (let week = Number(wFrom); week <= Number(wTo); week++) {
   const W = S.weeks.find((x: any) => x.week === week); if (!W) continue;
   const model = fitModel(week);
