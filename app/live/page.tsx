@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Advice, Replay } from "@/lib/live/advise";
 import type { WaiverAdvice, WaiverPlayer } from "@/lib/live/waivers";
+import type { IrAdvice } from "@/lib/live/ir";
 
 type LeagueOpt = { league_id: string; name: string; season: string; status: string; roster_id: number | null };
 const CFG_KEY = "lockin-live-config";
@@ -304,9 +305,10 @@ function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: numbe
   const pl = (p: WaiverPlayer) => `${p.name} (${p.pos}${p.team ? " " + p.team : ""})`;
   const sign = (x: number) => `${x >= 0 ? "+" : ""}${x.toFixed(1)}`;
   if (err) return <div className="p-3 rounded bg-red-50 text-red-700 text-sm">{err}</div>;
-  if (!w) return <div className="text-gray-500">Simulating every add/drop over this week and next… (~20-40 s)</div>;
+  if (!w) return <div className="space-y-6"><IrCard leagueId={leagueId} rosterId={rosterId} protect={protect} /><div className="text-gray-500">Simulating every add/drop over this week and next… (~20-40 s)</div></div>;
   return (
     <div className="space-y-6">
+      <IrCard leagueId={leagueId} rosterId={rosterId} protect={protect} />
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div><CardTitle>Best waiver moves</CardTitle><CardDescription>Week {w.week}{w.nextWeek ? ` + week ${w.nextWeek}` : ""} · {w.rosterFull ? "roster full: each add needs a drop" : `${w.openSpots} open spot(s)`} · {w.cached ? `no changes since ${tipTime(w.generatedAt)}` : `recalculated ${tipTime(w.generatedAt)}`}</CardDescription></div>
@@ -340,6 +342,27 @@ function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: numbe
         </Card>
       </div>
     </div>
+  );
+}
+
+function IrCard({ leagueId, rosterId, protect }: { leagueId: string; rosterId: number; protect: string[] }) {
+  const [a, setA] = useState<IrAdvice | null>(null); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { (async () => { try { const r = await fetch(`/api/ir?league=${leagueId}&roster=${rosterId}&protect=${protect.join(",")}`); const j = await r.json(); if (!r.ok) throw new Error(j.error); setA(j); } catch (e: any) { setErr(e.message); } })(); }, [leagueId, rosterId, protect]);
+  if (err) return <div className="p-3 rounded bg-red-50 text-red-700 text-sm">IR: {err}</div>;
+  if (!a) return <Card><CardContent className="py-4 text-gray-500 text-sm">Checking IR…</CardContent></Card>;
+  return (
+    <Card className={a.actions.some((x) => x.urgent) ? "border-red-400" : ""}>
+      <CardHeader><CardTitle className="text-lg">IR &amp; roster health</CardTitle><CardDescription>{a.rules}</CardDescription></CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <div><b>On IR ({a.onIr.length}/{a.capacity}):</b> {a.onIr.map((x) => `${x.name} [${x.status ?? "healthy"}${x.eligible ? "" : " — NOT eligible"}], back ~${x.returnDate ?? "?"}`).join("; ") || "empty"}</div>
+        <div><b>Out on your active roster:</b> {a.activeOut.map((x) => `${x.name} [${x.status}], back ~${x.returnDate ?? "?"}`).join("; ") || "none"}</div>
+        {a.actions.map((x) => (
+          <div key={x.key} className={`border rounded p-2 ${x.urgent ? "border-red-400 bg-red-50 dark:bg-red-900/20" : ""}`}>
+            <div className="font-semibold">{x.urgent ? "⚠️ " : ""}{x.title}</div><div className="text-gray-600 dark:text-gray-300">{x.detail}</div>
+            {x.dropOptions && <div className="text-xs text-gray-500 mt-1">Drop options (points lost over two weeks): {x.dropOptions.map((d) => `${d.name} ${d.loss < 0.5 ? "≈0" : "−" + d.loss.toFixed(1)}${d.protected ? ` (${d.reason})` : ""}`).join(" · ")}</div>}
+          </div>))}
+      </CardContent>
+    </Card>
   );
 }
 

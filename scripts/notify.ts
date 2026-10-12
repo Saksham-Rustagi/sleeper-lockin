@@ -9,6 +9,7 @@ import { execFileSync } from "child_process";
 import { advise, type Advice } from "../lib/live/advise";
 import { collect, logAdvice } from "../lib/live/collector";
 import { waiverAdvice } from "../lib/live/waivers";
+import { irAdvice, type IrAction } from "../lib/live/ir";
 
 const DIR = path.join(os.homedir(), ".sleeper-lockin");
 const CFG = path.join(DIR, "config.json");
@@ -40,6 +41,13 @@ export function remind(title: string, body: string) {
 }
 
 interface Msg { key: string; title: string; body: string }
+// IR reminders: urgent fixes (IR player no longer eligible), free IR slot moves, smarter IR swaps, and imminent returns.
+export function irMessages(actions: IrAction[]): Msg[] {
+  return actions.filter((a) => a.urgent || a.kind === "move_to_ir" || a.kind === "reorder").map((a) => ({
+    key: `ir|${a.key}`, title: `${a.urgent ? "⚠️ " : "🏥 "}${a.title}`,
+    body: `${a.detail}${a.dropOptions?.length ? ` Other drop options: ${a.dropOptions.slice(1, 4).map((d) => `${d.name}${d.protected ? " (dynasty)" : ""}`).join(", ")}.` : ""}`,
+  }));
+}
 export function messages(a: Advice, now: number): Msg[] {
   const out: Msg[] = [];
   for (const d of a.decisions) {
@@ -110,8 +118,16 @@ async function main() {
       }
       log(`waivers: best ${best ? `${best.add.name} for ${best.drop?.name ?? "-"} +${best.total.toFixed(1)}` : "none worth it"}`);
     } catch (e: any) { log("waivers ERROR", e?.message || e); }
+
     sent[`waiverday|${today}`] = now; if (injuredNow) sent[injKey] = now;
   }
+  // IR check every run: an IR player turning healthy blocks roster moves, so it's urgent. Cached by fingerprint,
+  // so it only re-simulates when a status / return date / roster actually changes.
+  try {
+    const ir = await irAdvice({ leagueId: cfg.leagueId, rosterId: cfg.rosterId, protect: cfg.protect || [] });
+    for (const m of irMessages(ir.actions)) if (!sent[m.key]) { remind(m.title, m.body); sent[m.key] = now; n++; }
+    log(`IR: ${ir.actions.map((x) => (x.urgent ? "URGENT " : "") + x.kind).join(", ") || "nothing to do"}${ir.cached ? " (cached)" : ""}`);
+  } catch (e: any) { log("IR ERROR", e?.message || e); }
   for (const [k, t] of Object.entries(sent)) if (now - t > 10 * 86400e3) delete sent[k];
   if (!process.env.DRY_RUN) fs.writeFileSync(SENT, JSON.stringify(sent));
   log(`week ${a.week}: ${a.decisions.length} decisions, ${a.plan.length} tip-offs planned, win ${a.outlook.winProb === null ? "–" : Math.round(a.outlook.winProb * 100) + "%"}, ${n} new reminders`);

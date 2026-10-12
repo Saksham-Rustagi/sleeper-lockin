@@ -40,7 +40,7 @@ function scenario(T: LiveTeam, k: number, salt: number, asOf: number) {
   return { actual, played };
 }
 
-function weekValues(T: LiveTeam, N: number, salt: number, asOf: number): Float64Array {
+export function weekValues(T: LiveTeam, N: number, salt: number, asOf: number): Float64Array {
   const v = new Float64Array(N);
   for (let k = 0; k < N; k++) {
     const sc = scenario(T, k, salt, asOf);
