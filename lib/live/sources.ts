@@ -53,7 +53,8 @@ export const sleeper = {
   users: (id: string) => getJSON<{ user_id: string; display_name: string; metadata?: { team_name?: string } }[]>(`${SLEEPER}/v1/league/${id}/users`, HOUR),
   rosters: (id: string) => getJSON<Roster[]>(`${SLEEPER}/v1/league/${id}/rosters`, 2 * MIN),
   matchups: (id: string, week: number) => getJSON<Matchup[]>(`${SLEEPER}/v1/league/${id}/matchups/${week}`, 1 * MIN),
-  players: () => getJSON<Record<string, SleeperPlayer>>(`${SLEEPER}/v1/players/nba`, 6 * HOUR),
+  players: (ttlMs = 6 * HOUR) => getJSON<Record<string, SleeperPlayer>>(`${SLEEPER}/v1/players/nba`, ttlMs),
+  transactions: (id: string, week: number) => getJSON<{ transaction_id: string; type: string; status: string; created: number; roster_ids: number[]; adds: Record<string, number> | null; drops: Record<string, number> | null; settings?: Record<string, number> }[]>(`${SLEEPER}/v1/league/${id}/transactions/${week}`, 5 * MIN),
   schedule: (season: string) => getJSON<SchedGame[]>(`${SLEEPER}/schedule/nba/regular/${season}`, 6 * HOUR),
   weekProjections: (season: string, week: number) => getJSON<GameRow[]>(`${SLEEPER}/projections/nba/${season}/${week}?season_type=regular`, 30 * MIN),
   weekStats: (season: string, week: number) => getJSON<GameRow[]>(`${SLEEPER}/stats/nba/${season}/${week}?season_type=regular`, 1 * MIN),
@@ -62,14 +63,15 @@ export const sleeper = {
 
 // ---------- ESPN ----------
 const ESPN_FIX: Record<string, string> = { GS: "GSW", NY: "NYK", SA: "SAS", NO: "NOP", UTAH: "UTA", WSH: "WAS", PHO: "PHX" };
-export interface EspnGame { tip: number; state: "pre" | "in" | "post"; detail: string; teams: string[] }
+export interface EspnGame { id: string; tip: number; state: "pre" | "in" | "post"; detail: string; teams: string[]; scores: number[] }
 export async function espnDay(date: string): Promise<EspnGame[]> {
   const d = date.replace(/-/g, "");
   const isPast = Date.parse(date + "T12:00:00Z") < Date.now() - 36 * HOUR;
-  const j = await getJSON<{ events?: { date: string; status: { type: { state: string; shortDetail: string } }; competitions: { competitors: { team: { abbreviation: string } }[] }[] }[] }>(
+  const j = await getJSON<{ events?: { id: string; date: string; status: { type: { state: string; shortDetail: string } }; competitions: { competitors: { score?: string; team: { abbreviation: string } }[] }[] }[] }>(
     `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${d}`, isPast ? 24 * HOUR : 1 * MIN);
   return (j.events || []).map((e) => ({
-    tip: Date.parse(e.date), state: e.status.type.state as EspnGame["state"], detail: e.status.type.shortDetail,
+    id: e.id, tip: Date.parse(e.date), state: e.status.type.state as EspnGame["state"], detail: e.status.type.shortDetail,
     teams: e.competitions[0].competitors.map((c) => ESPN_FIX[c.team.abbreviation] ?? c.team.abbreviation),
+    scores: e.competitions[0].competitors.map((c) => Number(c.score ?? 0)),
   }));
 }

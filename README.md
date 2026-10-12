@@ -15,6 +15,13 @@
   changes before tip-off, lock/hold/bench calls after games, and final calls before deadlines.
   Config lives in `~/.sleeper-lockin/config.json`. Test with `LOCKIN_TEST=1 npm run notify`.
 
+- **Data log for later analysis:** every 5 minutes the same job appends timestamped snapshots for the whole league
+  to `~/.sleeper-lockin/data/season-YYYY/*.jsonl`. It records projections (only while games are still upcoming, since
+  Sleeper rewrites history later), injury changes, final box scores and corrections, ESPN game states, every team's
+  lineup, locks and points, rosters, transactions, and the app's own advice. `npm run report` (add `--sqlite` for a
+  database) writes the accuracy report: bias, error, calibration, sit-outs by injury tag, late updates, per-team
+  bias, and the app's win-probability Brier score.
+
 **Rules modelled** (Sleeper support article 6522833):
 - A game is lockable only if the player started it.
 - You can lock any time before his next tip-off, as long as he never touches the bench (benching forfeits it).

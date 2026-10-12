@@ -7,10 +7,12 @@ import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
 import { advise, type Advice } from "../lib/live/advise";
+import { collect, logAdvice } from "../lib/live/collector";
 
 const DIR = path.join(os.homedir(), ".sleeper-lockin");
 const CFG = path.join(DIR, "config.json");
 const SENT = path.join(DIR, "sent.json");
+const DATA = path.join(DIR, "data");
 const LIST = "Sleeper Lock-In";
 process.env.LOCKIN_CACHE_DIR ??= path.join(DIR, "cache");
 
@@ -65,9 +67,17 @@ async function main() {
   if (!fs.existsSync(CFG)) { log("no config at", CFG); return; }
   const cfg = JSON.parse(fs.readFileSync(CFG, "utf8"));
   const now = Date.now();
+  // 1) data logger runs every time (projections move overnight/mornings too)
+  if (!process.env.NO_COLLECT) {
+    try {
+      const c = await collect({ leagueId: cfg.leagueId, baseDir: DATA, now });
+      log(`collected week ${c.week}:`, JSON.stringify(c.written));
+    } catch (e: any) { log("collector ERROR", e?.message || e); }
+  }
   const h = etHour(now);
   if (!process.env.FORCE && h >= 3 && h < 11) { log("quiet hours"); return; }
   const a = await advise({ leagueId: cfg.leagueId, rosterId: cfg.rosterId, K: Number(process.env.K || 250) });
+  if (!process.env.DRY_RUN) logAdvice(DATA, a.season, a);
   const sent: Record<string, number> = fs.existsSync(SENT) ? JSON.parse(fs.readFileSync(SENT, "utf8")) : {};
   const msgs = messages(a, now);
   let n = 0;

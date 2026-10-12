@@ -9,7 +9,8 @@
     "test": "tsx --test tests/*.test.ts",
     "backtest": "tsx research/backtest.ts 1 23 APP,P1,P2 research/out/backtest.json && python3 research/analyze.py research/out/backtest.json",
     "notify": "node scripts/dist/notify.cjs",
-    "build:notify": "esbuild scripts/notify.ts --bundle --platform=node --format=cjs --outfile=scripts/dist/notify.cjs"
+    "build:notify": "esbuild scripts/notify.ts --bundle --platform=node --format=cjs --outfile=scripts/dist/notify.cjs",
+    "report": "python3 research/accuracy_report.py"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
