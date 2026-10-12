@@ -6,7 +6,7 @@ import { gameDist, injuryPlayProb, fantasyPoints } from "../engine/model";
 import { sleeper, type GameRow } from "./sources";
 import { buildWeek, resolveWeek, POLICY, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
-import { teamFingerprint } from "./advise";
+import { teamFingerprint, weekValues } from "./teamsim";
 
 export interface WaiverPlayer { pid: string; name: string; pos: string; team: string | null; age: number | null; injury: string | null; dynastyAdp: number | null; gamesThisWeek: number; gamesNextWeek: number; projPerGame: number | null; note?: string }
 export interface WaiverMove { add: WaiverPlayer; drop: WaiverPlayer | null; gainThisWeek: number; gainNextWeek: number; total: number; se: number; confident: boolean }
@@ -17,37 +17,7 @@ export interface WaiverAdvice {
   cached?: boolean; checkedAt?: number;
 }
 
-function hashStr(s: string) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
-
-// Scenario k for a team variant: per-player RNG stream keyed by (pid, k, week), so the same player gets the same
-// draws in every variant (adding/dropping someone doesn't reshuffle everyone else's luck).
-function scenario(T: LiveTeam, k: number, salt: number, asOf: number) {
-  const actual = T.real.actual.slice(); const played = T.real.played.slice();
-  T.pids.forEach((pid, i) => {
-    const r = E.rng(hashStr(pid) ^ Math.imul(k + 1, 2654435761) ^ salt);
-    let last = T.st.lastPlayed[i];
-    for (const gi of T.tw.byPlayer[i]) {
-      const g = T.tw.games[gi];
-      const u1 = r(), u2 = r(), u3 = r(); // fixed number of draws per game keeps streams aligned
-      if (T.games[gi].status === "post" || g.end <= asOf) { last = played[gi]; continue; }
-      let pk = last ? T.tw.dnp.p1 : T.tw.dnp.p0;
-      if (T.tw.pNext?.[i] != null && T.tw.nextGameIdx?.[i] === gi) pk = T.tw.pNext[i]!;
-      const pl = u1 < pk ? 1 : 0;
-      const z = Math.sqrt(-2 * Math.log(Math.max(u2, 1e-12))) * Math.cos(2 * Math.PI * u3);
-      played[gi] = pl; actual[gi] = pl ? Math.max(-5, g.mu + g.sd * z) : 0; last = pl;
-    }
-  });
-  return { actual, played };
-}
-
-export function weekValues(T: LiveTeam, N: number, salt: number, asOf: number): Float64Array {
-  const v = new Float64Array(N);
-  for (let k = 0; k < N; k++) {
-    const sc = scenario(T, k, salt, asOf);
-    v[k] = E.simulate(T.tw, POLICY, T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
-  }
-  return v;
-}
+export { weekValues } from "./teamsim";
 
 export async function waiverAdvice(o: { leagueId: string; rosterId: number; protect?: string[]; N?: number; asOf?: number; maxCandidates?: number; force?: boolean }): Promise<WaiverAdvice> {
   const N = o.N ?? 300; const asOf = o.asOf ?? Date.now();

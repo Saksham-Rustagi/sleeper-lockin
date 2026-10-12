@@ -7,8 +7,10 @@
 import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
+import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS } from "./teamsim";
 
-const fmtTime = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }).format(ms);
+// more than ~5 days out, include the date ("Tue, Oct 20, 9:30 PM") so it isn't confused with this week's Tuesday
+const fmtTime = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit", ...(ms - Date.now() > 5 * 86400e3 ? { month: "short", day: "numeric" } : {}) }).format(ms);
 
 export interface Decision {
   player: string; pid: string; score: number; deadline: number | null; deadlineText: string;
@@ -54,6 +56,11 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
 
 function finishWeek(T: LiveTeam, st: E.State, scen: { actual: Float64Array; played: Uint8Array }, fromEv: number) {
   return E.simulate(T.tw, POLICY, T.events, scen.actual, scen.played, st, fromEv).total;
+}
+
+function sharedOutlook(ms: Float64Array, os: Float64Array | null): Outlook {
+  const a = summarize(ms), b = os ? summarize(os) : null;
+  return { myMean: a.mean, myP10: a.p10, myP90: a.p90, oppMean: b?.mean ?? null, oppP10: b?.p10 ?? null, oppP90: b?.p90 ?? null, winProb: os ? winProb(ms, os) : null, sims: ms.length };
 }
 
 function outlook(ctx: WeekContext, K: number, seed: number): Outlook {
@@ -176,7 +183,11 @@ function plan(ctx: WeekContext, hours: number): TipPlan[] {
   const actual = T.real.actual.slice(); const played = T.real.played.slice();
   T.games.forEach((g) => { if (g.status !== "post") { actual[g.gi] = g.mu; played[g.gi] = 1; } });
   let st = E.cloneState(T.st); let ev = T.evIdx; let first = true;
-  const tips = [...new Set(T.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + hours * 3600e3).map((g) => g.tip))].sort((a, b) => a - b);
+  let tips = [...new Set(T.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + hours * 3600e3).map((g) => g.tip))].sort((a, b) => a - b);
+  if (!tips.length) { // nothing soon (e.g. preseason / off days): plan the next game day instead
+    const nextDay = T.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0];
+    tips = [...new Set(T.games.filter((g) => g.date === nextDay && g.tip > ctx.asOf).map((g) => g.tip))].sort((a, b) => a - b);
+  }
   for (const tip of tips) {
     const res = E.simulate(T.tw, POLICY, T.events, actual, played, st, ev, undefined, tip);
     st = res.st; ev = res.evIdx;
@@ -228,30 +239,25 @@ function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] 
     if (hm.length) a.push(`Before ${nxt.when}: move held ${hm.map((h) => `${h.player} (${h.score.toFixed(1)}) ${h.from ?? ""} → ${h.slot}`).join(", ")} - keep them in starting slots, NOT the bench.`);
     if (moves.length) a.push(`Before ${nxt.when}: start ${moves.map((m) => `${m.player} (${m.slot})`).join(", ")}.`);
     if (nxt.forfeits.length) a.push(`At ${nxt.when} the plan lets go of ${nxt.forfeits.map((f) => `${f.player}'s ${f.score.toFixed(1)}`).join(", ")} (locking isn't worth the slot).`);
-    if (nxt.starts.length) a.push(`Tonight's cut-offs: ${nxt.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} lock if >= ${s.lockIf}`).join("; ")}.`);
+    if (nxt.starts.length) a.push(`${nxt.tip - ctx.asOf < 20 * 3600e3 ? "Tonight's" : `${nxt.when}`} cut-offs: ${nxt.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} lock if >= ${s.lockIf}`).join("; ")}.`);
   }
   return a;
 }
 
-// Everything that can change the advice: roster, games (status/score/projection), lineup & lock state, injury
-// overrides, which events have passed, and which tip-offs fall inside the planning window.
-export function teamFingerprint(T: LiveTeam) {
-  const st = T.st;
-  return { pids: T.pids, injury: T.injury, lineup: T.lineup, evIdx: T.evIdx, pNext: T.tw.pNext ?? null,
-    games: T.games.map((g) => [g.pid, g.tip, g.status, g.actual, Math.round(g.proj * 10) / 10, g.played]),
-    st: [st.lockedBy, st.lockedPts, st.pinned, st.pendingX, st.inGame, st.lastPlayed] };
-}
+export { teamFingerprint } from "./teamsim";
 
 export async function advise(o: { leagueId: string; rosterId: number; week?: number; asOf?: number; lockOverrides?: Record<number, string | null>; K?: number; force?: boolean }): Promise<Advice> {
   const ctx = await buildWeek({ ...o, mode: "live" });
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 6, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
-  const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K));
+  if (!windowTips.length) { const nd = ctx.me.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0]; if (nd) windowTips.push(...ctx.me.games.filter((g) => g.date === nd).map((g) => g.tip)); }
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 8, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const [ms, os] = await Promise.all([teamSims(ctx.me, ctx.week, ctx.asOf), ctx.opp ? teamSims(ctx.opp, ctx.week, ctx.asOf) : Promise.resolve(null)]);
+  const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K, ms, os));
   return { ...value, cached, checkedAt: Date.now() };
 }
 
-function computeAdvice(ctx: WeekContext, K: number): Advice {
+function computeAdvice(ctx: WeekContext, K: number, ms: Float64Array, os: Float64Array | null): Advice {
   // Seed from the game state (finished games, locks, pending scores), not the clock: numbers only change when
   // something actually happens, instead of jittering on every refresh.
   let h = 2166136261 ^ ctx.week;
@@ -265,7 +271,7 @@ function computeAdvice(ctx: WeekContext, K: number): Advice {
   const pl = plan(ctx, 30);
   return {
     generatedAt: Date.now(), asOf: ctx.asOf, mode: "live", league: ctx.league.name, season: ctx.season, week: ctx.week, dates: ctx.dates,
-    me: teamView(ctx, ctx.me), opp: ctx.opp ? teamView(ctx, ctx.opp) : null, outlook: outlook(ctx, 2000, seed + 1), // 2000 weeks: win-prob 95% margin ≈ ±2 pts (300 gave ±5.7)
+    me: teamView(ctx, ctx.me), opp: ctx.opp ? teamView(ctx, ctx.opp) : null, outlook: sharedOutlook(ms, os),
     decisions: ds, plan: pl, actions: actionsFrom(ctx, ds, pl), notes: ctx.notes,
   };
 }

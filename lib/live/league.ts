@@ -5,6 +5,7 @@ import { sleeper } from "./sources";
 import * as E from "../engine/core";
 import { POLICY } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
+import { teamSims, summarize, winProb as wp, TEAM_SIMS, teamFingerprint } from "./teamsim";
 
 export interface LeagueTeam {
   rosterId: number; name: string; mine: boolean;
@@ -30,7 +31,7 @@ function simulateTeam(T: LiveTeam, K: number, asOf: number, seed: number) {
 }
 
 export async function leagueWeek(o: { leagueId: string; rosterId: number; week?: number; K?: number; asOf?: number }): Promise<LeagueWeek> {
-  const asOf = o.asOf ?? Date.now(); const K = o.K ?? 1000;
+  const asOf = o.asOf ?? Date.now(); const K = o.K ?? TEAM_SIMS;
   const league = await sleeper.league(o.leagueId);
   const week = o.week ?? (await resolveWeek(league.season, asOf));
   const [rosters, matchups] = await Promise.all([sleeper.rosters(o.leagueId), sleeper.matchups(o.leagueId, week).catch(() => [])]);
@@ -38,19 +39,18 @@ export async function leagueWeek(o: { leagueId: string; rosterId: number; week?:
   for (const r of rosters) { const c = await buildWeek({ leagueId: o.leagueId, rosterId: r.roster_id, week, asOf, skipOpp: true }); teams.push(c.me); dates = c.dates; }
 
   // recompute only if something that affects a projection changed (games, scores, locks, lineups, injuries, projections)
-  const fp = fingerprint({ v: 1, K, week, teams: teams.map((t) => [t.rosterId, t.pids, t.injury, t.lineup, Array.from(t.st.lockedBy), Array.from(t.st.lockedPts), Array.from(t.st.pendingX).map((x) => (Number.isNaN(x) ? null : x)),
-    t.games.map((g) => [g.tip, g.status, g.actual, Math.round(g.mu * 10)])]), mu: matchups.map((m) => [m.roster_id, m.matchup_id]) });
+  const sims = new Map<number, Float64Array>();
+  for (const T of teams) sims.set(T.rosterId, await teamSims(T, week, asOf, K)); // shared with the This week tab; per-team cache
+  const fp = fingerprint({ v: 2, K, week, teams: teams.map((t) => [t.rosterId, teamFingerprint(t), t.sleeperPoints]), mu: matchups.map((m) => [m.roster_id, m.matchup_id]) });
   const res = await cachedCompute(`league-${o.leagueId}-w${week}`, fp, (): LeagueWeek => {
-    const sims = new Map<number, Float64Array>();
     const view = new Map<number, LeagueTeam>();
     for (const T of teams) {
-      const v = simulateTeam(T, K, asOf, 1000 + T.rosterId * 7919 + week);
-      sims.set(T.rosterId, v);
+      const v = sims.get(T.rosterId)!; const sm = summarize(v);
       const perPlayer = T.pids.map((_, i) => ({ name: T.names[i], games: T.tw.byPlayer[i].length, proj: T.tw.byPlayer[i].reduce((a, gi) => a + T.games[gi].proj, 0) / Math.max(1, T.tw.byPlayer[i].length) }));
       view.set(T.rosterId, {
         rosterId: T.rosterId, name: T.teamName, mine: T.rosterId === o.rosterId, current: T.sleeperPoints,
         locked: Array.from(T.st.lockedPts).reduce((a, x) => a + (x || 0), 0),
-        mean: v.reduce((a, x) => a + x, 0) / K, p10: q(v, 0.1), p90: q(v, 0.9),
+        mean: sm.mean, p10: sm.p10, p90: sm.p90,
         playerGames: T.games.length, gamesLeft: T.games.filter((g) => g.status !== "post").length, playersWithGames: perPlayer.filter((p) => p.games > 0).length,
         out: T.pids.map((_, i) => i).filter((i) => ["out", "doubtful"].includes((T.injury[i] || "").toLowerCase()) && T.tw.byPlayer[i].length).map((i) => T.names[i]),
         top: perPlayer.filter((p) => p.games).sort((a, b) => b.proj - a.proj).slice(0, 3).map((p) => ({ ...p, proj: Math.round(p.proj * 10) / 10 })),
@@ -62,7 +62,7 @@ export async function leagueWeek(o: { leagueId: string; rosterId: number; week?:
       let A = view.get(ra)!, B = rb ? view.get(rb)! : null;
       if (B?.mine) [A, B] = [B, A]; // your team on the left
       let win: number | null = null;
-      if (B) { const va = sims.get(A.rosterId)!, vb = sims.get(B.rosterId)!; let w = 0; for (let k = 0; k < K; k++) w += va[k] > vb[k] ? 1 : va[k] === vb[k] ? 0.5 : 0; win = w / K; }
+      if (B) win = wp(sims.get(A.rosterId)!, sims.get(B.rosterId)!);
       return { id, a: A, b: B, winA: win, mine: A.mine || !!B?.mine };
     }).sort((x, y) => Number(y.mine) - Number(x.mine) || x.id - y.id);
     return { season: league.season, week, dates, matchups: out, sims: K, generatedAt: Date.now() };

@@ -172,9 +172,10 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
       )}
 
       <Card>
-        <CardHeader><CardTitle>Lineup plan (next 30 hours)</CardTitle><CardDescription>Who to start at each tip-off, and the score at which each starter is worth locking. Later tip-offs assume earlier games go to projection.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Lineup plan ({a.plan.length && a.plan[0].tip - Date.now() > 30 * 3600e3 ? `next game day: ${a.plan[0].when}` : "next 30 hours"})</CardTitle><CardDescription>Who to start at each tip-off, and the score at which each starter is worth locking. Later tip-offs assume earlier games go to projection.</CardDescription></CardHeader>
         <CardContent className="space-y-4">
-          {a.plan.length === 0 && <p className="text-gray-500">No games for your players in the next 30 hours.</p>}
+          {a.plan.length === 0 && <p className="text-gray-500">No more games for your players this week.</p>}
+          {a.plan.length > 0 && a.plan[0].tip - Date.now() > 30 * 3600e3 && <p className="text-xs text-gray-500 mb-2">No regular-season games for your players in the next 30 hours (NBA preseason games don't count in Sleeper), so this is the plan for the next game day.</p>}
           {a.plan.map((p) => (
             <div key={p.tip} className="border-l-4 border-blue-500 pl-3">
               <div className="font-semibold">{p.when} {p.tentative && <Badge variant="outline">tentative</Badge>}</div>
