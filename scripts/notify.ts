@@ -44,7 +44,7 @@ export function messages(a: Advice, now: number): Msg[] {
   const out: Msg[] = [];
   for (const d of a.decisions) {
     const base = `${d.player} scored ${d.score.toFixed(1)}`;
-    if (d.recommended === "LOCK") out.push({ key: `lock|${d.pid}|${d.score}`, title: `🔒 LOCK ${d.player} (${d.score.toFixed(1)}) at ${d.recommendedSlot}`, body: `${d.reason} Deadline: ${d.deadlineText}.` });
+    if (d.recommended === "LOCK") out.push({ key: `lock|${d.pid}|${d.score}`, title: `🔒 LOCK ${d.player} (${d.score.toFixed(1)}) at ${d.recommendedSlot}`, body: `${(d.moves || []).join(" ")} ${d.reason} Deadline: ${d.deadlineText}.` });
     else if (d.recommended === "BENCH") out.push({ key: `bench|${d.pid}|${d.score}`, title: `↔️ PASS on ${d.player} (${d.score.toFixed(1)}) — bench him`, body: `${d.reason} Do it ${d.deadlineText}.` });
     else if (d.deadline) {
       out.push({ key: `hold|${d.pid}|${d.score}`, title: `⏳ HOLD ${d.player} (${d.score.toFixed(1)}) — keep him in a starting slot`, body: `${base}. ${d.reason} Cut-off to lock: ${d.threshold ?? "?"}.` });

@@ -32,3 +32,19 @@ test("late scratch reminder explains the swap", () => {
   assert.match(m[0].title, /⚠️ Evan Mobley OUT → Before Tue 7:00 PM: start Donovan Clingan \(C\)/);
   assert.match(m[0].body, /Bench Evan Mobley \(ruled out\)/);
 });
+
+test("lock instructions: swap into the best slot without benching anyone", async () => {
+  const { lockMoves } = await import("../lib/live/advise");
+  const E = await import("../lib/engine/core");
+  const slotNames = ["PF", "C", "UTIL", "UTIL"]; const slots = slotNames.map((s) => E.SLOT_MASK[s]);
+  const pmask = [E.posMask(["C", "PF"]), E.posMask(["C"]), E.posMask(["SF"])]; const names = ["Evan Mobley", "Donovan Clingan", "Keegan Murray"]; const pids = ["m", "c", "k"];
+  const st: any = { lockedBy: new Int32Array(4).fill(-1), pinned: new Int32Array(4).fill(-1), pendingX: new Float64Array(3).fill(NaN) };
+  // Mobley sits in UTIL 1, Clingan in C: lock Mobley at C -> Clingan must move to UTIL (he can't play PF)... UTIL 1 is Mobley's spot, so a swap works
+  let m = lockMoves(slotNames, slots, pmask, names, pids, ["k", "c", "m", null], st, 0, 1);
+  assert.match(m[0], /Swap Evan Mobley \(UTIL 1\) ↔ Donovan Clingan \(C\)/); assert.match(m[1], /Lock Evan Mobley in C/);
+  // Mobley in PF, lock at C: Clingan can't take PF -> moved to the empty UTIL 2 first
+  m = lockMoves(slotNames, slots, pmask, names, pids, ["m", "c", "k", null], st, 0, 1);
+  assert.match(m[0], /Move Donovan Clingan C → UTIL 2, then Evan Mobley PF → C/);
+  m = lockMoves(slotNames, slots, pmask, names, pids, ["m", "c", "k", null], st, 0, 0);
+  assert.match(m[0], /already there/);
+});

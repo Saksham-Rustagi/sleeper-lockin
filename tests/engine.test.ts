@@ -121,3 +121,11 @@ test("empirical residual shape: matches Normal on normal data, rewards right ske
   assert.ok(E.emaxShape(skewShape, 20, 10, 40) > E.emaxShape(sh, 20, 10, 40), "bigger far tail");
   assert.ok(E.emaxShape(skewShape, 20, 10, 20) < E.emaxShape(sh, 20, 10, 20), "less upside at the mean");
 });
+
+test("locks a dual-position player where he doesn't strand a teammate (C/PF -> PF keeps C for the C-only player)", () => {
+  const t = tw(["C", "PF"], [{ pos: ["C", "PF"], games: [{ tip: T0, mu: 25, actual: 40 }] }, { pos: ["C"], games: [{ tip: T0 + 24 * H, mu: 30, actual: 30 }] }]);
+  const st = E.initState(t); st.pendingX[0] = 40;
+  const ev = E.evalLock(t, POL, st, 0, T0 + 3 * H);
+  assert.equal(t.slotNames[ev.lockSlot], "PF");
+  assert.ok(ev.lockBest >= ev.cont);
+});

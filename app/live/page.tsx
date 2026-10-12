@@ -160,6 +160,7 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
                   })}</tbody>
                 </table>
                 <p className="text-sm mt-2">{d.reason}</p>
+                {d.moves?.length > 0 && <ol className="text-sm mt-1 list-decimal pl-5 text-blue-800 dark:text-blue-300">{d.moves.map((m, i) => <li key={i}>{m}</li>)}</ol>}
               </div>
             ))}
           </CardContent>

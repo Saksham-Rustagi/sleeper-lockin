@@ -14,6 +14,7 @@ export interface Decision {
   player: string; pid: string; score: number; deadline: number | null; deadlineText: string;
   options: { action: string; slot: string | null; expPoints: number; winProb: number | null }[];
   recommended: string; recommendedSlot: string | null; threshold: number | null; reason: string;
+  moves: string[]; // step-by-step Sleeper moves to execute the recommendation (e.g. swap into the lock slot first)
 }
 export interface TipPlan { tip: number; when: string; starts: { slot: string; player: string; pid: string; proj: number; lockIf: number | null }[]; benched: { player: string; proj: number }[]; tentative: boolean }
 export interface Advice {
@@ -74,6 +75,33 @@ function lockThreshold(T: LiveTeam, st: E.State, p: number, t: number): { thresh
   return { threshold: ev.cont - ev.lockBest, slot: ev.lockSlot };
 }
 
+export function slotLabels(names: string[]) {
+  const seen: Record<string, number> = {};
+  return names.map((n) => { seen[n] = (seen[n] || 0) + 1; return names.filter((x) => x === n).length > 1 ? `${n} ${seen[n]}` : n; });
+}
+
+// Moves needed in Sleeper to lock player p into slot `target`: he may only move between STARTING slots
+// (touching the bench forfeits the game), players in a live game can't move, locked players can't move.
+export function lockMoves(slotNames: string[], slots: number[], pmask: number[], names: string[], pids: string[], lineup: (string | null)[], st: E.State, p: number, target: number): string[] {
+  const L = slotLabels(slotNames); const pid = pids[p];
+  const cur = lineup.indexOf(pid);
+  const idx = (q: string | null) => (q ? pids.indexOf(q) : -1);
+  if (cur === target) return [`Lock ${names[p]} in ${L[target]} (he's already there).`];
+  const steps: string[] = [];
+  const occ = idx(lineup[target]);
+  if (cur < 0) steps.push(`⚠️ Sleeper doesn't show ${names[p]} in your starting lineup - he must have started this game to be lockable.`);
+  if (occ < 0) steps.push(`Move ${names[p]} ${cur >= 0 ? L[cur] : ""} → ${L[target]} (slot is empty).`);
+  else if (cur >= 0 && (slots[cur] & pmask[occ])) steps.push(`Swap ${names[p]} (${L[cur]}) ↔ ${names[occ]} (${L[target]}).`);
+  else {
+    // occupant can't take p's old slot: find another open, movable starting slot he fits
+    const k = slots.findIndex((m, s) => s !== target && s !== cur && st.lockedBy[s] < 0 && st.pinned[s] < 0 && (m & pmask[occ]) && (lineup[s] === null || idx(lineup[s]) < 0));
+    if (k >= 0) steps.push(`Move ${names[occ]} ${L[target]} → ${L[k]}, then ${names[p]} ${cur >= 0 ? L[cur] + " " : ""}→ ${L[target]}.`);
+    else steps.push(`Move ${names[occ]} out of ${L[target]} into another starting slot he can play${!Number.isNaN(st.pendingX[occ]) ? ` (NOT the bench - that forfeits his ${st.pendingX[occ].toFixed(1)})` : ""}, then move ${names[p]} → ${L[target]}.`);
+  }
+  steps.push(`Lock ${names[p]} in ${L[target]}.`);
+  return steps;
+}
+
 function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
   const T = ctx.me; const out: Decision[] = []; const r = E.rng(seed);
   for (let p = 0; p < T.pids.length; p++) {
@@ -115,8 +143,13 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
     const reason = o.action === "LOCK" ? `Locking ${x.toFixed(1)} beats waiting by ${(o.expPoints - hold.expPoints).toFixed(1)} pts over the rest of the week.`
       : o.action === "HOLD" ? (next ? `Keep him in a starting slot (don't bench!) and decide before ${fmtTime(next.tip)}; locking now is worth ${lockOpt ? (lockOpt.expPoints - o.expPoints).toFixed(1) : "?"} pts vs holding.` : `This was his last game - leave him in a starting slot and it counts automatically.`)
       : `Free the slot for someone else: benching beats keeping ${x.toFixed(1)} by ${(o.expPoints - hold.expPoints).toFixed(1)} pts.`;
+    const bestAlt = alts[best];
+    const moves = o.action === "LOCK" && bestAlt.slot !== null
+      ? lockMoves(ctx.slotNames, T.tw.slots, T.tw.pmask, T.names, T.pids, T.lineup, T.st, p, bestAlt.slot)
+      : o.action === "BENCH" ? [`Move ${T.names[p]} to the bench ${next ? `before ${fmtTime(next.tip)}` : ""} so the slot is free.`]
+      : [`Keep ${T.names[p]} in a starting slot (any starting slot is fine; never the bench).`];
     out.push({ player: T.names[p], pid: T.pids[p], score: x, deadline, deadlineText: next ? `before ${fmtTime(next.tip)} (${next.opp})` : "end of week",
-      options, recommended: o.action, recommendedSlot: o.slot, threshold: th ? Math.round(th.threshold * 10) / 10 : null, reason });
+      options, recommended: o.action, recommendedSlot: o.slot, threshold: th ? Math.round(th.threshold * 10) / 10 : null, reason, moves });
   }
   return out;
 }
@@ -150,7 +183,7 @@ function plan(ctx: WeekContext, hours: number): TipPlan[] {
 function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] {
   const a: string[] = [];
   for (const d of ds) {
-    if (d.recommended === "LOCK") a.push(`LOCK ${d.player} (${d.score.toFixed(1)}) at ${d.recommendedSlot} - ${d.deadlineText}`);
+    if (d.recommended === "LOCK") a.push(`LOCK ${d.player} (${d.score.toFixed(1)}) at ${d.recommendedSlot} - ${d.deadlineText}. Steps: ${d.moves.join(" ")}`);
     else if (d.recommended === "BENCH") a.push(`PASS on ${d.player} (${d.score.toFixed(1)}): bench him to free the slot - ${d.deadlineText}`);
     else if (d.deadline) a.push(`HOLD ${d.player} (${d.score.toFixed(1)}) in a starting slot; decide ${d.deadlineText}. Lock if nothing better shows up (cut-off ${d.threshold ?? "?"}).`);
   }
@@ -177,7 +210,7 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const ctx = await buildWeek({ ...o, mode: "live" });
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 3, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 4, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K));
   return { ...value, cached, checkedAt: Date.now() };
 }
