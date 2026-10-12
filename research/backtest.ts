@@ -36,7 +36,7 @@ function projPre(g: G): number {
   return 12;
 }
 
-interface Model { a: number; b: number; c: number; d: number; dnp: E.DnpModel }
+interface Model { a: number; b: number; c: number; d: number; dnp: E.DnpModel; resid?: E.ResidualShape }
 function fitModel(week: number): Model {
   const train = all.filter((g) => g.week < week);
   if (train.length < 300) return { a: -1.5, b: 0.95, c: 40, d: 2.5, dnp: { p1: 0.93, p0: 0.4 } };
@@ -52,7 +52,8 @@ function fitModel(week: number): Model {
   // DNP chain
   let pp = 0, pn = 0, mp = 0, mn = 0;
   for (const [, gs] of byPid) { let prev: boolean | null = null; for (const g of gs) { if (g.week >= week) break; if (prev !== null) { if (prev) { pn++; if (g.played) pp++; } else { mn++; if (g.played) mp++; } } prev = g.played; } }
-  return { a, b, c, d, dnp: { p1: pn ? pp / pn : 0.93, p0: mn ? mp / mn : 0.4 } };
+  const z = xy.map(([x, y]) => { const mu = a + b * x; return (y - mu) / Math.sqrt(Math.max(9, c + d * mu)); });
+  return { a, b, c, d, dnp: { p1: pn ? pp / pn : 0.93, p0: mn ? mp / mn : 0.4 }, resid: process.env.RESID ? E.makeResidualShape(z) : undefined };
 }
 
 function teamWeek(week: number, rid: string, model: Model): { tw: E.TeamWeek; real: { actual: Float64Array; played: Uint8Array } } {
@@ -71,7 +72,7 @@ function teamWeek(week: number, rid: string, model: Model): { tw: E.TeamWeek; re
   const slotNames: string[] = S.slots;
   const tw: E.TeamWeek = {
     slots: slotNames.map((s) => E.SLOT_MASK[s]), slotNames, pmask: pids.map((p) => E.posMask(S.players[p]?.pos || ["UTIL"])),
-    names: pids.map((p) => S.players[p]?.name || p), games, byPlayer, lastPlayed0, dnp: model.dnp,
+    names: pids.map((p) => S.players[p]?.name || p), games, byPlayer, lastPlayed0, dnp: model.dnp, resid: model.resid,
   };
   return { tw, real: { actual: Float64Array.from(games.map((g) => g.actual)), played: Uint8Array.from(games.map((g) => (g.played ? 1 : 0))) } };
 }

@@ -39,6 +39,25 @@ export interface TeamWeek {
   // optional: play-probability override for each player's next not-yet-started game (injury report)
   nextGameIdx?: number[];      // game index (into games) of that next game, -1 if none
   pNext?: (number | null)[];   // override probability, null = use chain
+  // optional: empirical shape of standardized score residuals (sorted quantiles of (actual-mu)/sd).
+  // Real fantasy scores are right-skewed; when set, valuation and sampling use this instead of a Normal.
+  resid?: ResidualShape;
+}
+export interface ResidualShape { q: Float64Array; g: Float64Array; t0: number; dt: number } // g(t) = E[max(Z,t)] on a grid
+export function makeResidualShape(z: number[], nq = 400): ResidualShape {
+  const s = [...z].sort((a, b) => a - b);
+  const q = new Float64Array(nq);
+  for (let i = 0; i < nq; i++) q[i] = s[Math.min(s.length - 1, Math.floor(((i + 0.5) / nq) * s.length))];
+  const t0 = -6, dt = 0.02, n = 701; const g = new Float64Array(n);
+  for (let k = 0; k < n; k++) { const t = t0 + k * dt; let acc = 0; for (let i = 0; i < nq; i++) acc += q[i] > t ? q[i] : t; g[k] = acc / nq; }
+  return { q, g, t0, dt };
+}
+export function emaxShape(sh: ResidualShape, mu: number, sd: number, v: number) {
+  const t = (v - mu) / sd; const x = (t - sh.t0) / sh.dt;
+  if (x <= 0) return mu + sd * sh.g[0]; // v far below: E[max] = E[X]
+  if (x >= sh.g.length - 1) return v;
+  const k = Math.floor(x); const f = x - k;
+  return mu + sd * (sh.g[k] * (1 - f) + sh.g[k + 1] * f);
 }
 
 export interface Policy {
@@ -152,7 +171,7 @@ export function stopValue(tw: TeamWeek, p: number, fromIdx: number, lastPlayed: 
   let v = q[n - 1] * last.mu;
   for (let k = n - 2; k >= 0; k--) {
     const g = tw.games[gl[fromIdx + k]];
-    v = (1 - q[k]) * v + q[k] * emax(g.mu, g.sd, v);
+    v = (1 - q[k]) * v + q[k] * (tw.resid ? emaxShape(tw.resid, g.mu, g.sd, v) : emax(g.mu, g.sd, v));
   }
   return v;
 }
@@ -178,7 +197,7 @@ export function playerValue(tw: TeamWeek, pol: Policy, st: State, p: number, t: 
   const gi = st.inGame[p];
   if (gi >= 0) {
     const g = tw.games[gi];
-    if (pol.value === "stop") { const pk = st.lastPlayed[p] ? tw.dnp.p1 : tw.dnp.p0; return (1 - pk) * vf + pk * emax(g.mu, g.sd, vf); }
+    if (pol.value === "stop") { const pk = st.lastPlayed[p] ? tw.dnp.p1 : tw.dnp.p0; return (1 - pk) * vf + pk * (tw.resid ? emaxShape(tw.resid, g.mu, g.sd, vf) : emax(g.mu, g.sd, vf)); }
     return Math.max(g.projRaw, vf);
   }
   return vf;
@@ -395,7 +414,8 @@ export function sampleScenario(tw: TeamWeek, st: State | null, t: number, r: () 
       let pk = last ? tw.dnp.p1 : tw.dnp.p0;
       const ov = tw.pNext?.[p]; if (ov != null && tw.nextGameIdx?.[p] === gi) pk = ov;
       const pl = r() < pk ? 1 : 0;
-      played[gi] = pl; actual[gi] = pl ? Math.max(-5, g.mu + g.sd * randn(r)) : 0; last = pl;
+      const z = tw.resid ? tw.resid.q[Math.floor(r() * tw.resid.q.length)] : randn(r);
+      played[gi] = pl; actual[gi] = pl ? Math.max(-5, g.mu + g.sd * z) : 0; last = pl;
     }
   }
   return { actual, played };

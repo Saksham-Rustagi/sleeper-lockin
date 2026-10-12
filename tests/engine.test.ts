@@ -104,3 +104,20 @@ test("late scratch: an OUT player loses his slot to a healthy player at the same
   E.simulate(t, POL, ev, Float64Array.from(t.games.map((g) => g.actual)), Uint8Array.from(t.games.map(() => 1)), st2, 0, undefined, T0);
   assert.equal(st2.inGame.findIndex((g) => g >= 0), 0);
 });
+
+test("empirical residual shape: matches Normal on normal data, rewards right skew", () => {
+  const r = E.rng(3); const norm: number[] = [];
+  for (let i = 0; i < 20000; i++) { let u = 0; while (!u) u = r(); norm.push(Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r())); }
+  const sh = E.makeResidualShape(norm);
+  const t = tw(["UTIL"], [{ pos: ["SF"], games: [{ tip: T0, mu: 20 }, { tip: T0 + 48 * H, mu: 20 }] }]);
+  const vNormal = E.stopValue(t, 0, 0, 1);
+  t.resid = sh; const vShape = E.stopValue(t, 0, 0, 1);
+  assert.ok(Math.abs(vNormal - vShape) < 0.3, `normal ${vNormal} vs shape ${vShape}`);
+  // right-skewed residuals with the same mean/sd: more option value from waiting for a big game
+  const skew = norm.map((z) => Math.exp(0.5 * z)); const m = skew.reduce((a, b) => a + b) / skew.length;
+  const sdv = Math.sqrt(skew.reduce((a, b) => a + (b - m) ** 2, 0) / skew.length);
+  const skewShape = E.makeResidualShape(skew.map((x) => (x - m) / sdv));
+  // same mean & spread: skew pays off only when holding out for a big game (high cut-off), not at an average one
+  assert.ok(E.emaxShape(skewShape, 20, 10, 40) > E.emaxShape(sh, 20, 10, 40), "bigger far tail");
+  assert.ok(E.emaxShape(skewShape, 20, 10, 20) < E.emaxShape(sh, 20, 10, 20), "less upside at the mean");
+});
