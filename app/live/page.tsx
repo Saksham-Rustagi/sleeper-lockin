@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Advice, Replay } from "@/lib/live/advise";
 import type { WaiverAdvice, WaiverPlayer } from "@/lib/live/waivers";
 import type { IrAdvice } from "@/lib/live/ir";
+import type { LeagueWeek, LeagueTeam } from "@/lib/live/league";
 
 type LeagueOpt = { league_id: string; name: string; season: string; status: string; roster_id: number | null };
 const CFG_KEY = "lockin-live-config";
@@ -86,13 +87,15 @@ function Live() {
           <Card><CardContent className="py-10 text-center text-gray-500">Enter your Sleeper username and press Connect.</CardContent></Card>
         ) : (
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="grid w-full grid-cols-4 max-w-2xl">
+            <TabsList className="grid w-full grid-cols-5 max-w-3xl">
               <TabsTrigger value="week">This week</TabsTrigger>
+              <TabsTrigger value="matchups">Matchups</TabsTrigger>
               <TabsTrigger value="waivers">Waivers</TabsTrigger>
               <TabsTrigger value="replay">Replay a week</TabsTrigger>
               <TabsTrigger value="how">How it decides</TabsTrigger>
             </TabsList>
             <TabsContent value="week" className="mt-6"><WeekView leagueId={leagueId} rosterId={rosterId} season={league?.season} /></TabsContent>
+            <TabsContent value="matchups" className="mt-6"><MatchupsView leagueId={leagueId} rosterId={rosterId} /></TabsContent>
             <TabsContent value="waivers" className="mt-6"><WaiversView leagueId={leagueId} rosterId={rosterId} /></TabsContent>
             <TabsContent value="replay" className="mt-6"><ReplayView leagues={pastLeagues} initialLeague={params.get("league") || pastLeagues.find((l) => l.status === "complete")?.league_id || leagueId} initialWeek={Number(params.get("week") || 23)} /></TabsContent>
             <TabsContent value="how" className="mt-6"><HowItWorks /></TabsContent>
@@ -363,6 +366,52 @@ function IrCard({ leagueId, rosterId, protect }: { leagueId: string; rosterId: n
           </div>))}
       </CardContent>
     </Card>
+  );
+}
+
+function MatchupsView({ leagueId, rosterId }: { leagueId: string; rosterId: number }) {
+  const [w, setW] = useState<LeagueWeek | null>(null); const [err, setErr] = useState<string | null>(null); const [loading, setLoading] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try { const r = await fetch(`/api/league-week?league=${leagueId}&roster=${rosterId}`); const j = await r.json(); if (!r.ok) throw new Error(j.error); setW(j); }
+    catch (e: any) { setErr(e.message); } finally { setLoading(false); }
+  }, [leagueId, rosterId]);
+  useEffect(() => { load(); const id = setInterval(() => document.visibilityState === "visible" && load(), 120000); return () => clearInterval(id); }, [load]);
+  if (err) return <div className="p-3 rounded bg-red-50 text-red-700 text-sm">{err}</div>;
+  if (!w) return <div className="text-gray-500">Simulating all 10 teams' weeks… (~10 s)</div>;
+  const ranked = w.matchups.flatMap((m) => [m.a, ...(m.b ? [m.b] : [])]).sort((x, y) => y.mean - x.mean);
+  const rank = (t: LeagueTeam) => ranked.findIndex((x) => x.rosterId === t.rosterId) + 1;
+  const Side = ({ t, win, right }: { t: LeagueTeam; win: number | null; right?: boolean }) => (
+    <div className={`flex-1 ${right ? "text-right" : ""}`}>
+      <div className={`font-semibold ${t.mine ? "text-blue-600 dark:text-blue-400" : ""}`}>{t.name}{t.mine ? " (you)" : ""}</div>
+      <div className="text-3xl font-bold tabular-nums">{fmt(t.mean, 0)}</div>
+      <div className="text-xs text-gray-500">80% range {fmt(t.p10, 0)}–{fmt(t.p90, 0)} · #{rank(t)} of {ranked.length}</div>
+      <div className="text-xs text-gray-500">{t.current ? `Now ${fmt(t.current)} (locked ${fmt(t.locked)}) · ` : ""}{t.gamesLeft}/{t.playerGames} player-games left</div>
+      <div className="text-xs text-gray-500 mt-1">Top: {t.top.map((p) => `${p.name} ${p.games}×${fmt(p.proj, 0)}`).join(", ")}</div>
+      {t.out.length > 0 && <div className="text-xs text-orange-600">Out/doubtful: {t.out.join(", ")}</div>}
+      {win !== null && <div className={`mt-1 text-sm font-semibold ${win >= 0.5 ? "text-green-600" : "text-red-600"}`}>{pct(win)} to win</div>}
+    </div>
+  );
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div><div className="text-lg font-semibold">Week {w.week} matchups · {w.dates[0]?.slice(5)} → {w.dates[w.dates.length - 1]?.slice(5)}</div>
+          <div className="text-xs text-gray-500">Projected Lock-In totals: {w.sims} simulated weeks per team, assuming each team locks optimally from its real current locks and scores. Teams that don't play Lock-In well will score below this. {w.cached ? "Nothing changed — reusing the last result." : "Just recalculated."}</div></div>
+        <Button size="sm" variant="outline" onClick={load} disabled={loading}>{loading ? "Simulating…" : "Refresh"}</Button>
+      </div>
+      {w.matchups.map((m) => (
+        <Card key={m.id} className={m.mine ? "border-blue-400" : ""}>
+          <CardContent className="py-4">
+            <div className="flex gap-4 items-start">
+              <Side t={m.a} win={m.winA} />
+              <div className="self-center text-gray-400 text-sm">vs</div>
+              {m.b ? <Side t={m.b} win={m.winA === null ? null : 1 - m.winA} right /> : <div className="flex-1 text-right text-gray-500">bye</div>}
+            </div>
+            {m.winA !== null && <div className="mt-3 h-2 rounded bg-red-200 dark:bg-red-900 overflow-hidden"><div className="h-2 bg-green-500" style={{ width: `${(100 * m.winA).toFixed(0)}%` }} /></div>}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
   );
 }
 
