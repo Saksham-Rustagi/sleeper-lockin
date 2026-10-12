@@ -7,7 +7,7 @@ import { cachedCompute, fingerprint } from "./cache";
 
 // Spread K scenarios over worker threads (scenario k is keyed by its index, so the result is identical however it's
 // split). Falls back to the current thread in the browser, in tests, or if the worker bundle is missing.
-let pool: { run: (T: LiveTeam, N: number, salt: number, asOf: number, k0: number) => Promise<Float64Array>; size: number } | null | undefined;
+let pool: { run: (T: LiveTeam, N: number, salt: number, asOf: number, k0: number) => Promise<Float64Array>; runTask: (task: any) => Promise<Float64Array>; size: number } | null | undefined;
 async function getPool() {
   if (pool !== undefined) return pool;
   pool = null;
@@ -21,7 +21,8 @@ async function getPool() {
     const workers = Array.from({ length: size }, () => { const w = new Worker(file); w.unref(); return w; });
     let next = 0, id = 0; const waiting = new Map<number, (v: Float64Array) => void>();
     workers.forEach((w) => w.on("message", (m: { id: number; v: Float64Array }) => { waiting.get(m.id)?.(m.v); waiting.delete(m.id); }));
-    pool = { size, run: (T, N, salt, asOf, k0) => new Promise((res) => { const i = ++id; waiting.set(i, res); workers[next++ % size].postMessage({ id: i, T, N, salt, asOf, k0 }); }) };
+    const runTask = (task: any) => new Promise<Float64Array>((res) => { const i = ++id; waiting.set(i, res); workers[next++ % size].postMessage({ id: i, ...task }); });
+    pool = { size, runTask, run: (T, N, salt, asOf, k0) => runTask({ kind: "week", T, N, salt, asOf, k0 }) };
     console.log(`[teamsim] ${size} simulation workers from ${file}`);
   } catch (e) { console.log("[teamsim] workers unavailable, simulating on one core:", e); pool = null; }
   return pool;
@@ -93,4 +94,36 @@ export function summarize(v: Float64Array) {
 }
 export function winProb(a: Float64Array, b: Float64Array) {
   let w = 0; for (let k = 0; k < a.length; k++) w += a[k] > b[k] ? 1 : a[k] === b[k] ? 0.5 : 0; return w / a.length;
+}
+
+// ---- lock cut-offs by simulation ----
+// Player p's game g scores X. At his first lock decision (whenever his slot is next needed, or his next tip-off),
+// "lock" locks him, "wait" lets him go and plays on; everything else follows the app's strategy.
+// Locking adds exactly X to the rest of the week, so: cut-off = E[total | wait] - E[total | lock at 0].
+export function lockWaitTotals(T: LiveTeam, st0: E.State, ev0: number, p: number, g: number, X: number, mode: "lock" | "wait", N: number, salt: number, asOf: number, k0 = 0): Float64Array {
+  const out = new Float64Array(N);
+  for (let k = 0; k < N; k++) {
+    const sc = scenario(T, k0 + k, salt, asOf); sc.actual[g] = X; sc.played[g] = 1;
+    let first = true;
+    const hooks: E.Hooks = { decideLock: (_st, q, _t, _i, ev) => { if (q !== p || !first) return undefined as any; first = false; return mode === "lock" ? ev.lockSlot : null; } };
+    out[k] = E.simulate(T.tw, POLICY, T.events, sc.actual, sc.played, E.cloneState(st0), ev0, hooks).total;
+  }
+  return out;
+}
+async function parallelLockWait(T: LiveTeam, st0: E.State, ev0: number, p: number, g: number, X: number, mode: "lock" | "wait", N: number, salt: number, asOf: number) {
+  const pl = await getPool();
+  if (!pl) return lockWaitTotals(T, st0, ev0, p, g, X, mode, N, salt, asOf);
+  const chunk = Math.ceil(N / pl.size); const parts: Promise<Float64Array>[] = [];
+  for (let k0 = 0; k0 < N; k0 += chunk) parts.push(pl.runTask({ kind: "lockwait", T, st0, ev0, p, g, X, mode, N: Math.min(chunk, N - k0), salt, asOf, k0 }));
+  const out = new Float64Array(N); let o = 0; for (const v of await Promise.all(parts)) { out.set(v, o); o += v.length; } return out;
+}
+export const CUTOFF_SIMS = Number(process.env.LOCKIN_CUTOFF_SIMS || 6000);
+export async function simCutoff(T: LiveTeam, st0: E.State, ev0: number, p: number, g: number, guess: number, asOf: number, N = CUTOFF_SIMS): Promise<number> {
+  const salt = 31337;
+  const mean = (v: Float64Array) => v.reduce((a, b) => a + b, 0) / v.length;
+  const lock0 = mean(await parallelLockWait(T, st0, ev0, p, g, 0, "lock", N, salt, asOf));
+  // E[wait] depends only slightly on X (his held score can sway the starts before the decision): two passes
+  let x = guess;
+  for (let i = 0; i < 2; i++) x = mean(await parallelLockWait(T, st0, ev0, p, g, x, "wait", N, salt, asOf)) - lock0;
+  return x;
 }

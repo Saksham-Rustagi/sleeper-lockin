@@ -7,7 +7,7 @@
 import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
-import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS } from "./teamsim";
+import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS, simCutoff } from "./teamsim";
 
 // more than ~5 days out, include the date ("Tue, Oct 20, 9:30 PM") so it isn't confused with this week's Tuesday
 const fmtTime = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit", ...(ms - Date.now() > 5 * 86400e3 ? { month: "short", day: "numeric" } : {}) }).format(ms);
@@ -177,7 +177,7 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
   return out;
 }
 
-function plan(ctx: WeekContext, hours: number): TipPlan[] {
+async function plan(ctx: WeekContext, hours: number): Promise<TipPlan[]> {
   const T = ctx.me; const out: TipPlan[] = [];
   // median path: unknown games score their mean, everyone plays
   const actual = T.real.actual.slice(); const played = T.real.played.slice();
@@ -197,7 +197,9 @@ function plan(ctx: WeekContext, hours: number): TipPlan[] {
       const p = T.tw.games[g.gi].p;
       const s = Array.from(st.pinned).indexOf(p);
       if (s >= 0 && st.inGame[p] === g.gi) {
-        const th = lockThreshold(T, E.cloneState(st), p, g.end);
+        const th0 = lockThreshold(T, E.cloneState(st), p, g.end);
+        // the cut-off shown is the simulated one (first tip-off of the plan); the quick rule only seeds it
+        const th = th0 && first ? { ...th0, threshold: await simCutoff(T, st, ev, p, g.gi, th0.threshold, ctx.asOf) } : th0;
         starts.push({ slot: slotLabels(ctx.slotNames)[s], player: T.names[p], pid: T.pids[p], proj: Math.round(g.proj * 10) / 10, lockIf: th ? Math.round(th.threshold * 10) / 10 : null });
       } else if (!st.isLocked[p]) benched.push({ player: T.names[p], proj: Math.round(g.proj * 10) / 10 });
     }
@@ -251,13 +253,13 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
   if (!windowTips.length) { const nd = ctx.me.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0]; if (nd) windowTips.push(...ctx.me.games.filter((g) => g.date === nd).map((g) => g.tip)); }
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 8, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 9, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
   const [ms, os] = await Promise.all([teamSims(ctx.me, ctx.week, ctx.asOf), ctx.opp ? teamSims(ctx.opp, ctx.week, ctx.asOf) : Promise.resolve(null)]);
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K, ms, os));
   return { ...value, cached, checkedAt: Date.now() };
 }
 
-function computeAdvice(ctx: WeekContext, K: number, ms: Float64Array, os: Float64Array | null): Advice {
+async function computeAdvice(ctx: WeekContext, K: number, ms: Float64Array, os: Float64Array | null): Promise<Advice> {
   // Seed from the game state (finished games, locks, pending scores), not the clock: numbers only change when
   // something actually happens, instead of jittering on every refresh.
   let h = 2166136261 ^ ctx.week;
@@ -268,7 +270,7 @@ function computeAdvice(ctx: WeekContext, K: number, ms: Float64Array, os: Float6
   }
   const seed = h;
   const ds = decisions(ctx, K, seed);
-  const pl = plan(ctx, 30);
+  const pl = await plan(ctx, 30);
   return {
     generatedAt: Date.now(), asOf: ctx.asOf, mode: "live", league: ctx.league.name, season: ctx.season, week: ctx.week, dates: ctx.dates,
     me: teamView(ctx, ctx.me), opp: ctx.opp ? teamView(ctx, ctx.opp) : null, outlook: sharedOutlook(ms, os),
