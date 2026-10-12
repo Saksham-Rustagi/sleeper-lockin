@@ -73,6 +73,28 @@ export interface Policy {
   rollout?: { objective: "points" | "win" | "softwin"; K: number; margin: number };
   lockAware?: boolean; // place starters in the slot they'd be locked into after a good game (fewer moves, no blocked slots)
   eps?: number;
+  // learned lock rule (approximate policy iteration): lock iff score >= coef · lockFeatures(...)
+  cutoff?: number[];
+}
+// Features of a lock decision for the learned cut-off. [1, heuristic cut-off, own future value, open slots,
+// eligible future games per open slot, fraction of week left, own games left, and three interactions with time]
+export function lockFeatures(tw: TeamWeek, pol: Policy, st: State, p: number, t: number, ev: LockEval): number[] {
+  const X = st.pendingX[p]; const h = ev.cont - (ev.lockBest - X);
+  const sv = futureValue(tw, pol, st, p, t);
+  const open = openMaskOf(st); let nOpen = 0, elig = 0;
+  for (let s = 0; s < tw.slots.length; s++) if ((open >> s) & 1) { nOpen++; elig |= tw.slots[s]; }
+  let gl = 0; for (const g of tw.games) if (g.tip > t && g.p !== p && !st.isLocked[g.p] && (tw.pmask[g.p] & elig)) gl++;
+  const gps = gl / Math.max(1, nOpen);
+  const t0 = tw.games.length ? tw.games[0].tip : t, t1 = tw.games.length ? tw.games[tw.games.length - 1].tip : t;
+  const frac = Math.min(1, Math.max(0, (t1 - t) / Math.max(1, t1 - t0)));
+  const pg = tw.byPlayer[p].length - nextIdx(tw, p, t);
+  return [1, h, sv, nOpen, gps, frac, pg, h * frac, gps * frac, sv * frac];
+}
+// The base policy's lock-or-not at a deadline (before any rollout hook overrides it).
+export function baseLockChoice(tw: TeamWeek, pol: Policy, st: State, p: number, t: number, ev: LockEval): number | null {
+  if (!Number.isFinite(ev.lockBest) || ev.lockSlot < 0) return null;
+  if (pol.cutoff) { const f = lockFeatures(tw, pol, st, p, t, ev); let c = 0; for (let i = 0; i < f.length; i++) c += pol.cutoff[i] * f[i]; return st.pendingX[p] >= c ? ev.lockSlot : null; }
+  return ev.lockBest >= ev.cont + (pol.eps ?? 0) ? ev.lockSlot : null;
 }
 
 // ---------------- RNG ----------------
@@ -315,7 +337,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
         if (!pol.defer) {
           // decide immediately at the buzzer: lock or release
           const ev = evalLock(tw, pol, st, p, e.t);
-          let s: number | null = ev.lockBest >= ev.cont + eps ? ev.lockSlot : null;
+          let s: number | null = baseLockChoice(tw, pol, st, p, e.t, ev);
           if (hooks?.decideLock) { const h = hooks.decideLock(st, p, e.t, i, ev); if (h !== undefined) s = h; }
           if (s !== null && s >= 0) doLock(st, p, s);
           else if (nextIdx(tw, p, e.t) < tw.byPlayer[p].length) st.pendingX[p] = NaN; // released (keeps auto-count only if final game)
@@ -325,7 +347,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
       const p = tw.games[e.g].p;
       if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) {
         const ev = evalLock(tw, pol, st, p, e.t - 1);
-        let s: number | null = ev.lockBest >= ev.cont + eps ? ev.lockSlot : null;
+        let s: number | null = baseLockChoice(tw, pol, st, p, e.t - 1, ev);
         if (hooks?.decideLock) { const h = hooks.decideLock(st, p, e.t - 1, i, ev); if (h !== undefined) s = h; }
         if (s !== null && s >= 0) doLock(st, p, s); else st.pendingX[p] = NaN;
       }
@@ -402,7 +424,7 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
     let changed = false;
     for (const p of losing) {
       const ev = evalLock(tw, pol, st, p, t - 1);
-      let s: number | null = ev.lockBest >= ev.cont + (pol.eps ?? 0) ? ev.lockSlot : null;
+      let s: number | null = baseLockChoice(tw, pol, st, p, t - 1, ev);
       if (hooks?.decideLock) { const h = hooks.decideLock(st, p, t - 1, evIdx - 1, ev); if (h !== undefined) s = h; }
       if (s !== null && s >= 0 && ((freeMask >> s) & 1)) { doLock(st, p, s); freeMask &= ~(1 << s); cs = cs.filter((q) => q !== p); changed = true; break; }
     }

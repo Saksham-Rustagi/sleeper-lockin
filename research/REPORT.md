@@ -72,3 +72,34 @@ Engine: `research/engine.ts`.
 - Even churning 10 roster players against a 60-FA pool: +0.44 ± 0.80 / +0.72 ± 1.09.
 - Why: when a dead spot appears, the median team still has 14 usable players for 3 open slots. Rosters were thin (10 or fewer live players mid-week) in 1 of 230 team-weeks.
 - Verdict: not worth roster churn. Manual tactic only after injury pile-ups.
+
+## Learned lock rule: approximate policy iteration (tested, not adopted)
+- Question: rollouts and cut-off sims play the rest of the week with the quick rule of thumb (which locks too early). Does that bias the answers?
+- Method:
+  - At all 7,535 lock decisions in the 2025-26 replay, measured the true cut-off by paired simulation (E[let go] − E[lock at 0], 400 scenarios each).
+  - Fit cut-off = linear model of the rule-of-thumb value, own future value, open slots, eligible games per open slot, week left, own games left, and time interactions.
+  - Cross-fitted: odd weeks → even weeks and vice versa. (`research/lockdata.ts`, `fitcut.py`, `cut/v1_*.json`)
+- Decision level (held-out):
+  - Cut-off error 3.5 → 2.4 pts.
+  - Points lost to wrong-side decisions 3.8 → 1.0 per team-week.
+- Real-season backtest (230 team-weeks, cross-fitted):
+
+  | Policy | Pts/week | vs current |
+  |---|---|---|
+  | P2LA (current rule) | 270.8 | — |
+  | P5 (learned rule) | 272.2 | +1.5 ± 1.8 |
+  | P3LA (rollouts on the current rule; live app) | 274.2 | — |
+  | P6 (rollouts on the learned rule) | 273.5 | −0.6 ± 0.9 vs P3LA |
+
+- Tuesday Week 1 cut-offs with the rest-of-week rule swapped:
+
+  | Player | Current rule | Learned rule |
+  |---|---|---|
+  | Hartenstein | 26.4 | 26.4 |
+  | Wallace | 25.2 | 24.9 |
+  | Castle | 27.8 | 28.0 |
+
+- Why it doesn't matter:
+  - Lock and wait are compared on the same scenarios with the same future play, so errors in imagined future decisions mostly cancel.
+  - Each later decision gets its own full simulation when it actually comes up.
+- Verdict: keep P3LA. Engine supports `Policy.cutoff`, off by default.
