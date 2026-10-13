@@ -5,7 +5,10 @@ import { sleeper, espnDay, type League, type GameRow, type SleeperPlayer, type M
 
 // holdYield: a held score never blocks a player tipping off - it must be locked or let go (backtest +2.2 pts/wk live;
 // fixes "dropping a bench player gains points", which a sound rule can't do).
-export const POLICY: E.Policy = { name: "P2", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, holdYield: true };
+export const POLICY: E.Policy = { name: "P2", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, holdYield: true,
+  // engine-v2 phase-1 fixes on (strand, negEnd, reseat, exact stopValue); the held-score tie-break fix (B4) is a policy
+  // choice that cost ~1.9 pts/wk in the live algorithm on the 2025-26 backtest, so keep the old tie-break.
+  legacyBugs: ["heldTie"] };
 const GAME_LEN = 2.5 * 3600e3;
 
 export interface LiveGame {

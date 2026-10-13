@@ -83,7 +83,7 @@ export function teamFingerprint(T: LiveTeam) {
 }
 
 export async function teamSims(T: LiveTeam, week: number, asOf: number, K = TEAM_SIMS): Promise<Float64Array> {
-  const fp = fingerprint({ v: 2, K, week, team: teamFingerprint(T) });
+  const fp = fingerprint({ v: 3, K, week, team: teamFingerprint(T) });
   const r = await cachedCompute(`team-${T.rosterId}-w${week}`, fp, async () => Array.from(await parallelWeekValues(T, K, week * 7919, asOf), (x) => Math.round(x * 100) / 100));
   return Float64Array.from(r.value);
 }

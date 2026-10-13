@@ -68,7 +68,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   const baseCtxNow = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week, asOf, skipOpp: true });
   const rel = new Set([...pool, ...baseCtxNow.me.pids]);
   const fp = o.force ? String(Math.random()) : fingerprint({
-    v: 6, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
+    v: 7, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
     rosters: rosters.map((r) => [r.roster_id, r.players, r.taxi, r.reserve]),
     proj: projRows.filter((r) => rel.has(r.player_id)).map((r) => [r.player_id, r.date, fantasyPoints(r.stats, S)]),
     inj: [...rel].map((p) => [p, players[p]?.injury_status ?? null]),
