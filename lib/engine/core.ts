@@ -571,7 +571,14 @@ export function startRolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], K: n
       const benched = tipping.filter((p) => !slotOf.has(p) && !st.isLocked[p]).sort((a, b) => proj(b) - proj(a));
       const used = new Set(slotOf.values());
       const alts: Map<number, number>[] = [slotOf];
-      for (const p of starters.slice(0, 2)) { const m = new Map(slotOf); m.delete(p); alts.push(m); }
+      // Sitting a starter is only an option if someone else could use his slot while his game runs (a later tip-off
+      // tonight). Sitting a player into an idle slot can't be right: if he scores big you keep it, if not you let it go.
+      for (const p of starters.slice(0, 2)) {
+        const s = slotOf.get(p)!; const end = tw.games[gameOf.get(p)!].end;
+        const needed = tw.games.some((q) => q.tip > t && q.tip < end && q.p !== p && !st.isLocked[q.p] && (tw.slots[s] & tw.pmask[q.p]));
+        if (!needed) continue;
+        const m = new Map(slotOf); m.delete(p); alts.push(m);
+      }
       for (const p of benched.slice(0, 2)) {
         let s = -1; for (let i = 0; i < tw.slots.length; i++) if (((free >> i) & 1) && !used.has(i) && (tw.slots[i] & tw.pmask[p])) { s = i; break; }
         if (s >= 0) { const m = new Map(slotOf); m.set(p, s); alts.push(m); continue; }

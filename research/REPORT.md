@@ -144,3 +144,16 @@ Whole 2025-26 season, 230 team-weeks, paired against the same baseline.
 | **P7 (start + lock sims; live app)** | **278.5** | +7.7 ± 2.5 | 62.6% |
 
 - P7 vs P3LA: +4.34 ± 1.97. Better in 112 team-weeks, worse in 62. Weeks 1–11 +3.5, weeks 12–23 +5.1.
+
+### Start/sit refinement: never sit into an idle slot
+Of 840 lineup overrides across 5,742 tip-offs:
+
+| Override | Count |
+|---|---|
+| Swaps | 283 |
+| Sits that freed a slot for a later tip-off that night | 456 |
+| Sits where the slot then stayed empty for the whole game | 101 |
+
+- The 101 empty-slot sits can't be right under good play: a started player's score is a free option you can let go.
+- They came from the simulation dodging later mistakes by the rule of thumb that plays out the rest of the week.
+- Banned them: P7 278.5 → 278.1 (−0.4 ± 1.5, noise), win% 62.6 → 63.1, still +3.9 ± 2.0 over P3LA. Shipped.
