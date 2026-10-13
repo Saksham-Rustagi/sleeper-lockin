@@ -20,6 +20,8 @@ const POLICIES: Record<string, E.Policy> = {
   P3W: { name: "P3W", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, rollout: { objective: "points", K, margin: 25 } },
   P5:  { name: "P5", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true },
   P6:  { name: "P6", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, rollout: { objective: "points", K, margin: 12 } },
+  P7:  { name: "P7", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, rollout: { objective: "points", K, margin: 12 } },
+  P2S: { name: "P2S", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true },
   P4:  { name: "P4", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, rollout: { objective: "win", K, margin: 12 } },
 };
 
@@ -55,6 +57,7 @@ for (let week = Number(wFrom); week <= Number(wTo); week++) {
         const opp = o ? (() => { const ob = built.get(o)!; return { tw: ob.tw, events: E.buildEvents(ob.tw, true), pol: base, realised: ob.real }; })() : undefined;
         hooks = E.rolloutHooks(tw, base, evs, pol.rollout.objective, pol.rollout.K, pol.rollout.margin, week * 1000 + Number(rid), real, opp);
       }
+      if (pn === "P7" || pn === "P2S") hooks = E.startRolloutHooks(tw, { ...POLICIES.P2LA, cutoff: pol.cutoff }, evs, Number(process.env.KS || K), week * 1000 + Number(rid), real, hooks);
       const res = E.simulate(tw, pol, evs, real.actual, real.played, E.initState(tw), 0, hooks);
       row[pn] = Math.round(res.total * 10) / 10; row[pn + "_ms"] = Date.now() - t0; row[pn + "_locks"] = res.st.locks; row[pn + "_moves"] = res.st.lockMoves;
     }

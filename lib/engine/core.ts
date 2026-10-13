@@ -318,7 +318,11 @@ export function doLock(st: State, p: number, s: number) {
 }
 
 // ---------------- simulation ----------------
-export interface Hooks { decideLock?: (st: State, p: number, t: number, evIdx: number, ev: LockEval) => number | null }
+export interface Hooks {
+  decideLock?: (st: State, p: number, t: number, evIdx: number, ev: LockEval) => number | null;
+  // start/sit at a tip-off: may return a different player->slot map for the players tipping now
+  decideStarts?: (st: State, t: number, evIdx: number, tipping: number[], pending: number[], gameOf: Map<number, number>, slotOf: Map<number, number>, free: number) => Map<number, number> | undefined;
+}
 // actuals: per game realised points, played flags (scenario). Returns final total.
 export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float64Array, played: Uint8Array,
   st: State = initState(tw), fromEv = 0, hooks?: Hooks, toTime = Infinity): { total: number; st: State; evIdx: number } {
@@ -428,11 +432,17 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
       if (hooks?.decideLock) { const h = hooks.decideLock(st, p, t - 1, evIdx - 1, ev); if (h !== undefined) s = h; }
       if (s !== null && s >= 0 && ((freeMask >> s) & 1)) { doLock(st, p, s); freeMask &= ~(1 << s); cs = cs.filter((q) => q !== p); changed = true; break; }
     }
-    if (!changed) { if (pol.lockAware) lockAwarePlacement(tw, pol, st, a.slotOf, tipping, gameOf); applyStarts(tw, st, a.slotOf, tipping, pendingPlayers, gameOf); return; }
+    if (!changed) {
+      if (pol.lockAware) lockAwarePlacement(tw, pol, st, a.slotOf, tipping, gameOf);
+      const alt = hooks?.decideStarts?.(st, t, evIdx, tipping, pendingPlayers, gameOf, a.slotOf, freeMask);
+      applyStarts(tw, st, alt ?? a.slotOf, tipping, pendingPlayers, gameOf); return;
+    }
   }
   const a = assignExact(tw.slots, freeMask, cs, tw.pmask, w);
   if (pol.lockAware) lockAwarePlacement(tw, pol, st, a.slotOf, tipping, gameOf);
-  applyStarts(tw, st, a.slotOf, tipping, pendingPlayers.filter((p) => !st.isLocked[p]), gameOf);
+  const pend2 = pendingPlayers.filter((p) => !st.isLocked[p]);
+  const alt = hooks?.decideStarts?.(st, t, evIdx, tipping, pend2, gameOf, a.slotOf, freeMask);
+  applyStarts(tw, st, alt ?? a.slotOf, tipping, pend2, gameOf);
 }
 
 // Re-arrange (by valid moves/swaps only) the slots of players starting now so each sits where he'd be locked
@@ -469,7 +479,7 @@ export function lockAwarePlacement(tw: TeamWeek, pol: Policy, st: State, slotOf:
     if (!improved) break;
   }
 }
-function applyStarts(tw: TeamWeek, st: State, slotOf: Map<number, number>, tipping: number[], pending: number[], gameOf: Map<number, number>) {
+export function applyStarts(tw: TeamWeek, st: State, slotOf: Map<number, number>, tipping: number[], pending: number[], gameOf: Map<number, number>) {
   for (const p of pending) if (!gameOf.has(p) && !slotOf.has(p)) st.pendingX[p] = NaN; // benched to make room => forfeited
   for (const p of tipping) {
     const s = slotOf.get(p);
@@ -543,6 +553,39 @@ export function rolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], obj: "poi
         if (hi >= 0 && scores[hi] >= scores[bi] - tol) bi = hi;
       }
       return alts[bi];
+    },
+  };
+}
+
+// Start/sit by simulation: at a tip-off, compare the rule's lineup with small changes to it (sit one of the two
+// weakest starters; start one of the two best benched players in a free slot or in place of the weakest starter he
+// can replace), each scored by K continuations of the rest of the week (common random numbers).
+export function startRolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], K: number, seed: number,
+  realised: { actual: Float64Array; played: Uint8Array }, lockHooks?: Hooks): Hooks {
+  const r = rng(seed ^ 0x5bd1e995);
+  return {
+    decideLock: lockHooks?.decideLock,
+    decideStarts: (st, t, evIdx, tipping, pending, gameOf, slotOf, free) => {
+      const proj = (p: number) => tw.games[gameOf.get(p)!].mu;
+      const starters = tipping.filter((p) => slotOf.has(p)).sort((a, b) => proj(a) - proj(b));
+      const benched = tipping.filter((p) => !slotOf.has(p) && !st.isLocked[p]).sort((a, b) => proj(b) - proj(a));
+      const used = new Set(slotOf.values());
+      const alts: Map<number, number>[] = [slotOf];
+      for (const p of starters.slice(0, 2)) { const m = new Map(slotOf); m.delete(p); alts.push(m); }
+      for (const p of benched.slice(0, 2)) {
+        let s = -1; for (let i = 0; i < tw.slots.length; i++) if (((free >> i) & 1) && !used.has(i) && (tw.slots[i] & tw.pmask[p])) { s = i; break; }
+        if (s >= 0) { const m = new Map(slotOf); m.set(p, s); alts.push(m); continue; }
+        const victim = starters.find((q) => tw.slots[slotOf.get(q)!] & tw.pmask[p]);
+        if (victim !== undefined) { const m = new Map(slotOf); const vs = m.get(victim)!; m.delete(victim); m.set(p, vs); alts.push(m); }
+      }
+      if (alts.length === 1) return undefined;
+      const scores = new Float64Array(alts.length);
+      for (let k = 0; k < K; k++) {
+        const scen = sampleScenario(tw, st, t, r, realised);
+        alts.forEach((m, ai) => { const s2 = cloneState(st); applyStarts(tw, s2, m, tipping, pending, gameOf); scores[ai] += simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total; });
+      }
+      let bi = 0; for (let ai = 1; ai < alts.length; ai++) if (scores[ai] > scores[bi] + 0.5 * K) bi = ai; // change the rule's lineup only for a clear (>0.5 pt) gain
+      return bi === 0 ? undefined : alts[bi];
     },
   };
 }

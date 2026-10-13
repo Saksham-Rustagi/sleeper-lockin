@@ -128,3 +128,19 @@ Whole 2025-26 season, 230 team-weeks, paired against the same baseline.
 **Verdict:** the current strategy is at a plateau for what the data can show. Remaining ideas not yet testable:
 - simulation-based start/sit at crowded tip-offs
 - injury-report inputs, once the live logger has a season of data
+
+## Start/sit by simulation (ADOPTED)
+- At each tip-off, the rule's lineup is compared with small changes:
+  - sit one of the two weakest starters
+  - start one of the two best benched players, in a free slot or in place of the weakest starter he can replace
+- Each option gets 200 simulated rests-of-week (common random numbers). A change needs a >0.5 pt gain.
+- Found because dropping Santi Aldama "gained" points: an early-week start by the rule rippled into worse later decisions.
+
+| Policy | Pts/week | vs P2LA | Win% vs real opponent |
+|---|---|---|---|
+| P2LA (rule only) | 270.8 | — | 60.0% |
+| P3LA (lock sims; previous app) | 274.2 | +3.4 | 59.3% |
+| P2S (start sims only) | 276.9 | +6.1 ± 2.3 | 63.1% |
+| **P7 (start + lock sims; live app)** | **278.5** | +7.7 ± 2.5 | 62.6% |
+
+- P7 vs P3LA: +4.34 ± 1.97. Better in 112 team-weeks, worse in 62. Weeks 1–11 +3.5, weeks 12–23 +5.1.

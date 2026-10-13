@@ -160,3 +160,13 @@ test("crowded night: a held score yields its slot only when the new game is wort
   const t = tw(["UTIL"], [{ pos: ["SF"], games: [{ tip: T0, mu: 20, actual: 35 }, { tip: T0 + 72 * H, mu: 20, actual: 15 }] }, { pos: ["PG"], games: [{ tip: T0 + 24 * H, mu: 20, actual: 40 }] }]);
   assert.equal(run(t).total, 35);
 });
+
+test("start/sit by simulation: lineups stay legal and the week still scores", () => {
+  // 1 slot, two players tipping together: the simulation may pick either, never both, never an ineligible slot
+  const t = tw(["C"], [{ pos: ["C"], games: [{ tip: T0, mu: 20, actual: 25 }] }, { pos: ["C"], games: [{ tip: T0, mu: 19, actual: 30 }] }, { pos: ["PG"], games: [{ tip: T0, mu: 40, actual: 40 }] }]);
+  const ev = E.buildEvents(t, true); const A = Float64Array.from(t.games.map((g) => g.actual)), P = Uint8Array.from(t.games.map(() => 1));
+  const hooks = E.startRolloutHooks(t, POL, ev, 50, 1, { actual: A, played: P });
+  const r = E.simulate(t, POL, ev, A, P, E.initState(t), 0, hooks);
+  assert.ok(r.total === 25 || r.total === 30, `one C counts, the PG can't (got ${r.total})`);
+  assert.equal(r.st.started.reduce((a, x) => a + x, 0), 1, "exactly one starter");
+});

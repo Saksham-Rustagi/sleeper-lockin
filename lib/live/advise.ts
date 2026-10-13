@@ -10,6 +10,7 @@ import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS, simCutoff } from "./teamsim";
 
 // more than ~5 days out, include the date ("Tue, Oct 20, 9:30 PM") so it isn't confused with this week's Tuesday
+const START_SIMS = 200;
 const fmtTime = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit", ...(ms - Date.now() > 5 * 86400e3 ? { month: "short", day: "numeric" } : {}) }).format(ms);
 
 export interface Decision {
@@ -183,13 +184,16 @@ async function plan(ctx: WeekContext, hours: number): Promise<TipPlan[]> {
   const actual = T.real.actual.slice(); const played = T.real.played.slice();
   T.games.forEach((g) => { if (g.status !== "post") { actual[g.gi] = g.mu; played[g.gi] = 1; } });
   let st = E.cloneState(T.st); let ev = T.evIdx; let first = true;
+  // who starts at each tip-off: decided by simulation (rule's lineup vs small changes, 200 continuations each).
+  // Backtest 2025-26: +4.3 ± 2.0 pts/week over lock-only simulation.
+  const startHooks = E.startRolloutHooks(T.tw, POLICY, T.events, START_SIMS, 4242 + ctx.week, T.real);
   let tips = [...new Set(T.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + hours * 3600e3).map((g) => g.tip))].sort((a, b) => a - b);
   if (!tips.length) { // nothing soon (e.g. preseason / off days): plan the next game day instead
     const nextDay = T.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0];
     tips = [...new Set(T.games.filter((g) => g.date === nextDay && g.tip > ctx.asOf).map((g) => g.tip))].sort((a, b) => a - b);
   }
   for (const tip of tips) {
-    const res = E.simulate(T.tw, POLICY, T.events, actual, played, st, ev, undefined, tip);
+    const res = E.simulate(T.tw, POLICY, T.events, actual, played, st, ev, startHooks, tip);
     st = res.st; ev = res.evIdx;
     const groupGames = T.games.filter((g) => g.tip === tip);
     const starts: TipPlan["starts"] = []; const benched: TipPlan["benched"] = [];
@@ -253,7 +257,7 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
   if (!windowTips.length) { const nd = ctx.me.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0]; if (nd) windowTips.push(...ctx.me.games.filter((g) => g.date === nd).map((g) => g.tip)); }
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 9, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 10, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
   const [ms, os] = await Promise.all([teamSims(ctx.me, ctx.week, ctx.asOf), ctx.opp ? teamSims(ctx.opp, ctx.week, ctx.asOf) : Promise.resolve(null)]);
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K, ms, os));
   return { ...value, cached, checkedAt: Date.now() };
