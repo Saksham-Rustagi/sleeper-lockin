@@ -475,3 +475,82 @@ Fixed P7H is about 20% slower per week: the exact valuation calls `stopValue` tw
 - Paired season backtest of P2LAH / P7H vs `_L`, and one flag at a time (`P7H_Lstrand`, `_LnegEnd`, `_Lreseat`, `_LheldTie`, `_Lstop`) to measure each fix.
 - The gap tables above are for the legacy engine.
 - Not yet fixed (policy weaknesses, not rule bugs): premature yields to reserved players (S2), let go then sat (S3), the deadline/start inconsistency behind most monotonicity failures (S1).
+
+### Phase 1 fixes: season results
+**Backtest.** Paired season backtest on the real 2025-26 outcomes: 230 team-weeks, same seeds, K = KS = 200.
+- `_L` = legacy (all fixed bugs re-enabled; reproduces the Phase-1 numbers exactly).
+- `_L<flag>` = all fixes except that one.
+- Win% = share of team-weeks beating the real opponent's actual score (as in `summ2.py`).
+- Commands: `research/summ_fix.py` (run from `research/out`) on the `fix_*` outputs.
+
+| policy | pts/wk | vs | paired diff (95% CI) | weeks 1–11 | weeks 12–23 | better/worse weeks | win% (vs baseline) |
+|---|---|---|---|---|---|---|---|
+| **P2LAH** (all fixes) | **276.8** | P2LAH_L 272.0 | **+4.78 ± 2.50** | +3.11 ± 3.17 | +6.32 ± 3.79 | 122/86 | 63.6% (61.0%) |
+| **P7H** (all fixes) | **282.5** | P7H_L 280.3 | +2.16 ± 2.41 | +1.12 ± 3.16 | +3.12 ± 3.59 | 117/88 | 65.0% (64.0%) |
+| P7H − P2LAH, fixed | | | +5.68 ± 2.33 | +7.05 ± 3.21 | +4.43 ± 3.36 | 138/75 | |
+| P7H − P2LAH, legacy | | | +8.30 ± 2.68 | +9.03 ± 3.62 | +7.64 ± 3.91 | 153/67 | |
+
+**One fix reverted at a time** (positive = reverting it gains points):
+
+| reverted | P2LAH: change vs fixed | P7H: change vs fixed |
+|---|---|---|
+| `strand` (B1) | +0.17 ± 1.01 | +0.22 ± 1.68 |
+| `negEnd` (B2) | +0.02 ± 0.43 | +0.70 ± 1.15 |
+| `reseat` (B3) | 0.00 (never triggers without simulations) | +0.76 ± 1.01 |
+| `heldTie` (B4) | +0.52 ± 0.79 | **+1.94 ± 1.90** |
+| `stop` (exact DNP-chain DP) | **−3.84 ± 2.28** | **−2.39 ± 2.27** |
+
+**Reading:**
+- **The exact `stopValue` is the real gain.** Reverting it costs 3.8 pts/wk (P2LAH) and 2.4 (P7H), in both halves of the season.
+- **The three rule-correctness fixes (strand, negEnd, reseat) are point-neutral, as expected.** They are rare: strand happened in 0.26% of weeks, and a negative final score costs ≈ 0.05 pts/wk. Their effects are inside the ≈ ±1 pt "butterfly" noise. Any change to one decision reshuffles all later rollout draws, which is why reverting negEnd can appear to *gain* +0.7 even though it only removes negative points.
+- **The heldTie ordering does not help and may hurt P7H** (+1.94 ± 1.90 when reverted, positive in both halves).
+  - Plausible mechanism: when held scores are ordered by size, the big ones keep holding at a crowded tip-off and skip the lock-or-let-go evaluation. Under the arbitrary order, some big ones lose the tie, get evaluated, and are locked at a good moment.
+  - Caveat: the legacy tie-break is roster index order, which follows the league's own roster listing.
+  - All fixes except heldTie (`P7H_LheldTie`): **284.4 pts/wk, +4.10 ± 2.30 vs P7H_L (280.3)**, weeks 1–11 +2.82 ± 3.26, weeks 12–23 +5.28 ± 3.23, win% 67.8% vs 64.0%. For P2LAH the same variant is +5.30 ± 2.47 vs legacy.
+  - This variant was picked as the best of 7 after seeing the data, so its CI is optimistic.
+- **Shipping recommendation:**
+  - Ship strand, negEnd and reseat (they make the engine legal; points neutral) and stop (+2.4 to +3.8).
+  - Do not ship heldTie as is: leave the old tie-break (`legacyBugs: ["heldTie"]`) until a better held-score priority is tested. The heldTie fix is a policy choice, not a rule correction.
+  - The bar from ENGINE_V2 ("beats P7H 280.3, paired CI") is met by P7H-without-heldTie (+4.10 ± 2.30), and only weakly by P7H with all fixes (+2.16 ± 2.41).
+
+**Invariant checker, full season, fixed engine** (`inv2_*`).
+- The instrumented totals equal the fixed backtests in 460 / 460 runs.
+- **Rule violations: 0** in every data set: real P2LAH, real P7H, and 46,000 simulated P2LAH weeks. Before the fixes there were 1 + 1 real and 121 + 1 simulated.
+
+| sanity / forfeit check | P2LAH real: legacy → fixed | P7H real: legacy → fixed | P2LAH 46k sim: legacy → fixed |
+|---|---|---|---|
+| L_* rule violations | 1 → **0** | 1 → **0** | 123 → **0** |
+| S_forfeit_unforced (held score let go though it could stay) | 0 → 0 | 180 (16.5 pts/wk) → **9 (0.81 pts/wk)** | 3 → 0 |
+| S_weekend_negative (negative score counted) | 7 → 0 (5 benched) | 6 → 0 | 639 → 0 |
+| S_idle_bench_exante | 0 → 0 | 0 → 1 | 0 → 0 |
+| S_lock_wider | 0.57 → 0.61/wk | 0.46 → 0.47/wk | 0.54 → 0.65/wk |
+| F_deadline_benched (let go at own tip-off, then sat) | 0.33 → 0.20/wk | 0.40 → 0.30/wk | 0.28 → 0.20/wk |
+| F_yield_reserved (premature let-go) | 12.6 → 10.9/wk | 13.1 → 13.0/wk | 11.6 → 10.1/wk |
+| monotonicity: dropping a player significantly raises E[total] (P2LAH, 1000 paired scenarios) | 288 / 4,727 (6.1%), max +5.20 → **66 (1.4%), max +2.99** | not run | |
+
+**Remaining (not fixed, documented):**
+- **9 P7H let-gos** (w13 r10 Wed 21:30 ET: Drummond, C, held 11):
+  - P7H sat a starter, and Drummond could have stayed if the two reserved later-tonight players (Bridges SG/SF/PF, Collins PF/C) had shifted one slot.
+  - `reseatHeld` keeps reserved players on their exact slots, while the checker lets them move. Follow-up: let reserved players move inside `reseatHeld`.
+  - Kept as is so the code matches the backtest above.
+- **1 ex-ante idle bench** (w22 r9, Draymond Green): P7H sat him to free his slot for later tip-offs, while a different eligible slot stayed empty and unusable for his whole game.
+- **Policy weaknesses unchanged:** premature yields to reserved players (S2), and the deadline/start inconsistency (S3, smaller now). Remaining monotonicity failures are 66, about 10× the 6.4 expected by chance.
+
+**Gap study.**
+- **Legacy engine, partial:** the run on the legacy engine was stopped by the manager. Its finished team-weeks are kept as a sample in `research/out/gap_oldengine/`: 52 valid team-weeks from weeks 1–6, 20 P7H scenarios each.
+  - Another 11 files in that directory named `gap_6_*` / `gap_7_*` are invariants-format outputs, not gap results, and are skipped.
+  - Summary command: `python3 ../summ_gapdir.py 'gap_oldengine/*.json'`.
+
+| legacy engine, 52 team-weeks (weeks 1–6) | mean |
+|---|---|
+| no-slot-limit relaxation | 445.1 |
+| E[perfect hindsight] | 322.8 |
+| **Lagrangian bound** | **303.8** |
+| E[P7H] (control variate, 20 sc.) | 290.9 ± 1.1 |
+| E[P2LAH] (2000 sc.) | 284.2 |
+| E[P2LA] | 282.7 |
+
+  - bound − E[P2LAH]: mean 19.5 (p10 15.3, p50 19.7, p90 23.2, max 24.6).
+  - bound − E[P7H]: mean 12.8 (p10 7.3, p50 12.5, p90 18.9, max 22.2).
+  - Sanity: bound < E[P2LAH] in 0 team-weeks; bound > E[hindsight] in 0.
+- **Fixed engine, full season:** running detached into `research/out/gap2_*` (20 P7H scenarios per team-week, ~2.5–3 h). Section 3's tables will be filled from it with `python3 ../summ_phase1.py inv2 gap2` (run from `research/out`).
