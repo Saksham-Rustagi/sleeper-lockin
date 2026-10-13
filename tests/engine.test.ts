@@ -170,3 +170,13 @@ test("start/sit by simulation: lineups stay legal and the week still scores", ()
   assert.ok(r.total === 25 || r.total === 30, `one C counts, the PG can't (got ${r.total})`);
   assert.equal(r.st.started.reduce((a, x) => a + x, 0), 1, "exactly one starter");
 });
+
+test("held scores yield: a held score never keeps a slot from a player tipping off", () => {
+  // 1 UTIL slot. A scored 12 Monday (next game Friday, so he's held). B (proj 30) tips Tuesday.
+  // Old rule could keep A's 12 in the slot and bench B; now A must lock or let go, and B's 35 gets the slot.
+  const t = tw(["UTIL"], [{ pos: ["SF"], games: [{ tip: T0, mu: 12, actual: 12 }, { tip: T0 + 96 * H, mu: 12, actual: 5 }] }, { pos: ["PG"], games: [{ tip: T0 + 24 * H, mu: 30, actual: 35 }] }]);
+  const st = E.initState(t); const ev = E.buildEvents(t, true);
+  const A = Float64Array.from(t.games.map((g) => g.actual)), P = Uint8Array.from(t.games.map(() => 1));
+  E.simulate(t, { ...POL, holdYield: true }, ev, A, P, st, 0, undefined, T0 + 24 * H + 1);
+  assert.ok(st.inGame[1] >= 0, "B started");
+});

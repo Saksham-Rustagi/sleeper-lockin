@@ -157,3 +157,27 @@ Of 840 lineup overrides across 5,742 tip-offs:
 - The 101 empty-slot sits can't be right under good play: a started player's score is a free option you can let go.
 - They came from the simulation dodging later mistakes by the rule of thumb that plays out the rest of the week.
 - Banned them: P7 278.5 → 278.1 (−0.4 ± 1.5, noise), win% 62.6 → 63.1, still +3.9 ± 2.0 over P3LA. Shipped.
+
+## Held scores yield to players tipping off (ADOPTED)
+**Symptom:** the Waivers page said dropping Santi Aldama gained +1.6 (Wallace +0.9). A sound rule can't lose points from an extra player.
+
+**Diagnosis (`research/monotone.ts`):** tested which rule change makes that effect vanish.
+- **Cause:** at a tip-off, a held score (e.g. Monday's 25) competed for the slot with tonight's player. It could win and bench him without ever being compared with "lock the 25 and start him too".
+- **Fix (`holdYield`):** a held score never keeps a slot that a tipping (or reserved) player wants. It must be locked or let go at that moment.
+
+| Variant | Team total (weeks 1+2) | Drop Aldama | Drop Wallace |
+|---|---|---|---|
+| Before | 558.2 | +1.02 ± 0.66 | +0.65 ± 0.54 |
+| holdYield | 560.6 | +0.17 ± 0.67 | +0.22 ± 0.45 |
+
+**Season backtest (230 team-weeks):**
+
+| | Before | holdYield | Change |
+|---|---|---|---|
+| Rule alone | 270.8 | 272.0 | +1.25 ± 1.92 |
+| Live P7 | 278.1 | **280.3** | +2.23 ± 2.30 |
+| Live win% | 63.1% | 64.0% | |
+
+Positive in both halves of the season. Shipped as the default rule, which also drives projections, waivers and cut-offs.
+
+**Note:** an earlier attempt clamped negative drop values to 0 on the Waivers page. That hid the symptom and was reverted.

@@ -75,6 +75,8 @@ export interface Policy {
   eps?: number;
   // learned lock rule (approximate policy iteration): lock iff score >= coef · lockFeatures(...)
   cutoff?: number[];
+  // a held score never keeps a slot that tonight's (or a reserved) game wants; he must be locked or let go
+  holdYield?: boolean;
 }
 // Features of a lock decision for the learned cut-off. [1, heuristic cut-off, own future value, open slots,
 // eligible future games per open slot, fraction of week left, own games left, and three interactions with time]
@@ -406,7 +408,7 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
   for (const p of pendingPlayers) {
     if (gameOf.has(p)) continue; // his own new game is tipping: pending already resolved at deadline
     const vf = futureValue(tw, pol, st, p, t);
-    w[p] = Math.max(1e-6, st.pendingX[p] - vf) + 1e-6; cands.push(p);
+    w[p] = pol.holdYield ? 1e-9 : Math.max(1e-6, st.pendingX[p] - vf) + 1e-6; cands.push(p);
   }
   if (pol.reserve) {
     // later games that will overlap with these (or same day if no chaining) compete for the same slots

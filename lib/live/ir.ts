@@ -63,7 +63,7 @@ export async function irAdvice(o: { leagueId: string; rosterId: number; protect?
   const allowed = ["out", "sus", "dnr", "doubtful", "dtd", "na"].filter((k) => irEligible(k, S)).map((k) => k.toUpperCase()).join(", ");
   const rules = `IR slots: ${capacity}. IR-eligible statuses in this league: ${allowed || "none"}. If an IR player stops being eligible, Sleeper blocks adds/drops/trades until he's activated.`;
 
-  const fp = fingerprint({ v: 3, N, capacity, reserve, active, override: o.statusOverride ?? null, statuses: [...reserve, ...active].map((p) => [p, players[p]?.injury_status ?? null, returns.get(norm(players[p]?.full_name || ""))?.date ?? null]), protect: [...(o.protect || [])].sort(), day: new Date(asOf).toISOString().slice(0, 10) });
+  const fp = fingerprint({ v: 4, N, capacity, reserve, active, override: o.statusOverride ?? null, statuses: [...reserve, ...active].map((p) => [p, players[p]?.injury_status ?? null, returns.get(norm(players[p]?.full_name || ""))?.date ?? null]), protect: [...(o.protect || [])].sort(), day: new Date(asOf).toISOString().slice(0, 10) });
   const res = await cachedCompute(`ir-${o.leagueId}-${o.rosterId}`, fp, async (): Promise<IrAdvice> => {
     const actions: IrAction[] = [];
     // drop options when someone must be activated: simulate this week + next with him back
