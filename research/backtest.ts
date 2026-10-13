@@ -38,6 +38,8 @@ function polFor(pn: string, week: number): E.Policy {
 }
 // dynamic variants: P2LAe<eps> / P3LAe<eps>: lock only if lockBest >= cont + eps (eps in points)
 for (const pn of pols) { const m = pn.match(/^(P2LA|P3LA)e([\d.]+)$/); if (m && !POLICIES[pn]) POLICIES[pn] = { ...POLICIES[m[1]], name: pn, eps: Number(m[2]) }; }
+// <P>_L = with the bugs fixed in engine-v2 phase 1 re-enabled; <P>_L<bug>[+<bug>] = only those (strand, negEnd, reseat, stop, heldTie)
+for (const pn of pols) { const m = pn.match(/^(P2LA|P2LAH|P7H|P3LA)_L(.*)$/); if (m && !POLICIES[pn]) POLICIES[pn] = { ...POLICIES[m[1]], name: pn, legacyBugs: m[2] ? (m[2].split("+") as E.LegacyBug[]) : true }; }
 for (const pn of pols) { const m = pn.match(/^P3LAm(\d+)$/); if (m && !POLICIES[pn]) POLICIES[pn] = { ...POLICIES.P3LA, name: pn, rollout: { objective: "points", K, margin: Number(m[1]) } }; }
 for (let week = Number(wFrom); week <= Number(wTo); week++) {
   const W = S.weeks.find((x: any) => x.week === week); if (!W) continue;
@@ -54,12 +56,12 @@ for (let week = Number(wFrom); week <= Number(wTo); week++) {
       const evs = E.buildEvents(tw, pol.chain);
       let hooks: E.Hooks | undefined;
       if (pol.rollout) {
-        const base: E.Policy = { ...(pol.lockAware ? POLICIES.P2LA : POLICIES.P2), eps: pol.eps, cutoff: pol.cutoff, holdYield: pol.holdYield };
+        const base: E.Policy = { ...(pol.lockAware ? POLICIES.P2LA : POLICIES.P2), eps: pol.eps, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs };
         const o = oppOf.get(rid);
         const opp = o ? (() => { const ob = built.get(o)!; return { tw: ob.tw, events: E.buildEvents(ob.tw, true), pol: base, realised: ob.real }; })() : undefined;
         hooks = E.rolloutHooks(tw, base, evs, pol.rollout.objective, pol.rollout.K, pol.rollout.margin, week * 1000 + Number(rid), real, opp);
       }
-      if (pn === "P7" || pn === "P2S" || pn === "P7H") hooks = E.startRolloutHooks(tw, { ...POLICIES.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield }, evs, Number(process.env.KS || K), week * 1000 + Number(rid), real, hooks);
+      if (pn === "P7" || pn === "P2S" || /^P7H/.test(pn)) hooks = E.startRolloutHooks(tw, { ...POLICIES.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, evs, Number(process.env.KS || K), week * 1000 + Number(rid), real, hooks);
       const res = E.simulate(tw, pol, evs, real.actual, real.played, E.initState(tw), 0, hooks);
       row[pn] = Math.round(res.total * 10) / 10; row[pn + "_ms"] = Date.now() - t0; row[pn + "_locks"] = res.st.locks; row[pn + "_moves"] = res.st.lockMoves;
     }

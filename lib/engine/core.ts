@@ -77,6 +77,18 @@ export interface Policy {
   cutoff?: number[];
   // a held score never keeps a slot that tonight's (or a reserved) game wants; he must be locked or let go
   holdYield?: boolean;
+  // re-enable bugs fixed in engine-v2 phase 1 (to measure each fix): true = all of them
+  legacyBugs?: boolean | LegacyBug[];
+}
+// strand:  a lock could take the slot a held teammate needs right now (hidden forfeit, sometimes still counted)
+// negEnd:  a negative held final-game score counted at week end (and valued as mu) instead of benched to 0
+// reseat:  a lineup changed by start/sit simulations left held scores forfeited although a slot had become free
+// stop:    stopValue used unconditional play probabilities for later games instead of the DNP-chain DP
+// heldTie: with holdYield every held score had the same tiny slot weight, so which held scores kept a slot on a
+//          crowded night was arbitrary (a held 0 could stay while a held 14 was let go)
+export type LegacyBug = "strand" | "negEnd" | "reseat" | "stop" | "heldTie";
+export function legacy(pol: Policy | undefined, b: LegacyBug): boolean {
+  const l = pol?.legacyBugs; return l === true || (Array.isArray(l) && l.includes(b));
 }
 // Features of a lock decision for the learned cut-off. [1, heuristic cut-off, own future value, open slots,
 // eligible future games per open slot, fraction of week left, own games left, and three interactions with time]
@@ -183,11 +195,31 @@ export function dayEnd(tip: number) {
 }
 
 // ---------------- valuation ----------------
-// stopping value of player's games with tip > t (or the given start index), using DNP chain from state
-export function stopValue(tw: TeamWeek, p: number, fromIdx: number, lastPlayed: number): number {
+const emaxG = (tw: TeamWeek, g: Game, v: number) => (tw.resid ? emaxShape(tw.resid, g.mu, g.sd, v) : emax(g.mu, g.sd, v));
+function playProb(tw: TeamWeek, p: number, gi: number, lastPlayed: number) {
+  const ov = tw.pNext?.[p]; if (ov != null && tw.nextGameIdx?.[p] === gi) return ov;
+  return lastPlayed ? tw.dnp.p1 : tw.dnp.p0;
+}
+// Optimal-stopping value of a player's games from index fromIdx on (he starts every game until his score is kept),
+// given whether he played his last game. Exact DP over the DNP chain: whether he plays game k is seen before game
+// k+1, so later play probabilities are conditional on it. His final game counts at week end unless negative (then he
+// is benched: rule 4). pol carries legacy flags ("stop": unconditional play marginals; "negEnd": final game = mu).
+export function stopValue(tw: TeamWeek, p: number, fromIdx: number, lastPlayed: number, pol?: Policy): number {
   const gl = tw.byPlayer[p];
   if (fromIdx >= gl.length) return 0;
-  // forward marginals
+  if (!legacy(pol, "stop")) {
+    const negEnd = legacy(pol, "negEnd");
+    let v1 = 0, v0 = 0; // value from game k+1 on, after playing / missing game k
+    for (let k = gl.length - 1; k >= fromIdx; k--) {
+      const g = tw.games[gl[k]];
+      const play = k === gl.length - 1 && negEnd ? g.mu : emaxG(tw, g, v1); // E[max(X, value of waiting)]
+      const q1 = playProb(tw, p, gl[k], 1), q0 = playProb(tw, p, gl[k], 0);
+      const n1 = q1 * play + (1 - q1) * v0, n0 = q0 * play + (1 - q0) * v0;
+      v1 = n1; v0 = n0;
+    }
+    return lastPlayed ? v1 : v0;
+  }
+  // legacy: forward marginals
   const n = gl.length - fromIdx;
   const q = new Float64Array(n);
   let s = lastPlayed ? 1 : 0;
@@ -199,12 +231,18 @@ export function stopValue(tw: TeamWeek, p: number, fromIdx: number, lastPlayed: 
   }
   // backward stopping recursion; last game counts automatically if he is still in a slot
   const last = tw.games[gl[gl.length - 1]];
-  let v = q[n - 1] * last.mu;
+  let v = q[n - 1] * (legacy(pol, "negEnd") ? last.mu : emaxG(tw, last, 0));
   for (let k = n - 2; k >= 0; k--) {
     const g = tw.games[gl[fromIdx + k]];
-    v = (1 - q[k]) * v + q[k] * (tw.resid ? emaxShape(tw.resid, g.mu, g.sd, v) : emax(g.mu, g.sd, v));
+    v = (1 - q[k]) * v + q[k] * emaxG(tw, g, v);
   }
   return v;
+}
+// Value of NOT starting game k (he still plays or misses it, which moves the DNP chain) and continuing after it.
+export function skipValue(tw: TeamWeek, p: number, k: number, lastPlayed: number, pol?: Policy): number {
+  if (legacy(pol, "stop")) return stopValue(tw, p, k + 1, lastPlayed ? 1 : 0, pol);
+  const q = playProb(tw, p, tw.byPlayer[p][k], lastPlayed);
+  return q * stopValue(tw, p, k + 1, 1, pol) + (1 - q) * stopValue(tw, p, k + 1, 0, pol);
 }
 function rawMaxValue(tw: TeamWeek, p: number, fromIdx: number): number {
   const gl = tw.byPlayer[p]; let m = 0;
@@ -218,7 +256,7 @@ export function nextIdx(tw: TeamWeek, p: number, t: number): number {
 }
 export function futureValue(tw: TeamWeek, pol: Policy, st: State, p: number, t: number): number {
   const k = nextIdx(tw, p, t);
-  return pol.value === "stop" ? stopValue(tw, p, k, st.lastPlayed[p]) : rawMaxValue(tw, p, k);
+  return pol.value === "stop" ? stopValue(tw, p, k, st.lastPlayed[p], pol) : rawMaxValue(tw, p, k);
 }
 // value of keeping player p available (not locked) from time t
 export function playerValue(tw: TeamWeek, pol: Policy, st: State, p: number, t: number): number {
@@ -228,7 +266,13 @@ export function playerValue(tw: TeamWeek, pol: Policy, st: State, p: number, t: 
   const gi = st.inGame[p];
   if (gi >= 0) {
     const g = tw.games[gi];
-    if (pol.value === "stop") { const pk = st.lastPlayed[p] ? tw.dnp.p1 : tw.dnp.p0; return (1 - pk) * vf + pk * (tw.resid ? emaxShape(tw.resid, g.mu, g.sd, vf) : emax(g.mu, g.sd, vf)); }
+    if (pol.value === "stop") {
+      const pk = st.lastPlayed[p] ? tw.dnp.p1 : tw.dnp.p0;
+      if (legacy(pol, "stop")) return (1 - pk) * vf + pk * emaxG(tw, g, vf);
+      // after this game: keep the score or wait, with the chain moved by whether he plays it
+      const k = nextIdx(tw, p, t);
+      return (1 - pk) * stopValue(tw, p, k, 0, pol) + pk * emaxG(tw, g, stopValue(tw, p, k, 1, pol));
+    }
     return Math.max(g.projRaw, vf);
   }
   return vf;
@@ -289,6 +333,24 @@ export function sameTypeHere(tw: TeamWeek, st: State, p: number, s: number, lock
   return here >= 0 && here !== s && tw.slots[here] === tw.slots[s] && ((lockable >> here) & 1) ? here : s;
 }
 
+// Can every held (unlocked) player other than `except` sit in the open slots `open` at once? (rule 4: a held score
+// needs a starting slot at every moment; benching him forfeits it)
+export function heldSeatable(tw: TeamWeek, st: State, open: number, except: number): boolean {
+  const held: number[] = []; const w = new Float64Array(tw.pmask.length);
+  for (let q = 0; q < tw.pmask.length; q++) if (q !== except && !st.isLocked[q] && !Number.isNaN(st.pendingX[q])) { held.push(q); w[q] = 1; }
+  return !held.length || assignExact(tw.slots, open, held, tw.pmask, w).total === held.length;
+}
+// Locking p into s is legal and strands no held teammate.
+export function lockFeasible(tw: TeamWeek, st: State, p: number, s: number): boolean {
+  const lockable = unpinnedOpen(st);
+  return ((lockable >> s) & 1) === 1 && (tw.slots[s] & tw.pmask[p]) !== 0 && heldSeatable(tw, st, lockable & ~(1 << s), p);
+}
+// A lock decision (base rule or hook) made legal: an infeasible slot falls back to the rule's slot, else no lock.
+function legalLock(tw: TeamWeek, pol: Policy, st: State, p: number, s: number | null, ev: LockEval): number | null {
+  if (s === null || s < 0 || legacy(pol, "strand") || lockFeasible(tw, st, p, s)) return s;
+  return ev.lockSlot >= 0 && lockFeasible(tw, st, p, ev.lockSlot) ? ev.lockSlot : null;
+}
+
 export function evalLock(tw: TeamWeek, pol: Policy, st: State, p: number, t: number): LockEval {
   const x = st.pendingX[p];
   const nP = tw.pmask.length; const w = new Float64Array(nP); const others: number[] = [];
@@ -298,9 +360,11 @@ export function evalLock(tw: TeamWeek, pol: Policy, st: State, p: number, t: num
   const cont = assign(pol, tw, open, [...others, p], w).total;
   let lockBest = -Infinity, lockSlot = -1;
   const lockable = unpinnedOpen(st);
+  const strandOk = legacy(pol, "strand");
   const seen = new Set<number>();
   for (const s of slotOrder(tw.slots)) {
     if (!((lockable >> s) & 1) || !(tw.slots[s] & tw.pmask[p]) || seen.has(tw.slots[s])) continue;
+    if (!strandOk && !heldSeatable(tw, st, lockable & ~(1 << s), p)) continue; // would strand a held teammate
     seen.add(tw.slots[s]);
     const si = sameTypeHere(tw, st, p, s, lockable);
     const v = x + assign(pol, tw, open & ~(1 << si), others, w).total;
@@ -308,7 +372,8 @@ export function evalLock(tw: TeamWeek, pol: Policy, st: State, p: number, t: num
   }
   // Prefer locking him where he already sits when that's (practically) as good: no shuffling needed in Sleeper.
   const here = st.lastSlot ? st.lastSlot[p] : -1;
-  if (pol.lockAware && here >= 0 && here !== lockSlot && ((lockable >> here) & 1) && (tw.slots[here] & tw.pmask[p])) {
+  if (pol.lockAware && here >= 0 && here !== lockSlot && ((lockable >> here) & 1) && (tw.slots[here] & tw.pmask[p]) &&
+    (strandOk || heldSeatable(tw, st, lockable & ~(1 << here), p))) {
     const v = x + assign(pol, tw, open & ~(1 << here), others, w).total;
     if (v >= lockBest - 0.25) { lockSlot = here; }
   }
@@ -345,6 +410,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
           const ev = evalLock(tw, pol, st, p, e.t);
           let s: number | null = baseLockChoice(tw, pol, st, p, e.t, ev);
           if (hooks?.decideLock) { const h = hooks.decideLock(st, p, e.t, i, ev); if (h !== undefined) s = h; }
+          s = legalLock(tw, pol, st, p, s, ev);
           if (s !== null && s >= 0) doLock(st, p, s);
           else if (nextIdx(tw, p, e.t) < tw.byPlayer[p].length) st.pendingX[p] = NaN; // released (keeps auto-count only if final game)
         }
@@ -355,6 +421,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
         const ev = evalLock(tw, pol, st, p, e.t - 1);
         let s: number | null = baseLockChoice(tw, pol, st, p, e.t - 1, ev);
         if (hooks?.decideLock) { const h = hooks.decideLock(st, p, e.t - 1, i, ev); if (h !== undefined) s = h; }
+        s = legalLock(tw, pol, st, p, s, ev);
         if (s !== null && s >= 0) doLock(st, p, s); else st.pendingX[p] = NaN;
       }
     } else {
@@ -364,9 +431,9 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
   let total = 0;
   for (let s = 0; s < tw.slots.length; s++) if (st.lockedBy[s] >= 0) total += st.lockedPts[s];
   if (i >= events.length) {
-    // week end: unlocked starters with a pending final game count automatically
-    const open: number[] = []; const w = new Float64Array(nP);
-    for (let p = 0; p < nP; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) { open.push(p); w[p] = st.pendingX[p] + 1000; }
+    // week end: unlocked starters with a pending final game count automatically (a negative one is benched first)
+    const open: number[] = []; const w = new Float64Array(nP); const negEnd = legacy(pol, "negEnd");
+    for (let p = 0; p < nP; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && (negEnd || st.pendingX[p] > 0)) { open.push(p); w[p] = st.pendingX[p] + 1000; }
     const a = assignExact(tw.slots, openMaskOf(st), open, tw.pmask, w);
     for (const p of a.slotOf.keys()) total += st.pendingX[p];
   }
@@ -401,14 +468,15 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
   // exact: marginal value of each competing use of a free slot
   for (const p of tipping) {
     const gi = gameOf.get(p)!; const k = tw.byPlayer[p].indexOf(gi);
-    const withV = pol.value === "stop" ? stopValue(tw, p, k, st.lastPlayed[p]) : rawMaxValue(tw, p, k);
-    const without = pol.value === "stop" ? stopValue(tw, p, k + 1, st.lastPlayed[p] ? 1 : 0) : rawMaxValue(tw, p, k + 1);
+    const withV = pol.value === "stop" ? stopValue(tw, p, k, st.lastPlayed[p], pol) : rawMaxValue(tw, p, k);
+    const without = pol.value === "stop" ? skipValue(tw, p, k, st.lastPlayed[p], pol) : rawMaxValue(tw, p, k + 1);
     w[p] = Math.max(1e-6, withV - without) + 1e-6; cands.push(p);
   }
   for (const p of pendingPlayers) {
     if (gameOf.has(p)) continue; // his own new game is tipping: pending already resolved at deadline
     const vf = futureValue(tw, pol, st, p, t);
-    w[p] = pol.holdYield ? 1e-9 : Math.max(1e-6, st.pendingX[p] - vf) + 1e-6; cands.push(p);
+    // holdYield: tiny weights (always below tonight's / reserved players') ordered by the held score
+    w[p] = pol.holdYield ? (legacy(pol, "heldTie") ? 1e-9 : 1e-12 * (1 + Math.max(0, st.pendingX[p]))) : Math.max(1e-6, st.pendingX[p] - vf) + 1e-6; cands.push(p);
   }
   if (pol.reserve) {
     // later games that will overlap with these (or same day if no chaining) compete for the same slots
@@ -417,8 +485,8 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
     for (const g of tw.games) {
       if (g.tip <= t || g.tip >= horizon || st.isLocked[g.p] || seen.has(g.p) || !usable(tw, g.p, g.tip)) continue;
       const k = tw.byPlayer[g.p].indexOf(tw.games.indexOf(g));
-      const withV = stopValue(tw, g.p, k, st.lastPlayed[g.p]);
-      const without = stopValue(tw, g.p, k + 1, st.lastPlayed[g.p]);
+      const withV = stopValue(tw, g.p, k, st.lastPlayed[g.p], pol);
+      const without = skipValue(tw, g.p, k, st.lastPlayed[g.p], pol);
       w[g.p] = Math.max(1e-6, withV - without); cands.push(g.p); seen.add(g.p);
     }
   }
@@ -432,19 +500,38 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
       const ev = evalLock(tw, pol, st, p, t - 1);
       let s: number | null = baseLockChoice(tw, pol, st, p, t - 1, ev);
       if (hooks?.decideLock) { const h = hooks.decideLock(st, p, t - 1, evIdx - 1, ev); if (h !== undefined) s = h; }
+      s = legalLock(tw, pol, st, p, s, ev);
       if (s !== null && s >= 0 && ((freeMask >> s) & 1)) { doLock(st, p, s); freeMask &= ~(1 << s); cs = cs.filter((q) => q !== p); changed = true; break; }
     }
     if (!changed) {
       if (pol.lockAware) lockAwarePlacement(tw, pol, st, a.slotOf, tipping, gameOf);
       const alt = hooks?.decideStarts?.(st, t, evIdx, tipping, pendingPlayers, gameOf, a.slotOf, freeMask);
-      applyStarts(tw, st, alt ?? a.slotOf, tipping, pendingPlayers, gameOf); return;
+      applyStarts(tw, st, finalLineup(tw, pol, st, alt ?? a.slotOf, tipping, pendingPlayers, gameOf, freeMask), tipping, pendingPlayers, gameOf); return;
     }
   }
   const a = assignExact(tw.slots, freeMask, cs, tw.pmask, w);
   if (pol.lockAware) lockAwarePlacement(tw, pol, st, a.slotOf, tipping, gameOf);
   const pend2 = pendingPlayers.filter((p) => !st.isLocked[p]);
   const alt = hooks?.decideStarts?.(st, t, evIdx, tipping, pend2, gameOf, a.slotOf, freeMask);
-  applyStarts(tw, st, alt ?? a.slotOf, tipping, pend2, gameOf);
+  applyStarts(tw, st, finalLineup(tw, pol, st, alt ?? a.slotOf, tipping, pend2, gameOf, freeMask), tipping, pend2, gameOf);
+}
+// The lineup actually applied: held scores that a (simulation-changed) lineup leaves without a slot are re-seated in
+// any slot it leaves free; slots of tonight's starters and reserved later-tonight players stay theirs. Holding on
+// is never worse than letting go now: he can still be let go later.
+function finalLineup(tw: TeamWeek, pol: Policy, st: State, slotOf: Map<number, number>, tipping: number[], pending: number[], gameOf: Map<number, number>, free: number) {
+  return legacy(pol, "reseat") ? slotOf : reseatHeld(tw, st, slotOf, tipping, pending, gameOf, free);
+}
+export function reseatHeld(tw: TeamWeek, st: State, slotOf: Map<number, number>, tipping: number[], pending: number[], gameOf: Map<number, number>, free: number): Map<number, number> {
+  const held = pending.filter((p) => !gameOf.has(p) && !st.isLocked[p] && !Number.isNaN(st.pendingX[p]));
+  if (held.every((p) => slotOf.has(p))) return slotOf;
+  const heldSet = new Set(held); let open = free;
+  for (const [p, s] of slotOf) if (!heldSet.has(p)) open &= ~(1 << s); // starters + reserved keep their slots
+  // everyone the lineup already seats stays seated (may move); then as many of the others as fit, best scores first
+  const w = new Float64Array(tw.pmask.length); for (const p of held) w[p] = (slotOf.has(p) ? 1000 : 1) + Math.max(0, st.pendingX[p]);
+  const a = assignExact(tw.slots, open, held, tw.pmask, w);
+  const m = new Map<number, number>(); for (const [p, s] of slotOf) if (!heldSet.has(p)) m.set(p, s);
+  for (const [p, s] of a.slotOf) m.set(p, s);
+  return m;
 }
 
 // Re-arrange (by valid moves/swaps only) the slots of players starting now so each sits where he'd be locked
@@ -525,12 +612,13 @@ export function rolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], obj: "poi
       if (!Number.isFinite(ev.lockBest) || Math.abs(gap) > margin) return undefined as any;
       const alts: (number | null)[] = [null];
       const lockable = unpinnedOpen(st); const seen = new Set<number>();
+      const ok = (s: number) => legacy(base, "strand") || lockFeasible(tw, st, p, s); // never strand a held teammate
       for (const s of slotOrder(tw.slots)) {
-        if (!((lockable >> s) & 1) || !(tw.slots[s] & tw.pmask[p]) || seen.has(tw.slots[s])) continue;
+        if (!((lockable >> s) & 1) || !(tw.slots[s] & tw.pmask[p]) || seen.has(tw.slots[s]) || !ok(s)) continue;
         seen.add(tw.slots[s]); alts.push(sameTypeHere(tw, st, p, s, lockable));
       }
       const here = st.lastSlot ? st.lastSlot[p] : -1;
-      if (base.lockAware && here >= 0 && ((lockable >> here) & 1) && (tw.slots[here] & tw.pmask[p]) && !alts.includes(here)) alts.push(here);
+      if (base.lockAware && here >= 0 && ((lockable >> here) & 1) && (tw.slots[here] & tw.pmask[p]) && !alts.includes(here) && ok(here)) alts.push(here);
       const scores = new Float64Array(alts.length);
       for (let k = 0; k < K; k++) {
         const scen = sampleScenario(tw, st, t, r, realised);
@@ -591,7 +679,7 @@ export function startRolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], K: n
       const scores = new Float64Array(alts.length);
       for (let k = 0; k < K; k++) {
         const scen = sampleScenario(tw, st, t, r, realised);
-        alts.forEach((m, ai) => { const s2 = cloneState(st); applyStarts(tw, s2, m, tipping, pending, gameOf); scores[ai] += simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total; });
+        alts.forEach((m, ai) => { const s2 = cloneState(st); applyStarts(tw, s2, finalLineup(tw, base, st, m, tipping, pending, gameOf, free), tipping, pending, gameOf); scores[ai] += simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total; });
       }
       let bi = 0; for (let ai = 1; ai < alts.length; ai++) if (scores[ai] > scores[bi] + 0.5 * K) bi = ai; // change the rule's lineup only for a clear (>0.5 pt) gain
       return bi === 0 ? undefined : alts[bi];

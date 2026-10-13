@@ -439,3 +439,39 @@ cd research/out && python3 ../summ_phase1.py                              # tabl
 node research/runtasks.mjs research/dist/invariants.cjs mono7 mono7 N7=20 TASKS=<contents of mono7_tasks.txt>
 npx tsx research/lagtiny.ts 300                                           # bound vs brute force on tiny weeks
 ```
+
+### Phase 1 fixes (engine changed; effects TBD by backtest)
+All rule bugs found in Phase 1 are fixed in `lib/engine/core.ts`, test-first (`tests/fixes.test.ts`). The old behaviour
+stays runnable for measurement:
+- `Policy.legacyBugs: true` re-enables all of them; a list re-enables only those (e.g. `["strand", "stop"]`).
+- Backtest / research policy names: `P2LAH_L`, `P7H_L` (all legacy), or `P7H_Lreseat`, `P2LAH_Lstrand+negEnd`, etc.
+- `P2LAH_L` and `P7H_L` reproduce the Phase-1 backtest exactly: 230/230 real team-weeks for P2LAH, and week 1 for P7H, against `base_hy`.
+
+| flag | bug | fix |
+|---|---|---|
+| `strand` | B1: a lock could take the slot a held teammate needs now (hidden forfeit, once counted: 93 reported vs 48 legal in the unit test) | `lockFeasible` / `heldSeatable`: `evalLock`, the lock rollouts' alternatives, and every place a lock is applied (`legalLock`: an infeasible hook slot falls back to the rule's slot, else no lock) only use slots that leave every other held player seatable |
+| `negEnd` | B2: negative held final-game scores counted at week end | benched to 0 at week end; `stopValue` values a final game as E[max(X, 0)] |
+| `reseat` | B3: a lineup changed by start/sit simulation left held scores forfeited although a slot had become free | `reseatHeld` (applied in `startGroup` and to every alternative the start simulations score): seated held players stay; let-go ones are re-seated in slots the lineup leaves free, best scores first |
+| `heldTie` | **B4 (new, found while fixing B3)**: with holdYield every held score had the same 1e-9 slot weight, so on a crowded night which held scores kept a slot was arbitrary. Example w1 r1 Thu: a held 0 and 5.5 kept slots while a held 14 and 10.5 were let go | held weights stay below any tonight/reserved player's but are ordered by the held score |
+| `stop` | valuation: `stopValue` used unconditional play probabilities for later games | exact DP over the DNP chain (one emax per game, as before). `skipValue` (bench tonight) and the in-game branch of `playerValue` also condition on whether he plays the current game |
+
+**Unit tests** (`tests/fixes.test.ts`): every bug is reproduced with its legacy flag and shown fixed.
+- B1: a hook-forced strand; the rule's own strand found by random search (Lonzo-Ball-style); the 93-vs-48 accounting case.
+- B2, B3, B4: one case each.
+- `stopValue` equals the brute-force expectimax optimum on four single-player weeks with the DNP chain; the legacy marginals differ from it.
+- `npm test`: 40/40 pass.
+
+**Checker re-run (single process, preliminary; not a backtest):**
+
+| data | legacy (`_L`) | fixed |
+|---|---|---|
+| P2LAH, 230 real team-weeks | 272.00 pts/wk; L_held_stranded 1, S_weekend_negative 7 | **276.78**; no L_ violations, recount = engine total everywhere, 5 negative scores benched |
+| P2LAH, 23,000 model weeks (100 per team-week, same scenarios) | 280.27; L_held_stranded 56, L_count_forfeited 1, S_weekend_negative 335 | **283.30**; no L_ violations, no unforced let-gos |
+| P7H, week 1 real (10 team-weeks) | 281.10; 3 idle let-gos (52.5 pts) | 281.55; no L_ violations, no unforced let-gos |
+
+Fixed P7H is about 20% slower per week: the exact valuation calls `stopValue` twice in a few places.
+
+**Still to do (CPU is busy with the gap run):**
+- Paired season backtest of P2LAH / P7H vs `_L`, and one flag at a time (`P7H_Lstrand`, `_LnegEnd`, `_Lreseat`, `_LheldTie`, `_Lstop`) to measure each fix.
+- The gap tables above are for the legacy engine.
+- Not yet fixed (policy weaknesses, not rule bugs): premature yields to reserved players (S2), let go then sat (S3), the deadline/start inconsistency behind most monotonicity failures (S1).

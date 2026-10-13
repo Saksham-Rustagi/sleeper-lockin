@@ -47,7 +47,7 @@ test("no contention: the bound is the exact single-player DP (= stopValue withou
   // stopValue ignores the -5 clamp and can't bench a negative final game: negligible at these means
   assert.ok(Math.abs(b.bound - sv) < 0.01, `bound ${b.bound} vs stop values ${sv}`);
   // with the DNP chain (observed before the next game) vs brute force on discrete scores, one UTIL slot per player.
-  // (stopValue uses unconditional play marginals for later games, so it is not the exact DP when DNP is possible.)
+  // (legacy stopValue used unconditional play marginals; the fixed one is this exact DP: tests/fixes.test.ts)
   const r = E.rng(9);
   for (let trial = 0; trial < 20; trial++) {
     const inst = randInst(r); inst.slots = inst.pmask.map(() => 31);

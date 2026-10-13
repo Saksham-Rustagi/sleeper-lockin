@@ -51,11 +51,8 @@ test("engine weeks pass every rule check and the recount equals the engine total
   }
 });
 
-test("illegal hook decisions are caught: ineligible lock, start into an occupied slot, idle benching", () => {
-  // P0 (PG) holds 30 and tips again on day 4; a hook locks him into the C slot at his deadline
-  const t1 = tw(["PG", "C"], [{ pos: ["PG"], games: [{ tip: T0, mu: 20, actual: 30 }, { tip: T0 + 96 * H, mu: 20 }] }, { pos: ["C"], games: [{ tip: T0 + 24 * H, mu: 20 }] }]);
-  const r1 = check(t1, { decideLock: (st, p) => (p === 0 && !Number.isNaN(st.pendingX[0]) ? 1 : (undefined as any)) });
-  assert.ok(r1.rep.counts.L_lock_inelig >= 1, JSON.stringify(r1.rep.counts));
+// (ineligible / stranding locks and week-end accounting: tests/fixes.test.ts, with the legacy flags)
+test("illegal hook decisions are caught: start into an occupied slot, idle benching", () => {
   // two players tip together; a hook seats the second in the slot the first already occupies
   const t2 = tw(["UTIL", "UTIL"], [{ pos: ["C"], games: [{ tip: T0, mu: 20 }] }, { pos: ["C"], games: [{ tip: T0, mu: 19 }] }]);
   const r2 = check(t2, { decideStarts: () => new Map([[0, 0], [1, 0]]) });
@@ -64,22 +61,4 @@ test("illegal hook decisions are caught: ineligible lock, start into an occupied
   const t3 = tw(["UTIL"], [{ pos: ["C"], games: [{ tip: T0, mu: 20, actual: 30 }] }, { pos: ["PG"], games: [{ tip: T0 + 48 * H, mu: 20 }] }]);
   const r3 = check(t3, { decideStarts: (_st, t) => (t === T0 ? new Map() : undefined) });
   assert.equal(r3.rep.counts.S_idle_bench_exante, 1, JSON.stringify(r3.rep.counts));
-});
-
-test("a lock that leaves a held teammate without any slot is a hidden forfeit (engine bug class found in the season run)", () => {
-  // slots PG, UTIL. A (PG/SF) holds 25 and tips again Friday; B (SF) holds 12 (final game). Locking A into UTIL leaves
-  // B, who can't play PG, without a slot: Sleeper would bench him (forfeit) but the engine still treats him as held.
-  const t = tw(["PG", "UTIL"], [
-    { pos: ["PG", "SF"], games: [{ tip: T0, mu: 20, actual: 25 }, { tip: T0 + 96 * H, mu: 20 }] },
-    { pos: ["SF"], games: [{ tip: T0 + 3 * H, mu: 20, actual: 12 }] },
-  ]);
-  const r = check(t, { decideLock: (st, p) => (p === 0 ? 1 : (undefined as any)) });
-  assert.ok(r.rep.counts.L_held_stranded === 1, JSON.stringify(r.rep));
-});
-
-test("documented engine behaviour: a negative held final-game score is counted at week end instead of benched", () => {
-  const t = tw(["UTIL"], [{ pos: ["SF"], games: [{ tip: T0, mu: 10, actual: -3 }] }]);
-  const r = check(t);
-  assert.equal(r.total, -3);
-  assert.equal(r.rep.counts.S_weekend_negative, 1);
 });

@@ -114,7 +114,9 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
     decideLock: (s, p, tt, evIdx, ev) => (inner?.decideLock ? inner.decideLock(s, p, tt, evIdx, ev) : undefined) as any,
     decideStarts: (s, tt, evIdx, tipping, pending, gameOf, slotOf, free) => {
       const alt = inner?.decideStarts ? inner.decideStarts(s, tt, evIdx, tipping, pending, gameOf, slotOf, free) : undefined;
-      startCall = { rule: new Map(slotOf), applied: new Map(alt ?? slotOf), overridden: !!alt, tipping: tipping.slice(), gameOf: new Map(gameOf) };
+      // the lineup startGroup applies: the hook's (or rule's) map, with held scores re-seated unless legacy "reseat"
+      const applied = E.legacy(pol, "reseat") ? (alt ?? slotOf) : E.reseatHeld(tw, s, alt ?? slotOf, tipping, pending, gameOf, free);
+      startCall = { rule: new Map(slotOf), applied: new Map(applied), overridden: !!alt, tipping: tipping.slice(), gameOf: new Map(gameOf) };
       return alt;
     },
   };
@@ -302,8 +304,11 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
   // week end: engine total vs independent recount
   t = events.length ? events[events.length - 1].t : 0;
   const total = E.simulate(tw, pol, events, actual, played, st, events.length).total;
-  const pend: number[] = []; const w = new Float64Array(nP);
-  for (let p = 0; p < nP; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) { pend.push(p); w[p] = st.pendingX[p] + 1000; }
+  const pend: number[] = []; const w = new Float64Array(nP); const negEnd = E.legacy(pol, "negEnd");
+  for (let p = 0; p < nP; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) {
+    if (!negEnd && st.pendingX[p] <= 0) { if (st.pendingX[p] < 0) hit("I_weekend_benched_negative", undefined, -st.pendingX[p]); continue; } // benched before week end (rule 4)
+    pend.push(p); w[p] = st.pendingX[p] + 1000;
+  }
   const counted = E.assignExact(tw.slots, E.openMaskOf(st), pend, tw.pmask, w).slotOf;
   let trackerTotal = 0;
   for (let s = 0; s < nS; s++) if (st.lockedBy[s] >= 0) trackerTotal += tr.lockedX[s];

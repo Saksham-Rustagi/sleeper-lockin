@@ -8,17 +8,24 @@ export const POL: Record<string, E.Policy> = {
   P2LAH: { name: "P2LAH", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, holdYield: true },
   P7H: { name: "P7H", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, holdYield: true, rollout: { objective: "points", K, margin: 12 } },
 };
+// <name>_L = with every bug fixed in engine-v2 phase 1 re-enabled (= the engine the phase-1 numbers were measured on);
+// <name>_L<bug>[+<bug>] = only those bugs re-enabled (strand, negEnd, reseat, stop, heldTie)
+export function policy(name: string): E.Policy {
+  if (POL[name]) return POL[name];
+  const m = name.match(/^(P2LA|P2LAH|P7H)_L(.*)$/); if (!m) throw new Error("unknown policy " + name);
+  return { ...POL[m[1]], name, legacyBugs: m[2] ? (m[2].split("+") as E.LegacyBug[]) : true };
+}
 export interface Runner { pol: E.Policy; events: E.Ev[]; hooks?: E.Hooks }
 // realised = the "world" the policy lives in (real outcomes, or a model scenario): rollouts keep its finished games.
 export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { actual: Float64Array; played: Uint8Array }): Runner {
-  const pol = POL[name]; if (!pol) throw new Error("unknown policy " + name);
+  const pol = policy(name);
   const events = E.buildEvents(tw, pol.chain);
   let hooks: E.Hooks | undefined;
   if (pol.rollout) {
-    const base: E.Policy = { ...POL.P2LA, eps: pol.eps, cutoff: pol.cutoff, holdYield: pol.holdYield }; // (all policies here are lockAware)
+    const base: E.Policy = { ...POL.P2LA, eps: pol.eps, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }; // (all policies here are lockAware)
     hooks = E.rolloutHooks(tw, base, events, pol.rollout.objective, pol.rollout.K, pol.rollout.margin, seed, realised);
   }
-  if (name === "P7H") hooks = E.startRolloutHooks(tw, { ...POL.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield }, events, KS, seed, realised, hooks);
+  if (/^P7H/.test(name)) hooks = E.startRolloutHooks(tw, { ...POL.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, events, KS, seed, realised, hooks);
   return { pol, events, hooks };
 }
 export function scenarios(tw: E.TeamWeek, n: number, seed: number) {
