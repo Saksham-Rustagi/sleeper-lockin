@@ -47,3 +47,6 @@ scripts/dist/
 export-*.json
 node_modules.nosync/
 .next.nosync/
+
+# engine-v2 local data
+research/data/
