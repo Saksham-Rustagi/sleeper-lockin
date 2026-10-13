@@ -9,10 +9,10 @@ import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, weekValues, parallelWeekValues } from "./teamsim";
 
 export interface WaiverPlayer { pid: string; name: string; pos: string; team: string | null; age: number | null; injury: string | null; dynastyAdp: number | null; gamesThisWeek: number; gamesNextWeek: number; projPerGame: number | null; note?: string }
-export interface WaiverMove { add: WaiverPlayer; drop: WaiverPlayer | null; gainThisWeek: number; gainNextWeek: number; total: number; se: number; confident: boolean }
+export interface WaiverMove { add: WaiverPlayer; drop: WaiverPlayer | null; gainThisWeek: number; gainNextWeek: number; total: number; se: number; confident: boolean; artifact?: number }
 export interface WaiverAdvice {
   generatedAt: number; week: number; nextWeek: number | null; rosterFull: boolean; openSpots: number;
-  moves: WaiverMove[]; droppable: (WaiverPlayer & { loss: number; se: number; protected: boolean; reason: string | null })[];
+  moves: WaiverMove[]; droppable: (WaiverPlayer & { loss: number; se: number; artifact: number; protected: boolean; reason: string | null })[];
   candidates: (WaiverPlayer & { gainNoDrop: number })[]; rules: string[]; notes: string[];
   cached?: boolean; checkedAt?: number;
 }
@@ -68,7 +68,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   const baseCtxNow = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week, asOf, skipOpp: true });
   const rel = new Set([...pool, ...baseCtxNow.me.pids]);
   const fp = o.force ? String(Math.random()) : fingerprint({
-    v: 3, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
+    v: 4, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
     rosters: rosters.map((r) => [r.roster_id, r.players, r.taxi, r.reserve]),
     proj: projRows.filter((r) => rel.has(r.player_id)).map((r) => [r.player_id, r.date, fantasyPoints(r.stats, S)]),
     inj: [...rel].map((p) => [p, players[p]?.injury_status ?? null]),
@@ -103,7 +103,10 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
     const d = diff(await variant({ drop: [pid] }));
     const inf = info(pid);
     const young = (inf.age ?? 99) <= 23 || (inf.dynastyAdp ?? 999) <= 120;
-    droppable.push({ ...inf, loss: -d.total, se: d.se, protected: protect.has(pid) || young, reason: protect.has(pid) ? "protected by you" : young ? `dynasty asset (age ${inf.age ?? "?"}, ADP ${inf.dynastyAdp ? Math.round(inf.dynastyAdp) : "?"})` : null });
+    // An extra player can't cost points under good play (you can always leave him unused), so a simulated gain from
+    // dropping him is an artifact of the quick rule that plays the simulated weeks. Report his value as >= 0.
+    const artifact = Math.max(0, d.total);
+    droppable.push({ ...inf, loss: Math.max(0, -d.total), artifact, se: d.se, protected: protect.has(pid) || young, reason: protect.has(pid) ? "protected by you" : young ? `dynasty asset (age ${inf.age ?? "?"}, ADP ${inf.dynastyAdp ? Math.round(inf.dynastyAdp) : "?"})` : null });
   }
   droppable.sort((x, y) => x.loss - y.loss);
   const dropPick = droppable.filter((d) => !d.protected).slice(0, 3);
@@ -125,7 +128,9 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
     }
     for (const dr of dropPick) {
       const d = diff(await variant({ add: [c.pid], drop: [dr.pid] }));
-      moves.push({ add: c, drop: dr, gainThisWeek: d.a, gainNextWeek: d.b, total: d.total, se: d.se, confident: d.total > Math.max(1, 2 * d.se) });
+      // remove the drop artifact (see above): the move is only worth what the ADD brings beyond it
+      const art = dr.artifact; const tot = d.total - art; const share = d.total ? tot / d.total : 1;
+      moves.push({ add: c, drop: dr, gainThisWeek: d.a * share, gainNextWeek: d.b * share, total: tot, se: d.se, artifact: art, confident: tot > Math.max(1, 2 * d.se) });
     }
   }
   moves.sort((a, b) => b.total - a.total);
