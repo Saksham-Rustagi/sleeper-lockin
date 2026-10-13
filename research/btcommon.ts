@@ -1,7 +1,7 @@
 // Shared season-replay helpers (walk-forward model fit, team-week construction) for backtests & lock-rule learning.
 import fs from "fs";
 import * as E from "./engine";
-export const S = JSON.parse(fs.readFileSync(process.env.SEASON || "/root/sleeper/research/season.json", "utf8"));
+export const S = JSON.parse(fs.readFileSync(process.env.SEASON || (fs.existsSync("research/data/season.json") ? "research/data/season.json" : "/root/sleeper/research/season.json"), "utf8"));
 // ---------- all games sorted, for walk-forward features ----------
 type G = { pid: string; tip: number; actual: number; played: boolean; proj_sleeper: number | null; week: number };
 export const all: G[] = [];
