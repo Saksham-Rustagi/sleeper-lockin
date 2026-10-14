@@ -119,6 +119,14 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
       startCall = { rule: new Map(slotOf), applied: new Map(applied), overridden: !!alt, tipping: tipping.slice(), gameOf: new Map(gameOf) };
       return alt;
     },
+    // P8 index policy: one complete decision per tip-off (starts, locks, held scores kept and where)
+    decideIndex: (s, tt, evIdx, ctx) => {
+      const alt = inner?.decideIndex ? inner.decideIndex(s, tt, evIdx, ctx) : undefined;
+      const d = alt ?? ctx.best; const m = new Map([...d.starts, ...d.holds]);
+      const tipping = ctx.cands.filter((c) => c.tipping).map((c) => c.p); const gameOf = new Map(ctx.cands.filter((c) => c.tipping).map((c) => [c.p, c.gi] as [number, number]));
+      startCall = { rule: m, applied: new Map(m), overridden: !!alt, tipping, gameOf };
+      return alt;
+    },
   };
   const snaps: { t: number; occ: Int32Array }[] = [];
   const idle: { p: number; g: number; t: number; end: number; slots: number[]; exante: boolean }[] = [];
@@ -184,7 +192,13 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
       for (let p = 0; p < nP; p++) {
         const wasP = !Number.isNaN(before.pendingX[p]) && !before.isLocked[p];
         if (!wasP || st.isLocked[p] || !Number.isNaN(st.pendingX[p])) continue;
-        if (groupPlayers.includes(p)) { hit("L_state_mismatch", `${nm(p)} pending at his own tip-off`); continue; }
+        if (groupPlayers.includes(p)) {
+          if (!pol.index) { hit("L_state_mismatch", `${nm(p)} pending at his own tip-off`); continue; }
+          // P8 resolves a held score's deadline inside the tip-off: let go (then played or sat)
+          released[p] = e.group!.find((g) => tw.games[g].p === p)!;
+          if (tr.status[p] === HELD) { tr.heldX[p] = before.pendingX[p]; tr.status[p] = NONE; tr.pos[p] = -1; } else if (tr.status[p] === PHANTOM) tr.status[p] = NONE;
+          continue;
+        }
         if (tr.status[p] === PHANTOM) { hit("F_after_phantom", undefined, before.pendingX[p]); tr.free(p); continue; }
         F.push([p, before.pendingX[p]]); tr.free(p);
       }

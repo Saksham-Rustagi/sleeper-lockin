@@ -8,6 +8,8 @@
 //  - Unlocked starter at week end => his final game counts automatically (0 if DNP).
 //  - A slot can host several players in one day if their games don't overlap.
 
+import { indexGroup, resetPrices, type IndexContext, type IndexDecision, type IndexOpts } from "./p8";
+
 export const SLOT_MASK: Record<string, number> = { PG: 1, SG: 2, G: 3, SF: 4, PF: 8, F: 12, C: 16, UTIL: 31 };
 const POS_BIT: Record<string, number> = { PG: 1, SG: 2, SF: 4, PF: 8, C: 16, G: 3, F: 12 };
 export function posMask(pos: string[]): number {
@@ -79,6 +81,8 @@ export interface Policy {
   holdYield?: boolean;
   // re-enable bugs fixed in engine-v2 phase 1 (to measure each fix): true = all of them
   legacyBugs?: boolean | LegacyBug[];
+  // P8: Lagrangian index policy (lib/engine/p8.ts) instead of the rule; ignores lockAware/holdYield/reserve
+  index?: IndexOpts;
 }
 // strand:  a lock could take the slot a held teammate needs right now (hidden forfeit, sometimes still counted)
 // negEnd:  a negative held final-game score counted at week end (and valued as mu) instead of benched to 0
@@ -387,6 +391,8 @@ export function doLock(st: State, p: number, s: number) {
 // ---------------- simulation ----------------
 export interface Hooks {
   decideLock?: (st: State, p: number, t: number, evIdx: number, ev: LockEval) => number | null;
+  // P8 (index policy): may return a different complete decision for this tip-off (see lib/engine/p8.ts)
+  decideIndex?: (st: State, t: number, evIdx: number, ctx: IndexContext) => IndexDecision | undefined;
   // start/sit at a tip-off: may return a different player->slot map for the players tipping now
   decideStarts?: (st: State, t: number, evIdx: number, tipping: number[], pending: number[], gameOf: Map<number, number>, slotOf: Map<number, number>, free: number) => Map<number, number> | undefined;
 }
@@ -394,6 +400,7 @@ export interface Hooks {
 export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float64Array, played: Uint8Array,
   st: State = initState(tw), fromEv = 0, hooks?: Hooks, toTime = Infinity): { total: number; st: State; evIdx: number } {
   const nP = tw.pmask.length; const eps = pol.eps ?? 0;
+  if (pol.index && fromEv === 0) resetPrices(tw); // a new week: start from the week-start prices
   let i = fromEv;
   for (; i < events.length; i++) {
     const e = events[i];
@@ -417,6 +424,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
       }
     } else if (e.kind === 1) {
       const p = tw.games[e.g].p;
+      if (pol.index) continue; // P8: lock-or-let-go at a deadline is part of the tip-off decision
       if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) {
         const ev = evalLock(tw, pol, st, p, e.t - 1);
         let s: number | null = baseLockChoice(tw, pol, st, p, e.t - 1, ev);
@@ -424,6 +432,8 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
         s = legalLock(tw, pol, st, p, s, ev);
         if (s !== null && s >= 0) doLock(st, p, s); else st.pendingX[p] = NaN;
       }
+    } else if (pol.index) {
+      indexGroup(tw, pol, st, e, i, hooks);
     } else {
       startGroup(tw, pol, st, e, events, i, hooks);
     }
