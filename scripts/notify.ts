@@ -132,4 +132,9 @@ async function main() {
   if (!process.env.DRY_RUN) fs.writeFileSync(SENT, JSON.stringify(sent));
   log(`week ${a.week}: ${a.decisions.length} decisions, ${a.plan.length} tip-offs planned, win ${a.outlook.winProb === null ? "–" : Math.round(a.outlook.winProb * 100) + "%"}, ${n} new reminders`);
 }
-if (/notify\.(c?js|ts)$/.test(process.argv[1] || "")) main().catch((e) => { log("ERROR", e?.stack || e); process.exitCode = 1; });
+if (/notify\.(c?js|ts)$/.test(process.argv[1] || "")) {
+  // Exit explicitly: background simulation workers / open handles must never keep a finished run alive (launchd
+  // won't start the next run while this one exists). Watchdog: a stuck run is killed after 9 minutes.
+  setTimeout(() => { log("watchdog: run exceeded 9 min, exiting"); process.exit(2); }, 9 * 60e3).unref();
+  main().then(() => process.exit(0), (e) => { log("ERROR", e?.stack || e); process.exit(1); });
+}
