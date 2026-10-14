@@ -413,21 +413,64 @@ For each team-week, under the walk-forward model fitted on earlier weeks (as in 
 - **E[P2LA], E[P2LAH], E[perfect hindsight]:** 2000 model scenarios.
 - **E[P7H]:** the first 20 of those scenarios (common random numbers), each also run through the invariant checker. E[P7H] is estimated as E_2000[P2LAH] + mean_20(P7H − P2LAH), a control variate with the CI reported.
 
-> **PLACEHOLDER: gap tables pending.** The gap run (`node research/runtasks.mjs research/dist/gap.cjs gap "" N7=20`) is in
-> progress. When it finishes this placeholder gets:
-> - the per-policy E[value] vs bound table, gap distribution and worst team-weeks (`python3 ../summ_phase1.py` in `research/out`);
-> - the P7H column of the invariant table (P7H on 20 model scenarios per team-week);
-> - the P7H monotonicity check on the 24 worst P2LAH drop cases (`research/out/mono7_tasks.txt`, run in `mono7` mode after the gap run).
->
-> First data point (smoke test, w7 r3):
->
-> | quantity | value |
-> |---|---|
-> | Lagrangian bound | 320.5 |
-> | E[hindsight] | 344.4 |
-> | E[P7H] (12 scenarios) | ≈ 293 |
-> | E[P2LAH] | 287.6 |
-> | no-slot-limit relaxation | 455.6 |
+**Results on the fixed engine** (`research/out/gap2_*`, all 230 team-weeks; policies with all Phase-1 fixes including
+B4 heldTie). A legacy-engine sample (52 team-weeks) is in "Phase 1 fixes: season results" below.
+
+| quantity (model expectation, mean per team-week) | value | gap to bound |
+|---|---|---|
+| no-slot-limit relaxation (μ = 0) | 439.4 | |
+| E[perfect hindsight] (upper bound) | 320.1 | |
+| **Lagrangian bound** (upper bound) | **301.4** | 0 |
+| E[P7H] (20 sc./wk, CRN control variate) | 289.7 ± 0.5 | **11.7 ± 0.5** (3.9%) |
+| E[P2LAH] (2000 sc./wk) | 283.2 ± 0.1 | 18.2 (6.0%) |
+| E[P2LA] (2000 sc./wk) | 282.3 | 19.1 |
+
+**Gap distribution per team-week:**
+- bound − E[P2LAH]: p10 14.5, p50 18.3, p90 22.1, max 28.1.
+- bound − E[P7H]: p10 6.7, p50 12.2, p90 16.4, max 22.5.
+
+**Sanity:**
+- bound < E[P2LAH] − 3 SE in **0** team-weeks;
+- bound > E[hindsight] in **0** (so on real weeks the Lagrangian is the tighter of the two upper bounds by 18.7 pts);
+- bound below the noisy E[P7H] estimate in 0.
+
+**Model vs real outcomes.**
+- Under the model, P7H − P2LAH is +6.45 ± 0.47. On the real outcomes it is +8.30 (legacy engine) and +5.68 (fixed engine).
+- Model expectations are ~10 pts above the real-outcome backtest (P2LAH 283.2 vs 276.8). The walk-forward model is optimistic, which is a projection-calibration question, not a policy one.
+
+| weeks | team-weeks | bound | E[hindsight] | E[P7H] | E[P2LAH] | gap P7H | gap P2LAH |
+|---|---|---|---|---|---|---|---|
+| 1–6 | 60 | 304.6 | 323.5 | 292.9 | 287.3 | 11.6 | 17.3 |
+| 7–12 | 60 | 303.7 | 322.2 | 292.1 | 286.0 | 11.6 | 17.7 |
+| 13–18 | 60 | 294.8 | 313.7 | 283.7 | 277.2 | 11.1 | 17.6 |
+| 19–23 | 50 | 302.9 | 321.0 | 290.1 | 282.3 | 12.9 | 20.6 |
+
+Worst team-weeks by gap to P2LAH (E[P7H] with its own 95% CI; per-week P7H estimates are noisy):
+
+| team-week | bound | E[hindsight] | E[P2LAH] | E[P7H] | gap P2LAH | gap P7H |
+|---|---|---|---|---|---|---|
+| w21 r5 | 303.4 | 314.9 | 275.3 | 289.2 ± 9.1 | 28.1 | 14.3 |
+| w21 r4 | 300.4 | 312.8 | 272.7 | 289.6 ± 7.8 | 27.7 | 10.8 |
+| w21 r9 | 336.9 | 349.3 | 310.3 | 319.6 ± 7.5 | 26.5 | 17.3 |
+| w22 r9 | 323.5 | 345.3 | 298.5 | 310.2 ± 9.1 | 25.1 | 13.3 |
+| w19 r4 | 289.3 | 302.5 | 264.6 | 275.8 ± 5.3 | 24.7 | 13.5 |
+| w23 r4 | 295.6 | 313.7 | 271.5 | 286.9 ± 7.9 | 24.1 | 8.6 |
+| w21 r1 | 288.3 | 301.1 | 264.6 | 270.7 ± 8.0 | 23.7 | 17.5 |
+
+Smallest gaps (P2LAH): w17 r7 (bound 265.7, E[P2LAH] 256.3), w8 r9 (272.1 / 262.6).
+
+**Interpretation.**
+- The live rule-plus-simulation policy (P7H) is within **11.7 pts (3.9%)** of an upper bound on the best possible expected week under the model. The rule alone (P2LAH) is within 18.2 (6.0%).
+- The true optimum lies somewhere in between: the bound is a fluid relaxation, and on tiny weeks it exceeds the optimum by ~1.7% on average (≈ 5 pts at this scale).
+- So the realistic remaining headroom for better algorithms is roughly **5–10 pts/wk** over P7H. That is worth Phase 2 (a better base rule closing part of the 18-pt gap that rollouts can then build on), but not unlimited.
+
+**P7H invariant checks on the 4,600 model weeks of this run:**
+- 0 rule violations;
+- S_forfeit_unforced 159 (0.03/wk, the reserved-slot re-seat gap noted below);
+- S_idle_bench_exante 14;
+- S_lock_wider 0.54/wk.
+
+The P7H monotonicity subset was not run: the fixes changed the engine, and Phase 2 re-tests monotonicity on the new base rule.
 
 ### Reproduce
 ```
@@ -553,4 +596,4 @@ Fixed P7H is about 20% slower per week: the exact valuation calls `stopValue` tw
   - bound − E[P2LAH]: mean 19.5 (p10 15.3, p50 19.7, p90 23.2, max 24.6).
   - bound − E[P7H]: mean 12.8 (p10 7.3, p50 12.5, p90 18.9, max 22.2).
   - Sanity: bound < E[P2LAH] in 0 team-weeks; bound > E[hindsight] in 0.
-- **Fixed engine, full season:** running detached into `research/out/gap2_*` (20 P7H scenarios per team-week, ~2.5–3 h). Section 3's tables will be filled from it with `python3 ../summ_phase1.py inv2 gap2` (run from `research/out`).
+- **Fixed engine, full season:** see section 3 (`research/out/gap2_*`).
