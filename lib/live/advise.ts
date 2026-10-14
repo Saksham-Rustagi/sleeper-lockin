@@ -8,6 +8,7 @@ import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS, simCutoff } from "./teamsim";
+import { decisionPolicy, simPolicy, planHooks, replayHooks } from "./engine";
 
 // more than ~5 days out, include the date ("Tue, Oct 20, 9:30 PM") so it isn't confused with this week's Tuesday
 const START_SIMS = 200;
@@ -56,7 +57,7 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
 }
 
 function finishWeek(T: LiveTeam, st: E.State, scen: { actual: Float64Array; played: Uint8Array }, fromEv: number) {
-  return E.simulate(T.tw, POLICY, T.events, scen.actual, scen.played, st, fromEv).total;
+  return E.simulate(T.tw, simPolicy(), T.events, scen.actual, scen.played, st, fromEv).total;
 }
 
 function sharedOutlook(ms: Float64Array, os: Float64Array | null): Outlook {
@@ -79,6 +80,8 @@ function outlook(ctx: WeekContext, K: number, seed: number): Outlook {
   return { myMean: mean(mine), myP10: q(mine, 0.1), myP90: q(mine, 0.9), oppMean: ctx.opp ? mean(theirs) : null, oppP10: ctx.opp ? q(theirs, 0.1) : null, oppP90: ctx.opp ? q(theirs, 0.9) : null, winProb: ctx.opp ? wins / K : null, sims: K };
 }
 
+// Quick lock cut-off from the rule's lock evaluation (POLICY, whatever the engine: for p8/p9 it only seeds the
+// simulated cut-off of the first tip-off and approximates the later ones).
 function lockThreshold(T: LiveTeam, st: E.State, p: number, t: number): { threshold: number; slot: number } | null {
   const saved = st.pendingX[p]; st.pendingX[p] = 0;
   const ev = E.evalLock(T.tw, POLICY, st, p, t);
@@ -186,14 +189,14 @@ async function plan(ctx: WeekContext, hours: number): Promise<TipPlan[]> {
   let st = E.cloneState(T.st); let ev = T.evIdx; let first = true;
   // who starts at each tip-off: decided by simulation (rule's lineup vs small changes, 200 continuations each).
   // Backtest 2025-26: +4.3 ± 2.0 pts/week over lock-only simulation.
-  const startHooks = E.startRolloutHooks(T.tw, POLICY, T.events, START_SIMS, 4242 + ctx.week, T.real);
+  const startHooks = planHooks(T.tw, T.events, START_SIMS, 4242 + ctx.week, T.real); const pol = decisionPolicy();
   let tips = [...new Set(T.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + hours * 3600e3).map((g) => g.tip))].sort((a, b) => a - b);
   if (!tips.length) { // nothing soon (e.g. preseason / off days): plan the next game day instead
     const nextDay = T.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0];
     tips = [...new Set(T.games.filter((g) => g.date === nextDay && g.tip > ctx.asOf).map((g) => g.tip))].sort((a, b) => a - b);
   }
   for (const tip of tips) {
-    const res = E.simulate(T.tw, POLICY, T.events, actual, played, st, ev, startHooks, tip);
+    const res = E.simulate(T.tw, pol, T.events, actual, played, st, ev, startHooks, tip);
     st = res.st; ev = res.evIdx;
     const groupGames = T.games.filter((g) => g.tip === tip);
     const starts: TipPlan["starts"] = []; const benched: TipPlan["benched"] = [];
@@ -295,13 +298,13 @@ export async function replay(o: { leagueId: string; rosterId: number; week: numb
 
 function computeReplay(ctx: WeekContext, rosterId: number, week: number, K: number): Replay {
   const T = ctx.me; const tw = T.tw;
-  const hooks = E.rolloutHooks(tw, POLICY, T.events, "points", K, 12, week * 1000 + rosterId, T.real);
+  const hooks = replayHooks(tw, T.events, K, week * 1000 + rosterId, T.real); const pol = decisionPolicy();
   let st = E.initState(tw); const log: ReplayLog[] = [];
   const times = [...new Set(T.events.map((e) => e.t))].sort((a, b) => a - b);
   let ev = 0;
   for (const t of times) {
     const before = E.cloneState(st);
-    const res = E.simulate(tw, POLICY, T.events, T.real.actual, T.real.played, st, ev, hooks, t);
+    const res = E.simulate(tw, pol, T.events, T.real.actual, T.real.played, st, ev, hooks, t);
     st = res.st; ev = res.evIdx;
     for (let s = 0; s < tw.slots.length; s++) {
       if (before.lockedBy[s] < 0 && st.lockedBy[s] >= 0) log.push({ t, when: fmtTime(t), kind: "lock", text: `LOCK ${tw.names[st.lockedBy[s]]} at ${ctx.slotNames[s]} for ${st.lockedPts[s].toFixed(1)}` });
@@ -315,7 +318,7 @@ function computeReplay(ctx: WeekContext, rosterId: number, week: number, K: numb
       }
     }
   }
-  const fin = E.simulate(tw, POLICY, T.events, T.real.actual, T.real.played, st, T.events.length);
+  const fin = E.simulate(tw, pol, T.events, T.real.actual, T.real.played, st, T.events.length);
   // week-end auto counts
   const lineupBySlot = ctx.slotNames.map((slot, s) => ({ slot, player: st.lockedBy[s] >= 0 ? tw.names[st.lockedBy[s]] : null, points: st.lockedBy[s] >= 0 ? st.lockedPts[s] : null }));
   for (let p = 0; p < tw.pmask.length; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) {

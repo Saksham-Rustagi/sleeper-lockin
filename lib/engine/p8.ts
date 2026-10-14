@@ -28,6 +28,8 @@ export interface IndexOpts {
   fill?: "none" | "idle" | "all";
   slot?: string;                    // price state used ("top": real decisions; rollouts use their own, seeded from top)
   keep?: number;                    // extra weight (pts) for keeping a positive held score (default 0)
+  fresh?: boolean;                  // every simulate() call starts from the week-start prices (independent simulations
+                                    // started mid-week, e.g. the live app's projections); otherwise only at event 0
 }
 // ---------------- prices ----------------
 interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number }

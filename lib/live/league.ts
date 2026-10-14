@@ -3,7 +3,7 @@
 import { buildWeek, resolveWeek, type LiveTeam } from "./week";
 import { sleeper } from "./sources";
 import * as E from "../engine/core";
-import { POLICY } from "./week";
+import { simPolicy } from "./engine";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamSims, summarize, winProb as wp, TEAM_SIMS, teamFingerprint } from "./teamsim";
 
@@ -25,7 +25,7 @@ function simulateTeam(T: LiveTeam, K: number, asOf: number, seed: number) {
   const r = E.rng(seed); const out = new Float64Array(K);
   for (let k = 0; k < K; k++) {
     const sc = E.sampleScenario(T.tw, T.st, asOf, r, T.real);
-    out[k] = E.simulate(T.tw, POLICY, T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
+    out[k] = E.simulate(T.tw, simPolicy(), T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
   }
   return out;
 }
