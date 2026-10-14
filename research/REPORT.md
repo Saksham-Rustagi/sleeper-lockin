@@ -597,3 +597,214 @@ Fixed P7H is about 20% slower per week: the exact valuation calls `stopValue` tw
   - bound − E[P7H]: mean 12.8 (p10 7.3, p50 12.5, p90 18.9, max 22.2).
   - Sanity: bound < E[P2LAH] in 0 team-weeks; bound > E[hindsight] in 0.
 - **Fixed engine, full season:** see section 3 (`research/out/gap2_*`).
+
+## Engine v2 — Phase 2: Lagrangian index policy (P8) and rollouts on it (P9)
+
+### Design (`lib/engine/p8.ts`; tests `tests/p8.test.ts`)
+**Prices.**
+- Slot prices μ (points per slot and time bucket) are the minimiser of the Phase-1 Lagrangian bound for the team-week.
+- `lagrange.ts` can now build the relaxed problem from any engine state (`fromState`): held scores, in-game players pinned to their slot, locked slots removed (their points a constant), the DNP chain carried over. This gives the relaxed rest of the week at time t; the bound proof of Phase 1 applies unchanged.
+- **Week start:** `tightBound`, 2 × 100k Adam iterations, ~5 s per team-week.
+- **Decision times:** a warm-started re-solve. New buckets are unions of old ones, so the old prices carry over exactly.
+
+**Decision at each tip-off.** One exact max-weight assignment over the free slots (bitmask DP, at most 9 slots; checked against brute force). The weights are each player's priced DP advantage:
+
+| candidate | slot-using actions (value) | baseline |
+|---|---|---|
+| player tipping off | start in s: his DP value of starting, net of the price of s for the length of his game | bench (his DP value of skipping tonight) |
+| held score whose own game tips now (his deadline) | lock in s: x minus the price of s to week end; or start the new game in s | let go and bench |
+| other held score | hold: slot-independent, his best hold value (held players can be rearranged freely); or lock in s, only with a real priced advantage | let go (his DP value from his next game on) |
+
+- Deadline lock-or-let-go and tonight's starts are therefore **one joint decision**.
+- **"Keep holding and sit tonight's player"** happens whenever the prices say so: there is no blanket holdYield or reserve rule, and later tip-offs are reserved through the prices.
+- **A held score with a non-positive advantage** still keeps a free slot nobody else values (a tiny weight; staying put breaks ties).
+- **Idle-slot fill:** after the assignment, leftover tipping players are started in free slots that no later-tipping player could use during their game. At equilibrium prices competing candidates are near indifferent, and "advantage > 0" alone left slots idle.
+
+**Rules by construction.**
+- Every kept held score and every lock is seated by the assignment, so a lock can't strand a teammate.
+- The rearrangement must be reachable by legal moves (rule 9): `reachable()` runs the checker's BFS (`lib/engine/moves.ts`) from where held players sit.
+- If unreachable, P8 uses an equivalent reachable seating; if none exists, it re-decides with held players staying put.
+
+**P9.** P8 decisions, plus rollouts at every tip-off over the index decision and up to 4 alternatives within 10 index points:
+- seat or unseat each candidate in turn;
+- swap lock ↔ play/hold for held scores.
+
+Each is scored by K continuations of the week (common random numbers). A change needs a > 0.5 pt gain.
+- **P9:** continuations played by P8f, K = 200.
+- **P9b:** continuations played by P8 itself (prices re-solved inside the rollout), K = 50.
+
+Rollouts run on their own price state, seeded from the real decision's prices.
+
+### Tuning (model scenarios, common random numbers)
+Design choices were tested under the model on 46 team-weeks (2 teams per week) × 20–40 paired scenarios, with the real outcomes of those team-weeks alongside (`research/p8exp.ts`, `research/summ_exp.py`). Gains are vs P2LAH_LheldTie (model E 281.8–282.1).
+
+| variant | model gain (95% CI) | ms per simulated week | note |
+|---|---|---|---|
+| week-start prices only (P8s), no idle fill | −5.23 ± 1.90 | 1.2 | stale prices: e.g. a week-end slot "costs" ~20 pts even when half the slots are empty, so good final games are sat |
+| week-start prices + idle fill | −2.17 ± 1.62 | 1.0 | |
+| re-solve daily (3000 iters) | +5.87 ± 1.26 | 324 | |
+| **re-solve every tip-off (3000 iters)** | **+9.38 ± 1.06** | 1501 | |
+| re-solve every tip-off, 100 iters | +9.13 ± 1.42 | 43 | 100 warm-started iterations suffice |
+| re-solve every tip-off, 30 / 10 iters | +7.09 / +4.30 | 27 / 10 | |
+| re-solve only after new results (`info`), 100 / 30 / 10 iters | +7.33 / +5.69 / +3.43 | 19 / 7.4 / 3.8 | our own starts move the prices too |
+| fill idle slots with any leftover starter ("all") | −2 vs "idle" | | reservation through prices matters |
+| keep bonus for held scores 0.03 / 0.1 / 0.3 / 1 pt | −1.0 / −1.6 / −3.7 / −8.2 vs none | | sticky held scores block later starters |
+| **final P8**: slot-independent hold weight, keep 0, every tip-off, 100 iters | **+9.66 ± 1.36** | 43 | |
+| **final P8f**: same, after new results only, 30 iters | **+7.07 ± 1.57** | 7.5 (2.6× P2LAH) | |
+
+**Cost.**
+- P2LAH costs 2.3–3 ms per simulated week (measured while 12 jobs ran).
+- P8 costs ~40 ms per simulated week (≈ 15×), dominated by ~30 re-solves × 100 iterations × 10–40 µs.
+- P8f stays within the requested 2–3× (7.5 ms).
+- The week-start price solve adds ~5 s per team-week (once).
+- For the live app, P8 is cheap: about 1 s for a whole week's decisions.
+
+### Season backtest (real 2025-26 outcomes, 230 team-weeks, paired, same seeds; `research/summ_season.py s8,s9 ...`)
+Baselines are the live policy and its rule, `P7H_LheldTie` and `P2LAH_LheldTie`. They reproduce the Phase-1 numbers exactly.
+
+| policy | pts/wk | vs | paired diff (95% CI) | weeks 1–11 | weeks 12–23 | better/worse weeks | win% (baseline) |
+|---|---|---|---|---|---|---|---|
+| **P8** (rule, no rollouts) | **284.4** | P2LAH_LheldTie 277.3 | **+7.08 ± 3.07** | +8.58 ± 4.26 | +5.71 ± 4.40 | 143/82 | 66.8% (63.6%) |
+| P8f (fast rule) | 282.3 | P2LAH_LheldTie 277.3 | +4.95 ± 3.00 | +5.85 ± 4.14 | +4.12 ± 4.32 | 136/90 | 64.7% (63.6%) |
+| P8s (week-start prices only) | 272.6 | P2LAH_LheldTie 277.3 | −4.66 ± 3.55 | −2.60 | −6.55 | 105/124 | 60.5% |
+| P8 | 284.4 | **P7H_LheldTie 284.4 (live)** | −0.02 ± 2.40 | +0.15 ± 3.40 | −0.18 ± 3.40 | 114/103 | 66.8% (67.8%) |
+| **P9** (P8 + rollouts, P8f continuations, K = 200) | **284.9** | P7H_LheldTie 284.4 | +0.50 ± 2.23 | −0.72 ± 3.06 | +1.62 ± 3.21 | 107/106 | 65.4% (67.8%) |
+| P9b (P8 + rollouts, P8 continuations, K = 50) | 284.5 | P7H_LheldTie 284.4 | +0.11 ± 2.30 | −0.53 ± 3.35 | +0.70 ± 3.16 | 114/98 | 67.5% (67.8%) |
+| P9 | 284.9 | P8 284.4 | +0.53 ± 1.43 | −0.87 ± 1.88 | +1.81 ± 2.11 | 63/66 | |
+| P9b | 284.5 | P8 284.4 | +0.13 ± 2.03 | −0.68 ± 2.39 | +0.88 ± 3.21 | 90/94 | |
+| (P7H_LheldTie vs its rule P2LAH_LheldTie) | 284.4 | 277.3 | +7.10 ± 2.31 | +8.43 | +5.89 | 145/74 | |
+
+(The tuning pass before the final P8 scored P8 283.5 and P9 283.3 on the same season, `s8`. The final P8 changes, slot-independent holds and the reachability guard, were chosen on model scenarios, not on these outcomes.)
+
+### Rules and sanity (full-season checker, `inv4`; P7H / P2LAH from `inv2`)
+| check | P8 real | P9 real | P9b real | P8 model (11,500 wk) | live P7H real | P2LAH real |
+|---|---|---|---|---|---|---|
+| **L_* rule violations** | **0** | **0** | **0** | **0** | 0 | 0 |
+| S_forfeit_unforced (held score > 0 let go though it could stay) | 0 | 0.16/wk | 0.53/wk | 0 | 0.04/wk | 0 |
+| S_idle_bench_exante | 0 | 1 | 29 | 0 | 1 | 0 |
+| S_lock_wider (lock into a wider slot than needed) | 0.06/wk | 0.08/wk | 0.07/wk | 0.08/wk | 0.47/wk | 0.61/wk |
+| F_yield_reserved (premature let-go for a later player) | 0 | 0 | 0 | 0 | 13.0/wk | 10.9/wk |
+| F_deadline_benched (let go at own tip-off, then sat) | 0.60/wk | 0.64/wk | 0.72/wk | 0.58/wk | 0.30/wk | 0.20/wk |
+| F_deadline_replaced (let go at own tip-off for the new game) | 3.23/wk | 3.24/wk | 3.61/wk | 3.12/wk | 1.62/wk | 1.21/wk |
+| I_lock_final_game (locks of a final-game score) | 0 | 0 | 0 | 0 | 2.00/wk | 1.49/wk |
+| I_start_override (rollouts changed the decision) | — | 1.71/wk | 4.26/wk | — | 1.68/wk | — |
+
+- P8 obeys every rule, including reachability, on 230 real and 11,500 simulated weeks. That includes 2 unreachable rearrangements found by the checker during tuning, now handled by `reachable()`.
+- It makes no dominated choices (no unforced let-go, no idle benching), never yields prematurely and never locks a final-game score early.
+- P8 plays differently from the rule: about twice as many held scores are given up at their own tip-off (deadline), 3.2/wk vs 1.6/wk for P7H.
+- The rollouts reintroduce dominated actions: P9b, with only K = 50, picks 0.53 unforced let-gos and 0.13 idle benchings per week.
+
+### Monotonicity (an extra player never hurts)
+Measured on the 46 cases where the old rules failed worst (top 24 drop gains of the legacy rule from `inv`, top 24 of the fixed rule from `inv2`): 300 paired scenarios each, `research/invariants.ts` mode `monoP`.
+
+| dropping the player (46 cases) | P2LAH_LheldTie | P8 |
+|---|---|---|
+| raises E[total] by > 3 SE | 13 / 46 | **1 / 46** |
+| raises E[total] at all | 37 / 46 | 15 / 46 |
+| mean change in E[total] | +1.08 | **−0.24** |
+| worst case | +3.33 (w8 r8 Vince Williams) | +2.50 ± 1.57 (w12 r10 Cameron Johnson) |
+
+P8 removes almost all of the "an extra player hurts" effect: its decisions are joint (deadline and start in one assignment), and held scores no longer yield to any reserved player.
+
+### How much of the gap closes (model, `gap3` / `gap4` / `gap5`; `research/summ_gap8.py`)
+**All 230 team-weeks**, the same 2000 model scenarios per team-week as the Phase-1 gap study (P7H on the first 20):
+
+| quantity (model, mean per team-week) | value | gap to bound |
+|---|---|---|
+| E[perfect hindsight] | 320.1 | |
+| **Lagrangian bound** | **301.4** | 0 |
+| **E[P8]** | **291.8** | **9.6** (p10 7.4, p50 9.6, p90 12.4, max 15.6) |
+| E[P8f] | 289.6 | 11.9 |
+| E[P7H] (Phase-1 fixes incl. heldTie) | 289.7 | 11.7 |
+| E[P2LAH] (Phase-1 fixes) | 283.2 | 18.2 |
+
+- P8 − P2LAH: +8.53 ± 0.06 (2000 paired scenarios).
+- P8 − P7H: +2.40 ± 0.47 (20 paired scenarios).
+- P8, the rule alone, closes **47%** of the rule's 18.2-pt gap to the bound; P7H closes 35%. P8's gap is smaller in every season block (weeks 1–6 / 7–12 / 13–18 / 19–23: 8.9 / 9.6 / 10.0 / 10.3 vs P7H 11.6 / 11.6 / 11.1 / 12.9).
+- Sanity: the bound is never below E[P8].
+
+**Against the live policy itself** (46 team-weeks × the first 10 scenarios, all paired; bound 300.4):
+
+| policy | model E | gap to bound | vs live P7H_LheldTie (95% CI) |
+|---|---|---|---|
+| **P8** | **289.2** | **11.3** | **+2.11 ± 1.34** |
+| P9 (P8 + rollouts) | 288.4 | 12.0 | +1.38 ± 1.35 |
+| live P7H_LheldTie | 287.0 | 13.4 | 0 |
+| P2LAH_LheldTie | 281.3 | 19.2 | −5.79 ± 1.36 |
+
+P9 − P8 under the model: −0.73 ± 0.94.
+
+### Why P9 does not beat the live algorithm on the season
+1. **P8 itself is about 2 pts better than live under the model**, but one real season can't resolve 2 pts. The paired real-season CI vs P7H_LheldTie is ±2.4, and the real outcome is a tie: 284.39 vs 284.41. Under the model, the difference is +2.11 ± 1.34 on paired scenarios, and +2.4 ± 0.5 over the larger set against fixed P7H. Model expectations also run ~7 pts above real outcomes (P2LAH 283.2 vs 277.3), so part of P8's model edge may come from trusting the model's price of future contention more than the real season rewards.
+2. **The rollouts make P8 slightly worse, not better** (−0.73 ± 0.94 under the model; +0.53 ± 1.43 on the season).
+   - A one-step rollout is guaranteed to improve only on the policy that plays the continuations. P9's continuations are played by P8f (cheaper, about 2 pts weaker), so they judge P8's decisions with a weaker yardstick.
+   - P9b plays them with P8 itself, but can afford only K = 50. With 4–5 alternatives per decision the best-scoring one is often best by noise (winner's curse).
+   - Evidence: P9b changes 4.3 decisions/wk, and 0.53/wk of the changes are dominated let-gos plus 0.13/wk idle benchings. P8 alone makes none of either.
+3. **P8 and live play very differently** for the same total on real outcomes (`research/decstats.ts`, `research/summ_dec.py`, per week):
+
+| decision | P2LAH_LheldTie | live P7H_LheldTie | P8 |
+|---|---|---|---|
+| games started | 31.3 | 35.9 | 39.7 |
+| starts that were DNPs | 6.2 | 7.4 | 8.6 |
+| locks | 8.3 | 8.1 | 5.6 |
+| locks before the player's own deadline | 6.3 | 5.5 | 0 |
+| locks of a final-game score | 1.5 | 2.1 | 0 |
+| points from locks | 264.2 | 268.7 | 201.3 |
+| held scores counted at week end | 0.6 | 0.8 | 3.1 |
+| points from week-end holds | 13.1 | 15.7 | 83.1 |
+| held scores let go at their own tip-off | 1.4 | 1.8 | 3.8 |
+| tipping players sat (their points) | 23.4 (231) | 20.7 (190) | 17.9 (155) |
+| week total | 277.3 | 284.4 | 284.4 |
+
+- P8 keeps options open: no early locks, final games held to week end, more games started.
+- It gives back held scores at deadlines twice as often, about 3.5 pts/wk let go at deadlines, then sat (F_deadline_benched 0.60/wk vs 0.30).
+- These are exactly the decisions whose value depends on how accurate the model's future-contention prices are. On the real season the extra starts and the extra let-gos roughly cancel.
+
+### Cost (single process; `research/scratch/simcost.ts`, 20 team-weeks × 50 model weeks)
+| policy | ms per simulated week | vs P2LAH | per decision (≈ 30 tip-offs/week) | real week, top level |
+|---|---|---|---|---|
+| P2LAH_LheldTie | 1.19 | 1× | 0.04 ms | 0.01 s |
+| P8s (week-start prices) | 0.61 | 0.5× | | |
+| P8f | 7.8 | 6.6× | 0.26 ms | |
+| P8 | 42 | 35× | 1.4 ms (≈ 1 re-solve of 100 iterations) | 0.05 s |
+| live P7H_LheldTie | | | ≈ 0.4 s | 12.9 s |
+| P9 / P9b | | | ≈ 2.2 s / 2.7 s | 67 s / 82 s |
+
+- Under the 12-way parallel load of the tuning runs, the ratios were lower (P8f 2.6×, P8 15×).
+- P8 and P8f also need the week-start price solve: ≈ 5.3 s once per team-week (per roster), cached for the week.
+
+### Recommendation
+**Do not replace the live P7H with P8 or P9 yet: the gate (beat 284.4 on the season) is not met.**
+- P8 ties live on real outcomes (284.4 vs 284.4, −0.02 ± 2.40) and P9 is +0.50 ± 2.23.
+- There are no rule violations, no dominated actions and far fewer monotonicity failures, so nothing blocks shipping on correctness.
+
+P8 is nevertheless the strongest result of the phase:
+- it is the best policy under the model (+2.1 ± 1.3 vs live on paired scenarios; 47% of the rule's gap to the optimum closed);
+- it matches live P7H on real outcomes at 1/250 of the compute;
+- it obeys every rule;
+- it nearly fixes monotonicity (1/46 vs 13/46 failures).
+
+Suggested next steps:
+- **Keep P8 in the engine** (`Policy.index`), and consider it as a cheap fallback when P7H's simulations can't run.
+- **Validate on more data.** A second season, or the 2024-25 season, would show whether P8's +2 model edge holds up on real outcomes.
+- **Better rollouts on P8.** If rollouts are kept, they must be played by P8 itself, with enough rollouts per alternative and fewer, better alternatives (Phase 3's racing / successive halving), not a weaker base.
+
+**P8 inside Waivers / Matchups / projections: not as is.**
+- These views simulate the rest of the week 20,000 times per team (projections, matchups), 2,000 per roster variant (Waivers) and 6,000 per lock cut-off.
+  - With P8 (42 ms per simulated week), a team projection goes from ~24 s to ~14 min, and every roster variant on the Waivers page needs its own ~5 s price solve.
+  - P8f (7.8 ms) is the only candidate: ~2.6 min per 20k-sim projection plus the price solve, i.e. it would need 5× fewer simulations or worker-thread budget.
+- What makes it attractive for Waivers specifically is monotonicity: P8's "an extra player never hurts" behaviour removes most spurious "drop X gains points" effects (1/46 vs 13/46 on the worst cases).
+- Recommended experiment: P8f-based Waivers with N = 400 simulations and the cached price solve, compared against the current P2LAH-based Waivers values.
+
+### Reproduce
+```
+npx esbuild research/p8exp.ts --bundle --platform=node --format=cjs --outfile=research/dist/p8exp.cjs --log-level=error   # (+ invariants, gap, decstats)
+node research/runtasks.mjs research/dist/p8exp.cjs s9 "" 'POLS=P8;P8f;P9;P9b' NSC=0                     # season (real outcomes)
+node research/runtasks.mjs research/dist/invariants.cjs inv4 main POLS_REAL=P8,P9,P9b SIMPOL=P8 NSIM=50 NMONO=2
+node research/runtasks.mjs research/dist/invariants.cjs monoP monoP TASKS=<research/out/monoP_tasks.txt> MONOPOLS=P2LAH_LheldTie,P8 NMONO=300
+node research/runtasks.mjs research/dist/gap.cjs gap3 "" GAPPOLS=P8,P8f N=2000 N7=0
+node research/runtasks.mjs research/dist/gap.cjs gap4 "" TASKS=<46 team-weeks> GAPPOLS=P8 N=10 N7=10 GAP7=P9
+node research/runtasks.mjs research/dist/gap.cjs gap5 "" TASKS=<same> GAPPOLS=P2LAH_LheldTie N=10 N7=10 GAP7=P7H_LheldTie
+cd research/out && python3 ../summ_season.py s8,s9 P8:P2LAH_LheldTie,... && python3 ../summ_inv.py inv4:P8,... && python3 ../summ_gap8.py && python3 ../summ_dec.py
+```
+Long runs: `node research/launch_detached.mjs <log> <script> ...` (survives the caller).
