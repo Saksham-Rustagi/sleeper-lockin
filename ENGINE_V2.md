@@ -39,6 +39,8 @@ vs P2LAH, and P8 as the rollout base inside the P7 search (P9). Check invariants
 At each tip-off / deadline jointly choose: for every held player hold / lock (which slot) / let go (holding INCLUDED as an
 option, not banned); who starts and where; only reachable rearrangements. Candidates generated from the DP prices; scored by
 rollouts with the best base rule; adaptive sampling (racing / successive halving with CRN) instead of fixed K.
+**Status (2026-10-14): done** - `lib/engine/p10.ts`; P10b (P8-played continuations) beats live P7H_LheldTie pooled over
+both seasons (+2.40 ± 1.39 pts/wk), 0 rule violations, 0 dominated actions; see REPORT "Engine v2 — Phase 3".
 
 ## Phase 4 - Pre-game planner
 Before tonight's first tip: deep search (nested rollouts allowed) producing a contingency table per decision (e.g. lock

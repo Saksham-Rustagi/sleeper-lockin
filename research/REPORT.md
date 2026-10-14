@@ -1078,11 +1078,12 @@ Then:
   - deadline lock-or-play together with tonight's starts, in one search;
   - "let go at his own tip-off, then sat" never appears while his slot would stay idle.
 
-
 ### Season backtest 2025-26 (real outcomes, 230 team-weeks, paired, same seeds; `research/p10run.ts`, prefix `s10`)
-Baselines are the Phase-2 runs (`s8`, `s9`): same team-weeks and seeds. P8, P9 and P7H_LheldTie are deterministic
-given the seed, and `p10run` reproduces the P8 totals exactly.
-- **Columns:** `research/summ_season.py` for win% vs the real (human) opponent; `research/summ_s24.py … ../data/season.json` for the week-clustered CI.
+Baselines are the Phase-2 runs (`s8`, `s9`) on the same team-weeks and seeds. Every policy is deterministic given the
+seed, and `p10run` reproduces the P8 totals exactly.
+
+Each run goes through the invariant checker. The week-clustered CI is `research/summ_s24.py … ../data/season.json`.
+Win% is against the real (human) opponent (`research/summ_season.py`).
 
 | policy | pts/wk | vs | paired diff | 95% CI naive | 95% CI week-clustered | weeks 1–11 / 12–23 | better/worse weeks | win% vs real opp. (baseline) |
 |---|---|---|---|---|---|---|---|---|
@@ -1095,28 +1096,159 @@ given the seed, and `p10run` reproduces the P8 totals exactly.
 | **P10b** | 286.2 | live P7H_LheldTie 284.4 | **+1.81** | ± 2.21 | ± 1.79 | +1.13 / +2.44 | 115/95 | 68.2% (67.8%) |
 
 **Base chosen by the pre-set rule:** P10b − P10 = +0.85 ≥ 0.5, so **P10b** (continuations played by P8) is the Phase-3
-engine, and it was also run on 2024-25. P10 was kept in every comparison as the cheap variant.
+engine. P10, the cheap variant, was run and reported alongside it everywhere.
 
-### Season backtest 2024-25 (690 team-weeks, 3 synthetic leagues, real outcomes; prefix `s24p10` / `s24p10b`; `research/summ_s24.py`)
+### Season backtest 2024-25 (690 team-weeks, 3 synthetic leagues, real outcomes; prefixes `s24p10`, `s24p10b`; `research/summ_s24.py`)
 Win% is against the opponent's score under the live bot (P7H_LheldTie), as in the second-season section.
 
 | policy | pts/wk | vs | paired diff | 95% CI naive | **95% CI week-clustered** | league A / B / C | weeks 1–11 / 12–23 | better/worse | win% vs live-bot opp. (baseline) |
 |---|---|---|---|---|---|---|---|---|---|
-| **P10** | **286.2** | P8 284.2 | **+2.02** | ± 0.93 | **± 0.80** | +1.9 / +2.4 / +1.8 | +1.80 / +2.22 | 242/176 | 51.0% (50.3%) |
+| **P10b** | **286.5** | P8 284.2 | **+2.33** | ± 0.81 | **± 0.65** | +1.2 / +3.4 / +2.4 | +1.94 / +2.68 | 225/137 | 53.1% (50.3%) |
+| P10b | 286.5 | P10 286.2 | +0.31 | ± 0.83 | ± 0.73 | −0.7 / +1.0 / +0.6 | +0.14 / +0.46 | 192/170 | 53.1% (51.0%) |
+| **P10b** | 286.5 | P9 285.1 | **+1.38** | ± 0.88 | **± 0.89** | +0.5 / +2.2 / +1.4 | +1.52 / +1.24 | 231/173 | 53.1% (52.0%) |
+| **P10b** | 286.5 | live P7H_LheldTie 283.2 | **+3.30** | ± 1.30 | **± 2.21** | +3.4 / +4.3 / +2.2 | +2.15 / +4.36 | 365/248 | 53.1% (50.0%) |
+| **P10** | 286.2 | P8 284.2 | **+2.02** | ± 0.93 | **± 0.80** | +1.9 / +2.4 / +1.8 | +1.80 / +2.22 | 242/176 | 51.0% (50.3%) |
 | P10 | 286.2 | P9 285.1 | +1.07 | ± 0.94 | ± 1.08 | +1.3 / +1.1 / +0.8 | +1.38 / +0.78 | 241/209 | 51.0% (52.0%) |
 | **P10** | 286.2 | live P7H_LheldTie 283.2 | **+2.99** | ± 1.26 | **± 1.94** | +4.1 / +3.3 / +1.6 | +2.00 / +3.90 | 359/251 | 51.0% (50.0%) |
 | P10 | 286.2 | P8f 282.4 | +3.85 | ± 1.11 | ± 1.08 | +4.9 / +3.4 / +3.3 | +3.63 / +4.05 | 321/199 | 51.0% (48.7%) |
-| P10b | (running) | | | | | | | | |
 
 ### Both seasons pooled (`research/summ_pool.py`; week-clustered 95% CIs, inverse-variance pooled)
 | comparison | 2025-26 (real league, 230) | 2024-25 (synthetic, 690) | pooled |
 |---|---|---|---|
-| P10 − P8 | +0.98 ± 1.07 | +2.02 ± 0.80 | **+1.65 ± 0.64** |
-| P10 − P9 | +0.46 ± 1.47 | +1.07 ± 1.08 | +0.85 ± 0.87 |
+| **P10b − live P7H_LheldTie** | +1.81 ± 1.79 | +3.30 ± 2.21 | **+2.40 ± 1.39** |
+| **P10b − P8** | +1.83 ± 1.70 | +2.33 ± 0.65 | **+2.27 ± 0.60** |
+| **P10b − P9** | +1.31 ± 1.15 | +1.38 ± 0.89 | **+1.35 ± 0.70** |
+| P10b − P10 | +0.85 ± 1.44 | +0.31 ± 0.73 | +0.42 ± 0.65 |
 | **P10 − live P7H_LheldTie** | +0.96 ± 1.84 | +2.99 ± 1.94 | **+1.93 ± 1.34** |
-| P10b − … | | (running) | |
+| **P10 − P8** | +0.98 ± 1.07 | +2.02 ± 0.80 | **+1.65 ± 0.64** |
+| P10 − P9 | +0.46 ± 1.47 | +1.07 ± 1.08 | +0.85 ± 0.87 |
+(For reference, Phase 2: P9 − P8 pooled +0.83 ± 0.87, P8 − live +0.52 ± 1.56.)
 
-### Still running (interim section)
-- Model study (46 team-weeks × the Phase-2 scenarios): P10 on 10, P10b on 5 (`gap10`, `gap10b`).
-- P10b on 2024-25 (`s24p10b`).
-- Rules / compute tables and the recommendation follow when these finish.
+### Model study (46 team-weeks × the Phase-2 scenarios; `gap10` / `gap10b`; `research/summ_gap10.py`)
+These are the same team-weeks and model scenarios (the `gap.ts` seeds) as the Phase-2 comparison against live: `gap4` has
+P8 and P9, `gap5` has P7H_LheldTie and P2LAH_LheldTie. The P8 totals of the new runs equal `gap4`'s, so the scenarios are
+identical. CIs are clustered by team-week.
+
+**10 scenarios per team-week** (P10b not included):
+
+| policy | model E | gap to the Lagrangian bound (300.4) | vs P8 | vs P9 | vs live P7H_LheldTie |
+|---|---|---|---|---|---|
+| **P10** | **289.8** | **10.6** | +0.69 ± 1.02 | **+1.42 ± 1.00** | **+2.80 ± 1.43** |
+| P8 | 289.2 | 11.3 | 0 | +0.73 ± 0.95 | +2.11 ± 1.35 |
+| P9 | 288.4 | 12.0 | −0.73 ± 0.95 | 0 | +1.38 ± 1.37 |
+| live P7H_LheldTie | 287.0 | 13.4 | −2.11 ± 1.35 | −1.38 ± 1.37 | 0 |
+| P2LAH_LheldTie | 281.3 | 19.2 | −7.90 ± 1.76 | −7.17 ± 1.62 | −5.79 ± 1.37 |
+
+**5 scenarios per team-week, with P10b:** still running.
+
+- **Under the model**, P10 is the best policy so far, and it closes part of P8's remaining gap to the bound (10.6 vs 11.3).
+- Unlike P9 (−0.73 vs P8), its rollouts do not make P8 worse.
+- **Checker on these model weeks** (P10, 460 weeks): 0 L_ violations, 0 unforced let-gos, 0 idle benchings.
+
+### Rules and sanity (checker on every real team-week; model weeks from the gap runs)
+| check | P10b real 2025-26 (230) | P10b real 2024-25 (690) | P10 real 2025-26 (230) | P10 real 2024-25 (690) | P10 model (460 wk) | P8 real 2024-25 | P9 real 2024-25 |
+|---|---|---|---|---|---|---|---|
+| **L_* rule violations** (incl. unreachable rearrangements) | **0** | **0** | **0** | **0** | **0** | 0 | 0 |
+| recount ≠ engine total | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S_forfeit_unforced (held score > 0 let go though it could stay) | **0** | **0** | **0** | **0** | **0** | 0 | 0.17/wk (3.6 pts/wk) |
+| S_idle_bench_exante | **0** | **0** | **0** | **0** | **0** | 0 | 0.02/wk |
+| F_yield_idle | 0 | 0 | 0 | 0 | 0 | 0 | 0.19/wk |
+| S_lock_wider | 0.05/wk | 0.06/wk | 0.06/wk | 0.08/wk | 0.04/wk | 0.07/wk | 0.09/wk |
+| F_deadline_benched (let go at own tip-off, then sat) | 0.54/wk | 0.54/wk | 0.53/wk | 0.53/wk | 0.45/wk | 0.57/wk | 0.65/wk |
+| F_deadline_replaced | 3.06/wk | 3.63/wk | 3.24/wk | 3.59/wk | 3.01/wk | 3.76/wk | 3.82/wk |
+| I_lock_final_game | 0.16/wk | 0.17/wk | 0.30/wk | 0.21/wk | | 0 | 0 |
+| I_start_override (race replaced P8's decision) | 2.30/wk | 2.28/wk | 3.22/wk | 3.17/wk | | — | 1.70/wk |
+
+- **Clean on every rule.** P10 / P10b obey every rule on all 920 real team-weeks per policy, with 0 unreachable
+  rearrangements. They make **no dominated choice**: no unforced let-go and no idle benching.
+  - This fixes P9's 0.17 unforced let-gos per week. The repair step and the significance-gated switch make sure the
+    rollouts never bring them back.
+- **Final-game locks.** I_lock_final_game (0.16–0.30/wk) is new compared to P8. A lock of a final-game score is worth the
+  same as holding it, except that it can no longer move or be given up.
+  - The race picks it when the continuation shows that a later tip-off would otherwise give that held score up to seat
+    someone (P8's own later choice).
+  - It is a legal commitment, not a violation.
+
+### What the race changes (per real week; `research/summ_p10.py`)
+| policy | season | tip-off decisions | raced (≥ 2 candidates) | candidates per race | scenarios per race: mean (p50, p90) | stopped before kMax | continuations per race | decisions changed (kind) |
+|---|---|---|---|---|---|---|---|---|
+| P10 | 2025-26 | 25.9 | 25.0 | 6.7 | 157 (176, 256) | 56% | 858 | 3.22 (lock 2.70, unseat 0.28, seat 0.20, play 0.03) |
+| P10b | 2025-26 | 26.0 | 25.2 | 6.8 | 166 (240, 256) | 51% | 916 | 2.30 (lock 1.82, unseat 0.31, seat 0.15) |
+| P10 | 2024-25 | 24.3 | 23.4 | 6.6 | 156 (176, 256) | 57% | 833 | 3.17 (lock 2.58, unseat 0.35, seat 0.21, play 0.02) |
+| P10b | 2024-25 | 24.5 | 23.6 | 6.7 | 166 (224, 256) | 52% | 895 | 2.28 (lock 1.84, unseat 0.29, seat 0.12) |
+
+- **Mostly earlier locks.** About 80% of the changes lock a held score that P8 would keep holding. P8 holds too long:
+  its prices value the option to wait more than the continuations do. The rest seat or unseat one player (hold-vs-start
+  trades, and let-go-to-free-a-slot).
+- **Why P8 continuations score better.** With P8 continuations (P10b) the race changes fewer decisions (2.3 vs 3.2 per
+  week) and gains more. A weaker base (P8f) makes more of P8's decisions look improvable than they are, which matches
+  the Phase-2 reading of P9.
+- **Racing saves about 35% of the work.** A fixed K = 256 for every candidate would cost 6.7 × 256 = 1,715 continuations
+  per race; racing uses 830–920.
+  - About half the races stop early, mostly because no challenger can still beat P8's decision by 0.5 pt.
+  - The other half run to kMax: their challengers are practically tied with the incumbent, so the switch rule then keeps
+    P8's decision.
+
+### Compute per decision (single process, measured while 14 jobs ran on 14 cores, so ~1.5–2× slower than an idle machine)
+| policy | ms per tip-off decision (raced ones) | decision time per real week | Phase-2 references (single process, idle) |
+|---|---|---|---|
+| P8 | ~1.4 | 0.05 s | |
+| P9 | | | ≈ 2.2 s per decision, 67 s per week |
+| **P10** | 2,710 (2,807) / 2,287 (2,376) [2025-26 / 2024-25] | 70 s / 56 s | live P7H_LheldTie ≈ 0.4 s per decision, 12.9 s per week |
+| **P10b** | 13,228 (13,629) / 11,745 (12,178) | 344 s / 287 s | |
+
+- **Decision cost.** P10 costs about the same as P9 per decision. P10b costs about 5×: 12–13 s per tip-off under load,
+  i.e. about 5–8 s on an idle machine.
+- **In the live app**, a real decision is one tip-off, which is affordable for either. The plan view replays all of the
+  week's remaining tip-offs, so with `p10b` it costs a few minutes per refresh (p9's advise view was 166 s).
+
+### Live engine option
+- **Selection:** `lib/live/engine.ts` now accepts `p10` and `p10b`, set by `LOCKIN_ENGINE` or `"engine"` in config.json.
+  - Decisions: P8 plus the P10 race in the plan and replay hooks; continuations by P8f or P8 on their own price state.
+  - Mass simulations: P8f, as for p8 and p9.
+- **Default unchanged:** p7h, with byte-identical fingerprints (`tests/engine_select.test.ts`).
+- **Not switched:** the live app was not touched or restarted.
+
+### Reading and recommendation
+- **The gate is met.** P10b is the first engine whose paired season result beats the live P7H_LheldTie with a CI that
+  excludes 0:
+  - pooled over both seasons: **+2.40 ± 1.39** pts/wk;
+  - per season, week-clustered: 2025-26 +1.81 ± 1.79, 2024-25 +3.30 ± 2.21;
+  - it is ahead in both halves of both seasons and in all 3 synthetic leagues.
+  - The 2025-26 result alone is borderline: its naive CI is ± 2.21.
+  - P10b also beats P8 (+2.27 ± 0.60) and P9 (+1.35 ± 0.70) pooled, with no rule violations and no dominated actions.
+- **Pre-registration.** No P10 parameter was tuned on season outcomes.
+  - Racing settings were fixed before any season run, from a 4-team-week cost check.
+  - The base was chosen by a rule fixed before the 2025-26 results.
+  - The 2024-25 season is therefore an out-of-sample test. There it beat live by +3.30 and P8 by +2.33, more than on
+    2025-26.
+- **P10b vs P10 is not settled:** +0.42 ± 0.65 pooled.
+  - The rule picked P10b on 2025-26 (+0.85); 2024-25 agrees in direction (+0.31) but not significantly.
+  - P10 also beats live pooled (+1.93 ± 1.34) at ~1/5 of P10b's decision cost.
+- **Recommendation.**
+  - Make **`p10b`** the live engine if a few seconds per decision and minutes per plan refresh are acceptable.
+  - Otherwise use **`p10`**: same rules record, about 0.4 pt/wk less, compute like p9.
+  - Either is a one-line config change (`"engine": "p10b"`) and reverts the same way. Switching is the user's decision:
+    it was not done here.
+- **Follow-ups:**
+  - Speed. Most of the time goes to continuations of near-tied candidates; a tie-aware stopping rule or cheaper
+    continuations (task C's profiling) would cut P10b's cost.
+  - Phase 4 contingency tables could precompute P10b's decisions before tip-off.
+  - The model expectation runs ~5–7 pts above real outcomes, so the model gaps above are optimistic in level, not in
+    ranking.
+
+### Reproduce
+```
+npx esbuild research/p10run.ts --bundle --platform=node --format=cjs --outfile=research/dist/p10run.cjs --log-level=error   # (+ gap.ts)
+node research/runtasks.mjs research/dist/p10run.cjs s10 "" 'POLS=P10;P10b' PAR=14                                    # 2025-26, 2.0 h
+node research/runtasks.mjs research/dist/p10run.cjs s24p10 "" SEASON=research/data/season2024.json POLS=P10 PAR=14   # 51 min
+node research/runtasks.mjs research/dist/p10run.cjs s24p10b "" SEASON=research/data/season2024.json POLS=P10b PAR=14 # 4.1 h
+node research/runtasks.mjs research/dist/gap.cjs gap10 "" TASKS=<the 46 gap4 team-weeks> GAPPOLS=P8 N=10 N7=10 GAP7=P10 ITERS=2000 PAR=14   # 43 min
+node research/runtasks.mjs research/dist/gap.cjs gap10b "" TASKS=<same> GAPPOLS=P8 N=10 N7=5 GAP7=P10b ITERS=2000 PAR=14
+cd research/out && python3 ../summ_season.py s8,s9,s10 P10b:P7H_LheldTie,... && python3 ../summ_s24.py s24,s24p10,s24p10b P10b:P8,...
+python3 ../summ_pool.py s8,s9,s10 s24,s24p10,s24p10b P10b:P7H_LheldTie,... && python3 ../summ_p10.py s10 P10,P10b
+python3 ../summ_inv.py s10:P10b,s24p10b:P10b,... && python3 ../summ_gap10.py
+```
+(The driver scripts used for this run are in `research/scratch/p10/pipeline*.mjs`. Bug fixed along the way:
+`research/invariants.ts` ran its own CLI inside any bundle that imported it, e.g. `gap.cjs`. That wasted time but did
+not change results, because each script writes its output last.)
