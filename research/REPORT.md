@@ -808,3 +808,65 @@ node research/runtasks.mjs research/dist/gap.cjs gap5 "" TASKS=<same> GAPPOLS=P2
 cd research/out && python3 ../summ_season.py s8,s9 P8:P2LAH_LheldTie,... && python3 ../summ_inv.py inv4:P8,... && python3 ../summ_gap8.py && python3 ../summ_dec.py
 ```
 Long runs: `node research/launch_detached.mjs <log> <script> ...` (survives the caller).
+
+## Live policy recommendation (overnight 2026-10-14)
+The candidates as live engines (`LOCKIN_ENGINE` / `"engine"` in `~/.sleeper-lockin/config.json`, see below):
+- **P7H_LheldTie** (= `p7h`, live now): the rule plus start and lock simulations.
+- **P8** (= `p8`): the index policy.
+- **P8f**: P8's fast variant; it is what `p8`/`p9` use inside the app's mass simulations.
+- **P9 / P9b** (= `p9` uses P9): P8 plus rollouts.
+
+| | P7H_LheldTie (live) | P8 | P8f | P9 | P9b |
+|---|---|---|---|---|---|
+| **real season** (230 team-weeks, pts/wk) | **284.4** | **284.4** (−0.02 ± 2.40 vs live) | 282.3 | **284.9** (+0.50 ± 2.23) | 284.5 (+0.11 ± 2.30) |
+| win% vs real opponents | **67.8%** | 66.8% | 64.7% | 65.4% | 67.5% |
+| model, paired vs live (46 tw × 10 sc.) | 0 | **+2.11 ± 1.34** | (≈ −0.1)¹ | +1.38 ± 1.35 | n/a |
+| model gap to the Lagrangian bound | 13.4 (subset) / 11.7² | **11.3 / 9.6** | 11.9 | 12.0 (subset) | n/a |
+| rule violations (checker, season) | 0 | 0 | 0³ | 0 | 0 |
+| dominated actions per week (unforced let-go + ex-ante idle bench) | 0.04 | **0** | 0³ | 0.16 | 0.66 |
+| monotonicity failures (46 worst cases, > 3 SE) | 13/46⁴ | **1/46** | n/a | n/a | n/a |
+| decision compute per real week | 12.9 s | **0.05 s** | 0.02 s | 67 s | 82 s |
+
+Notes:
+1. P8f's model E is 289.6 vs P7H 289.7 (all fixes) on the full 230-team-week study.
+2. The second figure is P7H with all Phase-1 fixes (gap2), on the full study.
+3. P8f was measured on model scenarios only (it is P8 with a cheaper price schedule).
+4. Measured for the rule P2LAH_LheldTie that P7H uses for its continuations.
+
+**Live app cost per view** (current league data, league 1344387394811490304, roster 8, week 1 of 2026-27 with 53 of the week's games still to play; 12 worker threads as in the app; one fresh process per measurement, `research/livecost.ts`, `research/livecost_run.mjs`):
+
+| view | p7h (live) | p8 | p9 |
+|---|---|---|---|
+| projection (teamSims, 20k simulated weeks) | 2.2 s | 11.6 s (5.2x) | 11.6 s (5.2x) |
+| advise (decisions + plan + cut-offs + both teams) | 25.0 s | 164.5 s (6.6x) | 165.7 s (6.6x) |
+| Waivers (13 roster variants x 2 weeks x 2000) | 177.2 s | 1186.2 s (6.7x) | 1186.2 s (6.7x) same as p8 |
+| League (10 teams x 20k) | 151.3 s | 782.0 s (5.2x) | 782.0 s (5.2x) same as p8 |
+| IR check | 17.8 s | 395.6 s (22.3x) | 395.6 s (22.3x) same as p8 |
+
+- p9 differs from p8 only in the plan's start decisions (index rollouts), so its projection, Waivers, League and IR runs are identical to p8's (measured for the projection and advise; the other three are the same computation).
+- The P8 family's extra cost comes from two places:
+  - ~6.6× per simulated week (P8f re-solves prices after each result);
+  - the week-start price solve (~5 s) for every new roster variant and worker task. That is why IR, which simulates many small roster variants on one thread, is 22× slower.
+- On this week (week 1, nothing played yet), the projected total is 281.8 under p8/p9 vs 276.8 under p7h: the simulated rest of the week is played better (model view). Win probability 51.2% vs 52.3%: the opponent's simulated week also uses the engine.
+
+
+**Recommendation: keep `p7h` (the current live algorithm) as the default engine.**
+- No candidate beats it on the real season beyond noise: P9 +0.5 ± 2.2, P8 −0.0 ± 2.4. The gate (beat 284.4) is not met.
+- With the P8 family inside the app's mass simulations, every simulation-heavy view becomes several times slower (table above).
+- P9's rollouts add no value over P8 and introduce dominated actions.
+
+**If an alternative is tried, it should be `p8`.** It is equal on real outcomes, better under the model (+2.1 ± 1.3), obeys every rule with no dominated choices, and largely fixes "an extra player hurts" (which also makes Waivers values more sensible). Its cost is in the projection/Waivers/league views, not in the decisions themselves (0.05 s per week).
+- A cheaper hybrid deserves a test: P8 for the decisions (plan, cut-offs, lock calls), with the current fast rule kept for projections and Waivers.
+- The switch is per process and safe to flip back: caches are keyed by engine, and `p7h` keeps byte-identical fingerprints.
+
+### Configurable engine (`lib/live/engine.ts`)
+- **Choice:** `LOCKIN_ENGINE=p7h|p8|p9` (env wins), else `"engine"` in `~/.sleeper-lockin/config.json` (directory overridable with `LOCKIN_CONFIG_DIR`), else `p7h`. The config is re-read every 30 s; unknown values fall back to `p7h` with a warning.
+- **Decisions** (`decisionPolicy`): `p7h` uses `POLICY`; `p8`/`p9` use P8 (prices re-solved at every tip-off). This covers the plan's tip-offs and replay.
+- **Plan / replay hooks:**
+  - `p7h`: unchanged (start-sit simulations / lock simulations);
+  - `p8`: none;
+  - `p9`: index rollouts played by P8f.
+- **Mass simulations** (`simPolicy`): `p7h` uses `POLICY`; `p8`/`p9` use P8f with fresh week-start prices per simulation. This covers decision rollouts (lock/hold/bench options), projections (`teamSims`/`weekValues`, also in the worker threads), lock cut-off simulations (`lockWaitTotals` forces lock or let-go through the index policy's decision hook), Waivers, league and IR.
+- **Unchanged for every engine:** the quick lock cut-off seed (`lockThreshold`) still comes from the rule's `evalLock`. For `p8`/`p9` it only seeds the simulated cut-off of the first tip-off and approximates the later ones.
+- **Caches:** `fingerprint()` adds the engine for non-default engines only. Default fingerprints are byte-identical, so the default behaviour and its caches are unchanged.
+- **Tests:** `tests/engine_select.test.ts` (selection, default unchanged, simulations and cut-offs on p8/p9, hooks).
