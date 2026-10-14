@@ -870,3 +870,140 @@ Notes:
 - **Unchanged for every engine:** the quick lock cut-off seed (`lockThreshold`) still comes from the rule's `evalLock`. For `p8`/`p9` it only seeds the simulated cut-off of the first tip-off and approximates the later ones.
 - **Caches:** `fingerprint()` adds the engine for non-default engines only. Default fingerprints are byte-identical, so the default behaviour and its caches are unchanged.
 - **Tests:** `tests/engine_select.test.ts` (selection, default unchanged, simulations and cut-offs on p8/p9, hooks).
+
+## Second season validation (2024-25)
+Every policy choice so far was made on one real season (2025-26, 230 team-weeks, paired CIs about ±2.4). This section
+re-runs the comparison on independent data: the 2024-25 NBA regular season, with synthetic leagues because our league
+did not exist then.
+
+### Data (`research/fetch_season2024.py`, `research/build_season2024.py` → `research/data/season2024.json`)
+**Sources** (same endpoints as the 2025-26 fetchers):
+- Sleeper per-game stats and projections for weeks 1–23 (22 Oct 2024 – 30 Mar 2025, the same 23-week window as 2025-26).
+- Stats for weeks 24–25, used only to know whether an injured player ever came back.
+- Sleeper season totals for 2022-23 and 2023-24 (draft values).
+- ESPN tip-off times for all 152 game days (0 missing).
+- Downloads were sequential, 0.6 s apart, with retries, and are cached in `research/data/raw2024/` (not committed).
+
+**Same game construction as `build_dataset.py`:**
+- Every rostered player gets one game per scheduled game of his team, with the team taken from his own rows, else his nearest row in time.
+- DNP games without any Sleeper row are therefore included as played = false.
+- Scoring and slots are copied from our league.
+- Positions come from Sleeper's current player data (the same approximation as 2025-26).
+
+**No look-ahead in projections.**
+- Sleeper's `last_modified` is after tip-off for 100% of projection rows in **both** seasons, so the timestamp can't prove the projections are pre-game. The statistics can:
+
+| per-game data, rostered players | 2025-26 (real league) | 2024-25 (synthetic leagues) |
+|---|---|---|
+| team-weeks / players per roster | 230 / 20.6 | 690 / 19.0 |
+| games per team-week | 67.2 | 62.0 |
+| DNP share | 25.7% | 24.9% |
+| mean fantasy points when played | 19.7 | 20.1 |
+| projection present: played / DNP | 99.3% / 1.6% | 99.0% / 2.2% |
+| corr(projection, actual) | 0.502 | 0.545 |
+| mean projection vs actual (played) | 22.8 vs 19.8 | 23.2 vs 20.3 |
+
+- In 2024-25, corr(projection, actual) is 0.550 on the same games where corr(mean of the player's last 10 games, actual) is 0.503. A projection updated after the game would correlate close to 1, so these are pre-game forecasts. Only 10 of 11,485 projections equal the actual score.
+- **Projection presence leaks sit-outs** in 2024-25 exactly as in 2025-26: present for 99% of played games and 2% of DNPs. It is handled the same way: `btcommon` never uses presence, only the value, with its own pre-game fallback when there is none. The walk-forward model (projection correction, spread, DNP chain) is fitted on earlier 2024-25 weeks only.
+
+**Synthetic leagues.** Three 10-team leagues: rids 1–10 = A, 11–20 = B, 21–30 = C.
+- Each league is a 19-round snake draft, so every roster has 19 players.
+- **Preseason value** uses prior seasons only: fantasy points per game under our scoring, with 2023-24 games weighted 2 and 2022-23 games weighted 1, shrunk toward 15 FP/G by 8 pseudo-games.
+  - Rookies have no value and are never drafted.
+  - The pool is every player with at least one 2024-25 Sleeper row.
+  - Sleeper's 2024 season projections were not used: they were edited during the season (`last_modified` up to 2026).
+- **Draft variation:** each league has its own random draft order, and each team ranks players by value × exp(N(0, 0.10)).
+- **Positional balance:** every roster must cover PG, PG, SG, SG, SF, SF, PF, PF, C, C (bipartite matching on eligibility). A team takes its best-ranked player unless the remaining picks are needed to complete that cover. At most 4 C-only players per team.
+- **Lost-for-season replacement** (the only roster change in season), applied at the start of week w ≥ 3. A player is replaced if:
+  - (a) his team played in weeks w−2 and w−1 and he played none of those games, **and**
+  - (b) he plays no further 2024-25 regular-season game (weeks w–25). This uses hindsight, as a stand-in for the season-ending news a manager would act on.
+
+  He is replaced by the league's best free agent who shares a position with him: the highest mean of his last ≤ 10 games before week w, among players with ≥ 3 games in weeks w−2..w−1.
+  - 65 replacements in total, 23 distinct players, e.g. week 3: Saddiq Bey, Bojan Bogdanović, Christian Wood; Wembanyama and Embiid in weeks 20–21; Maxey, Paul George and Kyrie Irving late.
+  - Players who came back, even in April (Brunson, Lively), are kept.
+- **Matchups:** round robin within each league. There are no human scores.
+- The first rounds look like 2024 drafts: Jokić, Embiid, Dončić, Giannis, LeBron, Davis, SGA, Sabonis, Tatum, Wembanyama, Durant. Embiid goes #1–2 on prior-season value and then plays 19 games, which is realistic preseason information.
+
+**Caveat: the three leagues share most players.** 178 of the 203 players rostered in week 1 are on a team in all three leagues.
+- Team-weeks within a week are therefore correlated: the same games appear on three rosters.
+- Besides the naive paired CI, every result below has a **week-clustered** CI: average the week's 30 team-week differences, then take the CI over the 23 weekly means.
+- On 2025-26, with disjoint rosters, the two CIs are nearly equal (P8 − P7H: ±2.41 naive, ±2.30 clustered). The clustered one is the honest CI here.
+
+### Season backtest (690 team-weeks, real 2024-25 outcomes, paired, same seeds; `research/summ_s24.py`)
+Same code and settings as the 2025-26 Phase-2 season runs (`research/p8exp.ts`, NSC = 0, K = KS = 200).
+- Win% has no human opponent here. It is the share of team-weeks in which the policy beats the opponent's score under the live bot (P7H_LheldTie) in the same runs.
+
+| policy | pts/wk | vs | paired diff | 95% CI naive | **95% CI week-clustered** | league A / B / C | weeks 1–11 / 12–23 | better/worse | win% vs live-bot opp. (baseline) |
+|---|---|---|---|---|---|---|---|---|---|
+| P7H_LheldTie (live) | 283.2 | P2LAH_LheldTie 276.7 | +6.52 | ± 1.41 | **± 1.99** | +6.7 / +6.0 / +6.9 | +4.67 / +8.21 | 401/224 | 50.0% (47.2%) |
+| P8 | 284.2 | P2LAH_LheldTie 276.7 | +7.49 | ± 1.82 | **± 2.59** | +8.9 / +6.9 / +6.7 | +4.88 / +9.90 | 430/243 | 50.3% (47.2%) |
+| P8f | 282.4 | P2LAH_LheldTie 276.7 | +5.66 | ± 1.82 | ± 2.64 | +5.9 / +5.9 / +5.2 | +3.04 / +8.07 | 392/282 | 48.7% (47.2%) |
+| **P8** | 284.2 | **P7H_LheldTie 283.2** | **+0.98** | ± 1.40 | **± 2.12** | +2.2 / +0.9 / −0.2 | +0.20 / +1.68 | 331/299 | 50.3% (50.0%) |
+| **P9** | **285.1** | **P7H_LheldTie 283.2** | **+1.92** | ± 1.34 | **± 2.38** | +2.8 / +2.2 / +0.8 | +0.62 / +3.12 | 341/287 | 52.0% (50.0%) |
+| P8f | 282.4 | P7H_LheldTie 283.2 | −0.86 | ± 1.45 | ± 1.85 | −0.8 / −0.1 / −1.7 | −1.63 / −0.15 | 312/326 | 48.7% (50.0%) |
+| P9 | 285.1 | P8 284.2 | +0.95 | ± 0.93 | ± 1.03 | +0.6 / +1.2 / +1.0 | +0.42 / +1.44 | 218/177 | |
+| P8 | 284.2 | P8f 282.4 | +1.83 | ± 1.11 | ± 1.07 | +3.0 / +1.0 / +1.5 | +1.83 / +1.83 | 258/201 | |
+| P9b (P8 + rollouts played by P8, K = 50) | 283.6 | P7H_LheldTie 283.2 | +0.39 | ± 1.42 | ± 2.37 | +1.7 / +0.4 / −0.9 | −1.24 / +1.89 | 327/319 | 51.4% (50.0%) |
+| P9b | 283.6 | P8 284.2 | −0.58 | ± 1.22 | ± 1.59 | −0.5 / −0.5 / −0.7 | −1.44 / +0.21 | 242/264 | |
+| P9b | 283.6 | P9 285.1 | **−1.53** | ± 1.09 | **± 1.14** | −1.1 / −1.8 / −1.7 | −1.86 / −1.23 | 222/273 | |
+
+### Do the 2025-26 conclusions replicate? (`research/summ_pool.py`; week-clustered 95% CIs; pooled = inverse-variance mean of the two seasons)
+| comparison | 2025-26 (real league, 230) | 2024-25 (synthetic, 690) | pooled | replicates? |
+|---|---|---|---|---|
+| live P7H_LheldTie − rule P2LAH_LheldTie (simulations' value) | +7.10 ± 3.02 | +6.52 ± 1.99 | **+6.70 ± 1.66** | **yes** |
+| P8 − P2LAH_LheldTie (index rule vs old rule) | +7.08 ± 3.49 | +7.49 ± 2.59 | **+7.35 ± 2.08** | **yes** |
+| P8f − P2LAH_LheldTie | +4.95 ± 3.71 | +5.66 ± 2.64 | +5.42 ± 2.15 | yes |
+| P8 − P8f (price re-solve every tip-off is worth it) | +2.13 ± 2.21 | +1.83 ± 1.07 | **+1.89 ± 0.97** | **yes** |
+| **P8 − live P7H_LheldTie** | −0.02 ± 2.30 | +0.98 ± 2.12 | **+0.52 ± 1.56** | yes: a tie again (model predicted +2.1 ± 1.3) |
+| **P9 − live P7H_LheldTie** | +0.50 ± 2.23 | +1.92 ± 2.38 | **+1.17 ± 1.63** | yes: not significant, leaning P9 |
+| P9b − live P7H_LheldTie | +0.11 ± 2.42 | +0.39 ± 2.37 | +0.25 ± 1.69 | yes: a tie |
+| P9b − P8 | +0.13 ± 1.74 | −0.58 ± 1.59 | −0.26 ± 1.18 | yes: no gain from rollouts played by P8 at K = 50 |
+| P8f − live P7H_LheldTie | −2.15 ± 2.24 | −0.86 ± 1.85 | −1.38 ± 1.43 | yes (P8f is not a live candidate) |
+| P9 − P8 (do rollouts help P8?) | +0.53 ± 1.61 | +0.95 ± 1.03 | **+0.83 ± 0.87** | weakly: positive in both seasons and all 3 leagues, CI just includes 0 |
+
+### Rules and sanity (checker on 2024-25, `inv24`: P8 and P9 on the 690 real team-weeks, P8 on 20 model scenarios each)
+- The checker's totals equal the backtest totals in **1,380 / 1,380** runs.
+- The checker's own legal recount equals the engine total everywhere.
+
+| check | P8 real (690 wk) | P9 real (690 wk) | P8 model (13,800 wk) | P8 real 2025-26 | P9 real 2025-26 |
+|---|---|---|---|---|---|
+| **L_* rule violations** | **0** | **0** | **0** | 0 | 0 |
+| S_forfeit_unforced (held score > 0 let go though it could stay) | **0** | 0.17/wk (3.6 pts/wk) | 0 | 0 | 0.16/wk |
+| S_idle_bench_exante | **0** | 11 (0.02/wk) | 0 | 0 | 1 |
+| S_lock_wider | 0.07/wk | 0.09/wk | 0.08/wk | 0.06/wk | 0.08/wk |
+| F_deadline_benched (let go at own tip-off, then sat) | 0.57/wk | 0.65/wk | 0.59/wk | 0.60/wk | 0.64/wk |
+| F_deadline_replaced | 3.76/wk | 3.82/wk | 3.74/wk | 3.23/wk | 3.24/wk |
+| F_yield_idle | 0 | 0.19/wk | 0 | 0 | 0.20/wk |
+| I_start_override (rollouts changed the index decision) | — | 1.70/wk | — | — | 1.71/wk |
+
+The rule and sanity profile replicates almost to the decimal:
+- P8 obeys every rule and makes no dominated choice.
+- P9's rollouts bring back about 0.17 unforced let-gos per week, the same as on 2025-26.
+
+### Reading
+- **The big effects replicate.** Simulation on top of the rule (+6.5 vs +7.1) and the index rule over the old rule (+7.5 vs +7.1) are the same size on a second season, with different rosters and a different year.
+- **P8 vs live is a tie in both seasons.** It leans the other way this time: −0.02 on 2025-26, +0.98 ± 2.12 on 2024-25, pooled +0.52 ± 1.56.
+  - The model's +2.1 edge for P8 is still not confirmed on real outcomes, but it is no longer contradicted either. The pooled CI includes +2.
+- **P9 has the best point estimate in both seasons** (+0.50, +1.92; pooled +1.17 ± 1.63 vs live; +0.83 ± 0.87 vs P8).
+  - This is more favourable to the rollouts than the Phase-2 model result (P9 − P8 −0.73 ± 0.94).
+  - None of these differences is significant, and P9 still makes ~0.17 dominated let-gos per week.
+- **P9b (rollouts played by P8 itself, K = 50) is worse than P9 (played by P8f, K = 200).** It loses by −1.53 ± 1.14 on 2024-25, in all 3 leagues and both halves, and ties live and P8 in both seasons.
+  - The number of rollouts matters more than the strength of the policy that plays them. At K = 50 the best-looking alternative is often best by noise, which supports the Phase-2 winner's-curse reading.
+  - Phase 3's adaptive sampling (racing with common random numbers) is the way to afford P8-played rollouts.
+- **The gate is still not met.** No candidate beats the live P7H_LheldTie with a CI excluding 0 on either season or pooled.
+- **The live recommendation stands:** keep `p7h`; `p8` is the low-cost equal alternative.
+  - The case for P9 is somewhat stronger than after one season. Removing its dominated let-gos (rollouts that may not choose a dominated action) would be a cheap next step before testing it again.
+- **The synthetic-league design limits what this season can say.**
+  - Rosters are drafted, not managed: no waivers or streaming, no IR stash, no human tendencies.
+  - The three leagues share most players.
+  - The point totals are on the same scale as 2025-26 (P2LAH_LheldTie 276.7 vs 277.3; live 283.2 vs 284.4), which suggests the test is comparable.
+
+### Reproduce
+```
+python3 -I research/fetch_season2024.py && python3 -I research/build_season2024.py      # data (~5 min of polite downloads)
+npx esbuild research/p8exp.ts --bundle --platform=node --format=cjs --outfile=research/dist/p8exp.cjs --log-level=error   # (+ invariants)
+node research/runtasks.mjs research/dist/p8exp.cjs s24 "" SEASON=research/data/season2024.json 'POLS=P2LAH_LheldTie;P7H_LheldTie;P8;P8f;P9' NSC=0 PAR=14   # 64 min
+node research/runtasks.mjs research/dist/p8exp.cjs s24b "" SEASON=research/data/season2024.json POLS=P9b NSC=0 PAR=14   # 61 min
+node research/runtasks.mjs research/dist/invariants.cjs inv24 main SEASON=research/data/season2024.json POLS_REAL=P8,P9 SIMPOL=P8 NSIM=20 NMONO=2 PAR=14   # 55 min
+cd research/out && python3 ../summ_s24.py s24,s24b P8:P7H_LheldTie,... && python3 ../summ_pool.py s8,s9 s24,s24b P8:P7H_LheldTie,... && python3 ../summ_inv.py inv24:P8,inv24:P9,inv24:P8:sim
+```
