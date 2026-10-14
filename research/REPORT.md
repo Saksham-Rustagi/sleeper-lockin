@@ -1007,3 +1007,116 @@ node research/runtasks.mjs research/dist/p8exp.cjs s24b "" SEASON=research/data/
 node research/runtasks.mjs research/dist/invariants.cjs inv24 main SEASON=research/data/season2024.json POLS_REAL=P8,P9 SIMPOL=P8 NSIM=20 NMONO=2 PAR=14   # 55 min
 cd research/out && python3 ../summ_s24.py s24,s24b P8:P7H_LheldTie,... && python3 ../summ_pool.py s8,s9 s24,s24b P8:P7H_LheldTie,... && python3 ../summ_inv.py inv24:P8,inv24:P9,inv24:P8:sim
 ```
+
+## Engine v2 — Phase 3: one complete decision per tip-off (P10)
+
+### Design (`lib/engine/p10.ts`; tests `tests/p10.test.ts`)
+**One decision per moment.** P8 already decides everything at a tip-off in one assignment: tonight's starts and their
+slots, and for every held score keep (hold) / lock (which slot) / let go, including the lock-or-play-or-let-go of a held
+player whose own game tips now. Deadlines coincide with tip-offs, and a lock that is not forced can always wait until
+the next tip-off, so these moments are the only ones that matter. P10 searches over **complete joint decisions** at each
+of them. There is no separate lock rollout and no separate start/sit search. Holding is one of the evaluated actions,
+not a fallback.
+
+**Candidates** (`candidates`). Each comes from the P8 context, i.e. every candidate player's priced advantage for every
+action (`Cand.wa`: start / lock / hold per slot, before P8's filters). Each candidate is re-solved as one exact
+assignment, so the rest of the lineup adapts:
+- P8's own decision (the incumbent);
+- seat or unseat each player. Unseating a held score means letting it go; seating a let-go score means holding it and
+  sitting someone else;
+- every other action of each held score: hold ↔ lock, and at his deadline lock ↔ play the new game;
+- lock in each other eligible slot type;
+- local swaps: a seated player gives up his place to an unseated one who is eligible for his slot.
+
+Then:
+- **Margin and repair.** Alternatives more than 15 priced points below the incumbent are dropped. Each remaining one is
+  **repaired** against weakly dominated actions:
+  - a held score let go while an eligible slot stays free is kept (holding is never worse than letting go now: he can
+    be let go at the next tip-off);
+  - a tipping player sat while an eligible slot stays idle for his whole game (no later tip-off can use it) is started.
+- **Reachability and legality.** Each candidate is made **reachable** by legal Sleeper moves (`reachable`, rule 9) and
+  checked by `decisionProblem`:
+  - starts only for tonight's players;
+  - locks and holds only for held scores, and no holding through one's own tip-off;
+  - free, eligible slots, each used once;
+  - the held players' rearrangement reachable from where they sit (BFS of `moves.ts`).
+- **Selection.** Candidates are de-duplicated, and the best 8 by priced score are raced.
+
+**Racing** (`race`, common random numbers, adaptive):
+- **Rounds:** 16 scenarios per round. Every surviving candidate is scored on the same scenarios by playing the rest of
+  the week with the base policy.
+- **Elimination:** from 32 scenarios on, a challenger is dropped when mean(it − leader) + 2 se < 0. The incumbent is
+  never dropped.
+- **Stopping:** the race stops when
+  - no remaining challenger can still beat the incumbent by 0.5 pt (mean + 2 se < 0.5), or
+  - a single challenger is left and is significantly better, or
+  - 256 scenarios are reached.
+- **Switching:** P8's decision is replaced only by a challenger that beats it by > 0.5 pt **and** > 2 se. This guards
+  against the winner's curse that hurt P9b at fixed K = 50.
+- **Base for the continuations:**
+  - **P10:** P8f (prices re-solved after new results, 30 iterations).
+  - **P10b:** P8 (prices re-solved at every tip-off, 100 iterations).
+  - Both run on their own price state, seeded from the real decision's prices.
+- **Choice of base:** it was decided by measurement, with this rule fixed before the results: P10b if it beats P10 by
+  ≥ 0.5 pts/wk on the 2025-26 real season, else the 4–5× cheaper P10.
+- **Parameters:** chosen before the season runs from a 4-team-week cost check (`p10cost`). At minGain 0.25 half the
+  races ran to kMax on practical ties, so minGain was raised to 0.5, the clear-gain threshold of P7H and P9.
+
+**Tests** (`tests/p10.test.ts`, 7 tests; `npm test` 55/55):
+- **racing:** picks a clearly better challenger, drops clearly worse ones early, keeps the incumbent on ties, and stops
+  at kMin when nobody can win;
+- **`decisionProblem`:** catches starts of non-tipping players, ineligible slots, a slot used twice, locked or in-game
+  slots, holds of non-held players, holding through one's own tip-off, and the unreachable 3-cycle (reachable once a
+  spare slot exists);
+- **repair:** keeps a let-go held score when a slot stays free, and starts a player sat into an idle slot;
+- **random weeks:** on 6 random 9-slot weeks, **every raced candidate** at every tip-off is legal and reachable; P10
+  passes the checker with 0 L_ violations, 0 unforced let-gos, 0 ex-ante idle benchings and 0 F_yield_idle, and the
+  recount equals the engine total;
+- **pathological cases of the old policies:**
+  - "keep holding a good score and sit tonight's weak player": hold, let go + start, and lock are all candidates, and
+    P10 holds;
+  - deadline lock-or-play together with tonight's starts, in one search;
+  - "let go at his own tip-off, then sat" never appears while his slot would stay idle.
+
+
+### Season backtest 2025-26 (real outcomes, 230 team-weeks, paired, same seeds; `research/p10run.ts`, prefix `s10`)
+Baselines are the Phase-2 runs (`s8`, `s9`): same team-weeks and seeds. P8, P9 and P7H_LheldTie are deterministic
+given the seed, and `p10run` reproduces the P8 totals exactly.
+- **Columns:** `research/summ_season.py` for win% vs the real (human) opponent; `research/summ_s24.py … ../data/season.json` for the week-clustered CI.
+
+| policy | pts/wk | vs | paired diff | 95% CI naive | 95% CI week-clustered | weeks 1–11 / 12–23 | better/worse weeks | win% vs real opp. (baseline) |
+|---|---|---|---|---|---|---|---|---|
+| P10 (P8f continuations) | 285.4 | P8 284.4 | +0.98 | ± 1.40 | ± 1.07 | +0.82 / +1.13 | 81/59 | 66.8% (66.8%) |
+| **P10b** (P8 continuations) | **286.2** | P8 284.4 | **+1.83** | ± 1.40 | ± 1.70 | +0.98 / +2.62 | 70/41 | 68.2% (66.8%) |
+| P10b | 286.2 | P10 285.4 | +0.85 | ± 1.37 | ± 1.44 | +0.15 / +1.49 | 60/55 | |
+| P10 | 285.4 | P9 284.9 | +0.46 | ± 1.52 | ± 1.47 | +1.70 / −0.68 | 84/65 | 66.8% (65.4%) |
+| **P10b** | 286.2 | P9 284.9 | **+1.31** | **± 1.14** | **± 1.15** | +1.85 / +0.81 | 85/47 | 68.2% (65.4%) |
+| P10 | 285.4 | live P7H_LheldTie 284.4 | +0.96 | ± 2.22 | ± 1.84 | +0.98 / +0.95 | 113/93 | 66.8% (67.8%) |
+| **P10b** | 286.2 | live P7H_LheldTie 284.4 | **+1.81** | ± 2.21 | ± 1.79 | +1.13 / +2.44 | 115/95 | 68.2% (67.8%) |
+
+**Base chosen by the pre-set rule:** P10b − P10 = +0.85 ≥ 0.5, so **P10b** (continuations played by P8) is the Phase-3
+engine, and it was also run on 2024-25. P10 was kept in every comparison as the cheap variant.
+
+### Season backtest 2024-25 (690 team-weeks, 3 synthetic leagues, real outcomes; prefix `s24p10` / `s24p10b`; `research/summ_s24.py`)
+Win% is against the opponent's score under the live bot (P7H_LheldTie), as in the second-season section.
+
+| policy | pts/wk | vs | paired diff | 95% CI naive | **95% CI week-clustered** | league A / B / C | weeks 1–11 / 12–23 | better/worse | win% vs live-bot opp. (baseline) |
+|---|---|---|---|---|---|---|---|---|---|
+| **P10** | **286.2** | P8 284.2 | **+2.02** | ± 0.93 | **± 0.80** | +1.9 / +2.4 / +1.8 | +1.80 / +2.22 | 242/176 | 51.0% (50.3%) |
+| P10 | 286.2 | P9 285.1 | +1.07 | ± 0.94 | ± 1.08 | +1.3 / +1.1 / +0.8 | +1.38 / +0.78 | 241/209 | 51.0% (52.0%) |
+| **P10** | 286.2 | live P7H_LheldTie 283.2 | **+2.99** | ± 1.26 | **± 1.94** | +4.1 / +3.3 / +1.6 | +2.00 / +3.90 | 359/251 | 51.0% (50.0%) |
+| P10 | 286.2 | P8f 282.4 | +3.85 | ± 1.11 | ± 1.08 | +4.9 / +3.4 / +3.3 | +3.63 / +4.05 | 321/199 | 51.0% (48.7%) |
+| P10b | (running) | | | | | | | | |
+
+### Both seasons pooled (`research/summ_pool.py`; week-clustered 95% CIs, inverse-variance pooled)
+| comparison | 2025-26 (real league, 230) | 2024-25 (synthetic, 690) | pooled |
+|---|---|---|---|
+| P10 − P8 | +0.98 ± 1.07 | +2.02 ± 0.80 | **+1.65 ± 0.64** |
+| P10 − P9 | +0.46 ± 1.47 | +1.07 ± 1.08 | +0.85 ± 0.87 |
+| **P10 − live P7H_LheldTie** | +0.96 ± 1.84 | +2.99 ± 1.94 | **+1.93 ± 1.34** |
+| P10b − … | | (running) | |
+
+### Still running (interim section)
+- Model study (46 team-weeks × the Phase-2 scenarios): P10 on 10, P10b on 5 (`gap10`, `gap10b`).
+- P10b on 2024-25 (`s24p10b`).
+- Rules / compute tables and the recommendation follow when these finish.
