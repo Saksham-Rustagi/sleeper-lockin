@@ -14,21 +14,28 @@
 // strand a teammate, and deadline lock-or-let-go and tonight's start are one joint decision.
 import * as E from "./core";
 import * as L from "./lagrange";
+import { reach } from "./moves";
 
 export interface IndexOpts {
-  resolve: "never" | "day" | "tip"; // re-solve the prices from the current state (top-level decisions only)
+  // re-solve the prices from the current state: never / at each day's first tip-off / at every tip-off / at a tip-off
+  // only when some game ended since the last solve (new information)
+  resolve: "never" | "day" | "tip" | "info";
   weekIters?: number;               // Adam iterations per stage for the week-start prices (default 100k)
   iters?: number;                   // warm-started iterations per re-solve (default 3000)
   lr?: number;                      // re-solve rate (default 0.03)
   // after the priced assignment, start leftover tipping players in free slots (best unpriced advantage first):
   // "idle" only where no later-tipping player could use the slot during his game, "all" anywhere, "none" never
   fill?: "none" | "idle" | "all";
+  slot?: string;                    // price state used ("top": real decisions; rollouts use their own, seeded from top)
+  keep?: number;                    // extra weight (pts) for keeping a positive held score (default 0)
 }
 // ---------------- prices ----------------
 interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number }
-interface Cache { week: View; cur: View; day: number; solves: number; solveMs: number }
+interface Cache { week: View; slots: Map<string, { cur: View; day: number; ends: number }>; solves: number; solveMs: number; endTimes: number[] }
 const CACHE = new WeakMap<E.TeamWeek, Cache>();
 export function priceStats(tw: E.TeamWeek) { const c = CACHE.get(tw); return c ? { solves: c.solves, solveMs: c.solveMs, weekBound: c.week.bound } : null; }
+const slotOf = (c: Cache, name: string) => { let x = c.slots.get(name); if (!x) { x = { cur: c.week, day: -1, ends: 0 }; c.slots.set(name, x); } return x; };
+const endedBy = (c: Cache, t: number) => { let lo = 0, hi = c.endTimes.length; while (lo < hi) { const m = (lo + hi) >> 1; if (c.endTimes[m] <= t) lo = m + 1; else hi = m; } return lo; };
 function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: number, from?: View): View {
   const si = L.fromState(tw, st, t);
   let mu0: Float64Array | undefined;
@@ -54,17 +61,19 @@ function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
   if (!c) {
     const t0 = Math.min(...tw.games.map((g) => g.tip));
     const t1 = Date.now(); const week = solveView(tw, E.initState(tw), t0, o.weekIters ?? 100000, 0);
-    c = { week, cur: week, day: -1, solves: 1, solveMs: Date.now() - t1 }; CACHE.set(tw, c);
+    c = { week, slots: new Map(), solves: 1, solveMs: Date.now() - t1, endTimes: tw.games.map((g) => g.end).sort((a, b) => a - b) }; CACHE.set(tw, c);
   }
-  const day = E.dayEnd(t);
-  if (o.resolve === "tip" || (o.resolve === "day" && day !== c.day)) {
-    if (c.cur.t0 !== t) { const t1 = Date.now(); c.cur = solveView(tw, st, t, o.iters ?? 3000, o.lr ?? 0.03, c.cur); c.solves++; c.solveMs += Date.now() - t1; }
-    c.day = day;
+  const ps = slotOf(c, o.slot ?? "top"); const day = E.dayEnd(t); const ends = endedBy(c, t);
+  if (o.resolve === "tip" || (o.resolve === "day" && day !== ps.day) || (o.resolve === "info" && ends !== ps.ends)) {
+    if (ps.cur.t0 !== t) { const t1 = Date.now(); ps.cur = solveView(tw, st, t, o.iters ?? 100, o.lr ?? 0.03, ps.cur); c.solves++; c.solveMs += Date.now() - t1; }
+    ps.day = day; ps.ends = ends;
   }
-  return c.cur;
+  return ps.cur;
 }
 // a new top-level simulation of this week starts: back to the week-start prices
-export function resetPrices(tw: E.TeamWeek) { const c = CACHE.get(tw); if (c) { c.cur = c.week; c.day = -1; } }
+export function resetPrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (c) { const ps = slotOf(c, slot); ps.cur = c.week; ps.day = -1; ps.ends = 0; } }
+// a rollout starts from the real decision's current prices
+function seedPrices(tw: E.TeamWeek, to: string, from = "top") { const c = CACHE.get(tw); if (c) { const a = slotOf(c, from), b = slotOf(c, to); b.cur = a.cur; b.day = a.day; b.ends = a.ends; } }
 
 // ---------------- values from the priced DPs ----------------
 function playProb(tw: E.TeamWeek, p: number, gi: number, lp: number) {
@@ -183,12 +192,17 @@ export function indexContext(tw: E.TeamWeek, pol: E.Policy, st: E.State, e: E.Ev
       }
     } else {
       const x = st.pendingX[p]; const kn = V.nextK(p, t); base = V.C(p, kn, lp); // let go: his DP value from his next game on
+      // Holding is slot-independent (his best hold value: held players can be rearranged freely, so price noise between
+      // interchangeable slots must not decide who keeps a slot); a lock is slot-specific and needs a real advantage.
+      // A score kept only as an option gets a tiny weight (keeps a free slot when nobody values it more), staying put
+      // breaks ties (no needless moves). Option keep (default 0) adds pts for keeping a positive score.
+      let hvMax = -Infinity; for (const s of free) if (tw.slots[s] & tw.pmask[p]) hvMax = Math.max(hvMax, V.holdVal(p, x, s, kn));
+      const holdW = Math.max(hvMax - base, 0) + 1e-6 * (1 + Math.max(0, x) / 100) + (x > 0 ? (pol.index!.keep ?? 0) : 0);
       for (const s of free) {
         if (!(tw.slots[s] & tw.pmask[p])) continue;
-        const hv = V.holdVal(p, x, s, kn), lv = V.lockVal(x, s);
-        const val = Math.max(hv, lv), a: Act = lv > hv ? 1 : 2;
-        // keeps a free slot whenever nobody values it more (tiny weight, better scores first)
-        w[s] = Math.max(val - base, 1e-6 * (1 + Math.max(0, x) / 100)); act[s] = a;
+        const lv = V.lockVal(x, s);
+        if (lv > hvMax && lv - base > 0 && x > 0 && lv - base > holdW) { w[s] = lv - base; act[s] = 1; }
+        else { w[s] = holdW + (st.lastSlot[p] === s ? 1e-7 : 0); act[s] = 2; }
       }
     }
     cands.push({ p, tipping: gi !== undefined, held, gi: gi ?? -1, w, act, base, raw });
@@ -242,7 +256,31 @@ export function applyIndexDecision(tw: E.TeamWeek, st: E.State, e: E.Ev, d: Inde
 export function indexGroup(tw: E.TeamWeek, pol: E.Policy, st: E.State, e: E.Ev, evIdx: number, hooks?: E.Hooks) {
   const ctx = indexContext(tw, pol, st, e); if (!ctx) return;
   const alt = hooks?.decideIndex?.(st, e.t, evIdx, ctx);
-  applyIndexDecision(tw, st, e, alt ?? ctx.best);
+  applyIndexDecision(tw, st, e, reachable(tw, st, ctx, alt ?? ctx.best));
+}
+// Rule 9: the rearrangement must be reachable by legal moves without benching a kept held score. Held players sit where
+// they were last placed (lastSlot). Keep the decision if reachable; else seat held players in an equivalent reachable
+// arrangement; else re-decide with every held player staying where he is (always reachable: starters enter empty slots).
+export function reachable(tw: E.TeamWeek, st: E.State, ctx: IndexContext, d: IndexDecision): IndexDecision {
+  const kept = [...d.holds.keys()], lockers = [...d.locks.keys()].filter((p) => !Number.isNaN(st.pendingX[p]) && st.lastSlot[p] >= 0);
+  const players = [...kept, ...lockers]; if (!players.length) return d;
+  const cur = players.map((p) => st.lastSlot[p]);
+  const movable = E.unpinnedOpen(st);
+  if (cur.some((s) => s < 0 || !((movable >> s) & 1))) return d; // (unknown position: nothing to check)
+  const tgt = players.map((p, i) => (i < kept.length ? d.holds.get(p)! : d.locks.get(p)!));
+  const exact = reach(tw.slots, tw.pmask, movable, players, cur, (a) => a.every((s, i) => s === tgt[i]));
+  if (exact && exact !== "capped") return d;
+  const blocked = new Set<number>([...d.starts.values(), ...d.locks.values()]);
+  const eq = reach(tw.slots, tw.pmask, movable, players, cur, (a) => a.every((s, i) => (i >= kept.length ? s === tgt[i] : !blocked.has(s))));
+  if (eq && eq !== "capped") { const holds = new Map(kept.map((p, i) => [p, eq.pos[i]] as [number, number])); return { ...d, holds }; }
+  // fall back: held scores may only keep (or lock in) the slot they sit in (a held player whose game tips now may still
+  // play anywhere: his held score is being replaced)
+  const pinnedCands = ctx.cands.map((c) => {
+    if (!c.held) return c; const here = st.lastSlot[c.p];
+    const w = c.w.map((x, s) => (s === here || (c.tipping && c.act[s] === 0) ? x : -Infinity)); return { ...c, w };
+  });
+  const r = assign(pinnedCands, ctx.free);
+  return r ? toDecision(pinnedCands, r.pick) : d;
 }
 
 // Alternatives to the index decision for rollouts: seat / unseat each candidate in turn, and swap lock <-> play/hold
@@ -275,7 +313,7 @@ export function indexRolloutHooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[]
       const ds = [ctx.best, ...alts]; const sc = new Float64Array(ds.length); const e = events[evIdx];
       for (let k = 0; k < K; k++) {
         const scen = E.sampleScenario(tw, st, t, r, realised);
-        ds.forEach((d, i) => { const s2 = E.cloneState(st); applyIndexDecision(tw, s2, e, d); sc[i] += E.simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total; });
+        ds.forEach((d, i) => { const s2 = E.cloneState(st); applyIndexDecision(tw, s2, e, d); seedPrices(tw, base.index?.slot ?? "roll"); sc[i] += E.simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total; });
       }
       let bi = 0; for (let i = 1; i < ds.length; i++) if (sc[i] > sc[bi] + 1e-9) bi = i;
       return bi > 0 && sc[bi] > sc[0] + (opts.minGain ?? 0.5) * K ? ds[bi] : undefined;

@@ -92,6 +92,7 @@ export interface Prepared {
   gl: number[][];                 // per player: game indices sorted by tip
   gA: Int32Array; gE: Int32Array; // per game: bucket index of tip / end
   masks: number[]; maskOf: Int32Array; eligOfMask: number[][];
+  ws?: Tables; ews?: { slotDiff: Float64Array; maskDiff: Float64Array; occ: Float64Array; V: Float64Array }; // reusable workspaces
 }
 export function prepare(inst: LInstance): Prepared {
   const nS = inst.slots.length, nP = inst.pmask.length;
@@ -130,14 +131,15 @@ export interface Tables {
   gSlot: Int32Array[]; lSlot: Int32Array[]; kap: Float64Array[]; thr: Float64Array[];
   intervalMin: (m: number, a: number, e: number) => [number, number];
 }
-export function tables(P: Prepared, mu: Float64Array): Tables {
+// reuse = write into the instance's workspace (inside the minimiser); the result is then only valid until the next call
+export function tables(P: Prepared, mu: Float64Array, reuse = false): Tables {
   const { inst, nS, nP, B, gl, gA, gE, masks, maskOf, eligOfMask } = P;
-  const W = B + 1;
+  const W = B + 1; const nM = masks.length;
+  const ws = reuse ? P.ws : undefined;
   // prefix sums per slot, and of the pointwise minimum over each eligibility mask (with its argmin slot)
-  const Ps = new Float64Array(nS * W);
+  const Ps = ws ? ws.Ps : new Float64Array(nS * W);
   for (let s = 0; s < nS; s++) for (let b = 0; b < B; b++) Ps[s * W + b + 1] = Ps[s * W + b] + mu[s * B + b];
-  const nM = masks.length;
-  const Pm = new Float64Array(nM * W); const argm = new Int32Array(nM * B);
+  const Pm = ws ? ws.Pm : new Float64Array(nM * W); const argm = ws ? ws.argm : new Int32Array(nM * B);
   for (let m = 0; m < nM; m++) {
     const el = eligOfMask[m];
     for (let b = 0; b < B; b++) {
@@ -153,12 +155,11 @@ export function tables(P: Prepared, mu: Float64Array): Tables {
     return [best, bs];
   };
   const { p1, p0 } = inst.dnp;
-  const C: Float64Array[] = [], start: Uint8Array[] = [], gSlot: Int32Array[] = [], lSlot: Int32Array[] = [], kap: Float64Array[] = [], thr: Float64Array[] = [];
+  const C: Float64Array[] = ws ? ws.C : [], start: Uint8Array[] = ws ? ws.start : [], gSlot: Int32Array[] = ws ? ws.gSlot : [], lSlot: Int32Array[] = ws ? ws.lSlot : [], kap: Float64Array[] = ws ? ws.kap : [], thr: Float64Array[] = ws ? ws.thr : [];
   for (let p = 0; p < nP; p++) {
     const l = gl[p]; const n = l.length; const m = maskOf[p];
-    const Cp = new Float64Array((n + 1) * 2), st = new Uint8Array(n * 2), gs = new Int32Array(n), ls = new Int32Array(n).fill(-1);
-    const kp = new Float64Array(n), th = new Float64Array(n);
-    C.push(Cp); start.push(st); gSlot.push(gs); lSlot.push(ls); kap.push(kp); thr.push(th);
+    if (!ws) { C.push(new Float64Array((n + 1) * 2)); start.push(new Uint8Array(n * 2)); gSlot.push(new Int32Array(n)); lSlot.push(new Int32Array(n).fill(-1)); kap.push(new Float64Array(n)); thr.push(new Float64Array(n)); }
+    const Cp = C[p], st = start[p], gs = gSlot[p], ls = lSlot[p], kp = kap[p], th = thr[p];
     if (!n || !eligOfMask[m].length) continue;
     // backward DP: C[k*2+lp] = value just before tip-off k with nothing held, lp = played last game
     for (let k = n - 1; k >= 0; k--) {
@@ -179,11 +180,13 @@ export function tables(P: Prepared, mu: Float64Array): Tables {
         const q = g.pPlay ?? (lp ? p1 : p0);
         const bench = q * c1 + (1 - q) * c0;
         const v = -G + q * afterPlay + (1 - q) * c0; // DNP: held 0, letting go is optimal (c0 >= 0 >= -kappa)
-        if (v > bench) { Cp[k * 2 + lp] = v; st[k * 2 + lp] = 1; } else Cp[k * 2 + lp] = bench;
+        if (v > bench) { Cp[k * 2 + lp] = v; st[k * 2 + lp] = 1; } else { Cp[k * 2 + lp] = bench; st[k * 2 + lp] = 0; }
       }
     }
   }
-  return { P, mu, W, Ps, Pm, argm, C, start, gSlot, lSlot, kap, thr, intervalMin };
+  const out = { P, mu, W, Ps, Pm, argm, C, start, gSlot, lSlot, kap, thr, intervalMin };
+  if (reuse && !ws) P.ws = out;
+  return out;
 }
 
 export interface Evaluation {
@@ -196,10 +199,10 @@ export interface Evaluation {
 // Bound and a subgradient (1 - occ) at mu. mu layout: mu[s*B + b] (points for the whole bucket).
 export function evaluate(P: Prepared, mu: Float64Array): Evaluation {
   const { inst, nS, nP, B, gl, gA, gE, masks, maskOf, eligOfMask } = P;
-  const Tb = tables(P, mu); const { W, Ps, Pm, argm, intervalMin } = Tb;
+  const Tb = tables(P, mu, true); const { W, Ps, Pm, argm, intervalMin } = Tb;
   const nM = masks.length;
-  const slotDiff = new Float64Array(nS * W); const maskDiff = new Float64Array(nM * W);
-  const V = new Float64Array(nP);
+  if (!P.ews) P.ews = { slotDiff: new Float64Array(nS * W), maskDiff: new Float64Array(nM * W), occ: new Float64Array(nS * B), V: new Float64Array(nP) };
+  const { slotDiff, maskDiff, V } = P.ews; slotDiff.fill(0); maskDiff.fill(0); V.fill(0);
   const { p1, p0 } = inst.dnp;
   const addSlot = (s: number, a: number, e: number, w: number) => { slotDiff[s * W + a] += w; slotDiff[s * W + e] -= w; };
   const addMask = (m: number, a: number, e: number, w: number) => { maskDiff[m * W + a] += w; maskDiff[m * W + e] -= w; };
@@ -255,7 +258,7 @@ export function evaluate(P: Prepared, mu: Float64Array): Evaluation {
       r0 = n0; r1 = n1;
     }
   }
-  const occ = new Float64Array(nS * B);
+  const occ = P.ews.occ;
   for (let s = 0; s < nS; s++) { let a = 0; for (let b = 0; b < B; b++) { a += slotDiff[s * W + b]; occ[s * B + b] = a; } }
   for (let m = 0; m < nM; m++) { let a = 0; for (let b = 0; b < B; b++) { a += maskDiff[m * W + b]; if (a > 1e-15) occ[argm[m * B + b] * B + b] += a; } }
   let sumMu = 0, paid = 0;
@@ -282,7 +285,7 @@ export function minimizeBound(inst: LInstance, opts: { iters?: number; mu0?: Flo
   let mu = opts.mu0 ? opts.mu0.slice() : new Float64Array(n);
   const ev0 = evaluate(P, new Float64Array(n));
   let ev = opts.mu0 ? evaluate(P, mu) : ev0;
-  let best = ev.bound, bestMu = mu.slice(), bestEv = ev;
+  let best = ev.bound, bestMu = mu.slice(), bestEv: Evaluation = { ...ev, occ: ev.occ.slice(), V: ev.V.slice() }; // (evaluate reuses its arrays)
   let delta = Math.max(1, 0.1 * best), stall = 0, it = 0;
   const g = new Float64Array(n), m1 = new Float64Array(n), m2 = new Float64Array(n);
   const lr0 = opts.lr ?? (method === "adam" ? 0.3 : method === "sqrt" ? 10 : 1);
@@ -304,7 +307,7 @@ export function minimizeBound(inst: LInstance, opts: { iters?: number; mu0?: Flo
       for (let i = 0; i < n; i++) { const v = mu[i] - step * g[i]; mu[i] = v > 0 ? v : 0; }
     }
     ev = evaluate(P, mu);
-    if (ev.bound < best - 1e-9) { if (ev.bound < best - 0.1 * delta) stall = 0; else stall++; best = ev.bound; bestMu = mu.slice(); bestEv = ev; }
+    if (ev.bound < best - 1e-9) { if (ev.bound < best - 0.1 * delta) stall = 0; else stall++; best = ev.bound; bestMu = mu.slice(); bestEv = { ...ev, occ: ev.occ.slice(), V: ev.V.slice() }; }
     else stall++;
     if (method === "polyak" && stall >= patience) { delta *= 0.5; stall = 0; mu = bestMu.slice(); ev = bestEv; if (delta < 1e-7 * Math.max(1, best)) { delta = Math.max(1, 0.1 * best) * 0.01; } }
   }

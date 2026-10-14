@@ -8,13 +8,16 @@ export const POL: Record<string, E.Policy> = {
   P2LA: { name: "P2LA", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true },
   P2LAH: { name: "P2LAH", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, holdYield: true },
   P7H: { name: "P7H", matching: "exact", value: "stop", defer: true, reserve: true, chain: true, lockAware: true, holdYield: true, rollout: { objective: "points", K, margin: 12 } },
-  // Phase 2: Lagrangian index policy (prices re-solved never / at each day's first tip-off / at every tip-off)
-  P8: { name: "P8", matching: "exact", value: "stop", defer: true, reserve: false, chain: true, index: { resolve: "never" } },
-  P8d: { name: "P8d", matching: "exact", value: "stop", defer: true, reserve: false, chain: true, index: { resolve: "day" } },
-  P8t: { name: "P8t", matching: "exact", value: "stop", defer: true, reserve: false, chain: true, index: { resolve: "tip" } },
+  // Phase 2: Lagrangian index policy. P8 = prices re-solved (100 warm-started iterations) at every tip-off;
+  // P8f (fast) = re-solved (30 iterations) only at tip-offs after new results; P8s = week-start prices only
+  P8: { name: "P8", matching: "exact", value: "stop", defer: true, reserve: false, chain: true, index: { resolve: "tip", iters: 100 } },
+  P8f: { name: "P8f", matching: "exact", value: "stop", defer: true, reserve: false, chain: true, index: { resolve: "info", iters: 30 } },
+  P8s: { name: "P8s", matching: "exact", value: "stop", defer: true, reserve: false, chain: true, index: { resolve: "never" } },
 };
-// P9<v> = P8<v> + rollouts over the index decision and its closest alternatives (base: P8 with the current prices)
-for (const v of ["", "d", "t"]) POL["P9" + v] = { ...POL["P8" + v], name: "P9" + v };
+// P9 = P8 + rollouts over the index decision and its closest alternatives, continuations played by P8f (env P9BASE)
+POL.P9 = { ...POL.P8, name: "P9" };
+// P9b = P8 + rollouts played by P8 itself (prices re-solved at every tip-off inside the rollout too), K = 50
+POL.P9b = { ...POL.P8, name: "P9b" };
 // <name>_L = with every bug fixed in engine-v2 phase 1 re-enabled (= the engine the phase-1 numbers were measured on);
 // <name>_L<bug>[+<bug>] = only those bugs re-enabled (strand, negEnd, reseat, stop, heldTie)
 export function policy(name: string): E.Policy {
@@ -24,11 +27,12 @@ export function policy(name: string): E.Policy {
   if (x) {
     const o: any = { resolve: "never" };
     for (const kv of x[2].split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^[\d.]+$/.test(v) ? Number(v) : v; }
-    return { ...POL.P8, name, index: o };
+    return { ...POL[x[1] === "P9" ? "P9" : "P8"], name, index: o };
   }
-  const m = name.match(/^(P2LA|P2LAH|P7H|P8|P8d|P8t|P9|P9d|P9t)_L(.*)$/); if (!m) throw new Error("unknown policy " + name);
+  const m = name.match(/^(P2LA|P2LAH|P7H|P8|P8f|P8s|P9|P9b)_L(.*)$/); if (!m) throw new Error("unknown policy " + name);
   return { ...POL[m[1]], name, legacyBugs: m[2] ? (m[2].split("+") as E.LegacyBug[]) : true };
 }
+function baseOpts(): any { const o: any = {}; for (const kv of (process.env.P9BASE || "resolve=info,iters=30").split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^[\d.]+$/.test(v) ? Number(v) : v; } return o; }
 export interface Runner { pol: E.Policy; events: E.Ev[]; hooks?: E.Hooks }
 // realised = the "world" the policy lives in (real outcomes, or a model scenario): rollouts keep its finished games.
 export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { actual: Float64Array; played: Uint8Array }): Runner {
@@ -39,7 +43,9 @@ export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { a
     const base: E.Policy = { ...POL.P2LA, eps: pol.eps, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }; // (all policies here are lockAware)
     hooks = E.rolloutHooks(tw, base, events, pol.rollout.objective, pol.rollout.K, pol.rollout.margin, seed, realised);
   }
-  if (/^P9/.test(name)) hooks = indexRolloutHooks(tw, { ...pol, name: "P8base", index: { ...pol.index!, resolve: "never" } }, events, KS, seed, realised);
+  // P9 base inside rollouts: env P9BASE = IndexOpts overrides for the base (default: the current prices, no re-solve)
+  if (name === "P9b") hooks = indexRolloutHooks(tw, { ...pol, name: "P8base", index: { ...pol.index!, slot: "roll" } }, events, Number(process.env.KB || 50), seed, realised);
+  else if (/^P9/.test(name)) hooks = indexRolloutHooks(tw, { ...pol, name: "P8base", index: { ...pol.index!, resolve: "never", ...baseOpts(), slot: "roll" } }, events, KS, seed, realised);
   if (/^P7H/.test(name)) hooks = E.startRolloutHooks(tw, { ...POL.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, events, KS, seed, realised, hooks);
   return { pol, events, hooks };
 }

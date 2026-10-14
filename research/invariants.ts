@@ -20,56 +20,8 @@ export function mergeReport(a: Report, b: Report, maxEx = 8) {
 
 // ---------------- placement & reachability ----------------
 const elig = (tw: { slots: number[]; pmask: number[] }, p: number, s: number) => (tw.slots[s] & tw.pmask[p]) !== 0;
-// a matching of players into the open slots (prefer[p] tried first), or null
-export function placeAll(slots: number[], pmask: number[], open: number, players: number[], prefer?: ArrayLike<number>): Map<number, number> | null {
-  const nS = slots.length; const match = new Int32Array(nS).fill(-1);
-  const aug = (p: number, seen: Uint8Array): boolean => {
-    const order: number[] = []; const pf = prefer ? prefer[p] : -1;
-    if (pf >= 0) order.push(pf); for (let s = 0; s < nS; s++) if (s !== pf) order.push(s);
-    for (const s of order) {
-      if (!((open >> s) & 1) || seen[s] || !(slots[s] & pmask[p])) continue;
-      seen[s] = 1;
-      if (match[s] < 0 || aug(match[s], seen)) { match[s] = p; return true; }
-    }
-    return false;
-  };
-  for (const p of players) if (!aug(p, new Uint8Array(nS))) return null;
-  const m = new Map<number, number>(); match.forEach((p, s) => { if (p >= 0) m.set(p, s); });
-  return m;
-}
-// BFS over arrangements of `players` (currently at cur[i]) inside the movable slots using single Sleeper moves.
-// Returns the first arrangement satisfying goal (fewest moves), or null if none is reachable.
-export function reach(slots: number[], pmask: number[], movable: number, players: number[], cur: number[], goal: (pos: Int8Array) => boolean, maxStates = 400000):
-  { pos: Int8Array; moves: number } | null | "capped" {
-  const n = players.length; const nS = slots.length;
-  const start = Int8Array.from(cur);
-  if (goal(start)) return { pos: start, moves: 0 };
-  const key = (a: Int8Array) => { let k = 0; for (let i = 0; i < n; i++) k = k * 16 + a[i]; return k; };
-  const seen = new Set<number>([key(start)]); let frontier: Int8Array[] = [start]; let depth = 0;
-  while (frontier.length) {
-    depth++; const next: Int8Array[] = [];
-    for (const a of frontier) {
-      const occ = new Int8Array(nS).fill(-1); for (let i = 0; i < n; i++) occ[a[i]] = i;
-      const push = (b: Int8Array): { pos: Int8Array; moves: number } | null => {
-        const k = key(b); if (seen.has(k)) return null; seen.add(k);
-        if (goal(b)) return { pos: b, moves: depth };
-        next.push(b); return null;
-      };
-      for (let i = 0; i < n; i++) {
-        const p = players[i];
-        for (let s = 0; s < nS; s++) {
-          if (!((movable >> s) & 1) || !(slots[s] & pmask[p]) || s === a[i]) continue;
-          const j = occ[s];
-          if (j < 0) { const b = a.slice(); b[i] = s; const r = push(b); if (r) return r; }
-          else if (j > i && slots[a[i]] & pmask[players[j]]) { const b = a.slice(); b[i] = s; b[j] = a[i]; const r = push(b); if (r) return r; }
-        }
-      }
-      if (seen.size > maxStates) return "capped";
-    }
-    frontier = next;
-  }
-  return null;
-}
+export { placeAll, reach } from "../lib/engine/moves";
+import { placeAll, reach } from "../lib/engine/moves";
 
 // ---------------- physical lineup tracker ----------------
 const NONE = 0, PINNED = 1, HELD = 2, LOCKED = 3, PHANTOM = 4; // phantom: the engine thinks he holds a score, but he had to leave the lineup
@@ -357,16 +309,18 @@ if (typeof require !== "undefined" && require.main === module) {
   const seed = week * 1000 + Number(rid); const row: any = { week, rid, mode }; const t0 = Date.now();
   const sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
   if (mode === "main") {
-    for (const pn of ["P2LAH", "P7H"]) {
+    // env POLS_REAL (real outcomes, default P2LAH,P7H), SIMPOL (model scenarios, P2LAH), MONOPOL (monotonicity, P2LAH)
+    for (const pn of (process.env.POLS_REAL || "P2LAH,P7H").split(",")) {
       const ru = PL.runner(pn, tw, seed, real); const t1 = Date.now();
       const r = runChecked(tw, ru.pol, ru.events, real.actual, real.played, ru.hooks, { label: `w${week} r${rid} ${pn} real` });
       row[pn] = { total: r.total, recount: r.trackerTotal, rep: r.rep, overrides: r.overrides, tipoffs: r.tipoffs, ms: Date.now() - t1 };
     }
     const NSIM = Number(process.env.NSIM || 200); const sc = PL.scenarios(tw, NSIM, seed * 7 + 3); const rep = newReport();
-    sc.forEach((s: any, k: number) => { const ru = PL.runner("P2LAH", tw, seed, s); mergeReport(rep, runChecked(tw, ru.pol, ru.events, s.actual, s.played, ru.hooks, { label: `w${week} r${rid} P2LAH sim${k}`, maxEx: 2 }).rep, 8); });
-    row.P2LAH_sim = { n: NSIM, rep };
+    const simPol = process.env.SIMPOL || "P2LAH";
+    sc.forEach((s: any, k: number) => { const ru = PL.runner(simPol, tw, seed, s); mergeReport(rep, runChecked(tw, ru.pol, ru.events, s.actual, s.played, ru.hooks, { label: `w${week} r${rid} ${simPol} sim${k}`, maxEx: 2 }).rep, 8); });
+    row.P2LAH_sim = { n: NSIM, rep, pol: simPol };
     const NM = Number(process.env.NMONO || 1000); const ms = PL.scenarios(tw, NM, seed * 11 + 5);
-    const ru0 = PL.runner("P2LAH", tw, seed, real);
+    const ru0 = PL.runner(process.env.MONOPOL || "P2LAH", tw, seed, real);
     const full = ms.map((s: any) => E.simulate(tw, ru0.pol, ru0.events, s.actual, s.played).total);
     row.mono = { n: NM, full: sum(full) / NM, drops: [] as any[] };
     for (let j = 0; j < tw.pmask.length; j++) {
@@ -375,6 +329,24 @@ if (typeof require !== "undefined" && require.main === module) {
       const diff = ms.map((s: any, k: number) => E.simulate(d.tw, ru0.pol, ev, Float64Array.from(d.keep, (g: number) => s.actual[g]), Uint8Array.from(d.keep, (g: number) => s.played[g])).total - full[k]);
       const m = sum(diff) / NM; const sd = Math.sqrt(sum(diff.map((x: number) => (x - m) ** 2)) / (NM - 1));
       row.mono.drops.push({ j, name: tw.names[j], games: tw.byPlayer[j].length, gain: m, se: sd / Math.sqrt(NM) });
+    }
+  } else if (mode === "monoP") {
+    // monotonicity for selected players (env PLAYERS) and policies (env MONOPOLS), on the same paired scenarios as
+    // the main mode's P2LAH test (seed*11+5), NMONO of them
+    const NM = Number(process.env.NMONO || 300); const ms = PL.scenarios(tw, NM, seed * 11 + 5);
+    row.drops = [];
+    for (const pn of (process.env.MONOPOLS || "P2LAH_LheldTie,P8").split(",")) {
+      const full = ms.map((s: any, k: number) => { const ru = PL.runner(pn, tw, seed + 7919 * (k + 1), s); return E.simulate(tw, ru.pol, ru.events, s.actual, s.played, E.initState(tw), 0, ru.hooks).total; });
+      for (const j of (process.env.PLAYERS || "").split(",").filter(Boolean).map(Number)) {
+        const d = PL.dropPlayer(tw, j);
+        const diff = ms.map((s: any, k: number) => {
+          const s2 = { actual: Float64Array.from(d.keep, (g: number) => s.actual[g]), played: Uint8Array.from(d.keep, (g: number) => s.played[g]) };
+          const ru = PL.runner(pn, d.tw, seed + 7919 * (k + 1), s2);
+          return E.simulate(d.tw, ru.pol, ru.events, s2.actual, s2.played, E.initState(d.tw), 0, ru.hooks).total - full[k];
+        });
+        const m = sum(diff) / NM; const sd = Math.sqrt(sum(diff.map((x: number) => (x - m) ** 2)) / (NM - 1));
+        row.drops.push({ pol: pn, j, name: tw.names[j], gain: m, se: sd / Math.sqrt(NM), full: sum(full) / NM });
+      }
     }
   } else if (mode === "mono7") {
     const N7 = Number(process.env.N7 || 12); const sc = PL.scenarios(tw, N7, seed * 13 + 7); // = research/gap.ts scenarios

@@ -400,7 +400,7 @@ export interface Hooks {
 export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float64Array, played: Uint8Array,
   st: State = initState(tw), fromEv = 0, hooks?: Hooks, toTime = Infinity): { total: number; st: State; evIdx: number } {
   const nP = tw.pmask.length; const eps = pol.eps ?? 0;
-  if (pol.index && fromEv === 0) resetPrices(tw); // a new week: start from the week-start prices
+  if (pol.index && fromEv === 0) resetPrices(tw, pol.index.slot); // a new week: start from the week-start prices
   let i = fromEv;
   for (; i < events.length; i++) {
     const e = events[i];
