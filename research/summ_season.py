@@ -1,11 +1,11 @@
 """Paired season comparison of research/p8exp.ts real-outcome runs (NSC=0), with win% vs the real opponent.
 usage (from research/out): python3 ../summ_season.py <prefix,prefix,...> <POLICY:BASELINE,...>
 Win% = share of team-weeks where the policy beats the real opponent's actual (human) score, as in summ2.py."""
-import glob, json, math, statistics as st, sys
+import glob, json, math, os, statistics as st, sys
 
 pres = sys.argv[1].split(","); pairs = [x.split(":") for x in sys.argv[2].split(",")]
-S = json.load(open("../data/season.json"))
-human = {(W["week"], str(r)): t["human_points"] for W in S["weeks"] for r, t in W["teams"].items()}
+S = json.load(open(os.environ.get("SEASON", "../data/season.json")))  # env SEASON: another season file (e.g. ../data/season2024.json)
+human = {(W["week"], str(r)): t["human_points"] for W in S["weeks"] for r, t in W["teams"].items() if t["human_points"] is not None}
 opp = {}
 for W in S["weeks"]:
     for a, b in W["matchups"]: opp[(W["week"], str(a))] = (W["week"], str(b)); opp[(W["week"], str(b))] = (W["week"], str(a))
@@ -18,7 +18,7 @@ def win(p, keys):
     for k in keys:
         o = opp.get(k)
         if o in human: w += 1 if R[k][p] > human[o] else .5 if R[k][p] == human[o] else 0; n += 1
-    return w / n
+    return w / n if n else float("nan")
 ci = lambda d: 1.96 * st.pstdev(d) / math.sqrt(len(d))
 print(f"{len(R)} team-weeks")
 print("| policy | pts/wk | vs | paired diff (95% CI) | weeks 1-11 | weeks 12-23 | better/worse | win% (baseline) |\n|---|---|---|---|---|---|---|---|")
