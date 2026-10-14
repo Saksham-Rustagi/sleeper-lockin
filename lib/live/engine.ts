@@ -3,6 +3,8 @@
 //   p7h: rule P2 (lockAware, holdYield, phase-1 fixes, legacy held-score tie-break) + start & lock rollouts
 //   p8 : Lagrangian index policy (lib/engine/p8.ts), prices re-solved at every tip-off; no rollouts
 //   p9 : P8 + rollouts over the index decision and its closest alternatives
+//   p10: P8 + one complete decision per tip-off raced by rollouts (lib/engine/p10.ts), continuations played by P8f
+//   p10b: the same with continuations played by P8 (~5x the decision cost of p10)
 // Mass simulations (projections, waivers, league, IR, cut-offs, decision rollouts) use the fast variant of the engine's
 // rule (p7h: POLICY; p8/p9: P8f, prices re-solved only after new results) - full P8 is ~35x the cost of POLICY per
 // simulated week (research/REPORT.md, Engine v2 Phase 2).
@@ -11,10 +13,11 @@ import os from "os";
 import path from "path";
 import * as E from "../engine/core";
 import { indexRolloutHooks } from "../engine/p8";
+import { p10Hooks } from "../engine/p10";
 import { POLICY } from "./week";
 
-export type EngineName = "p7h" | "p8" | "p9";
-export const ENGINES: EngineName[] = ["p7h", "p8", "p9"];
+export type EngineName = "p7h" | "p8" | "p9" | "p10" | "p10b";
+export const ENGINES: EngineName[] = ["p7h", "p8", "p9", "p10", "p10b"];
 export const DEFAULT_ENGINE: EngineName = "p7h";
 
 let memo: { at: number; name: EngineName } | null = null;
@@ -48,17 +51,23 @@ export function decisionPolicy(e: EngineName = engineName()): E.Policy { return 
 // the policy that plays out simulated weeks (projections, waivers, league, IR, cut-offs, decision rollouts)
 export function simPolicy(e: EngineName = engineName()): E.Policy { return e === "p7h" ? POLICY : { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "sim", fresh: true } }; }
 
+// P10 / P10b: raced complete decisions, continuations played by P8f / P8 on their own price state (K is not used: the
+// number of rollouts is adaptive)
+const p10 = (tw: E.TeamWeek, events: E.Ev[], seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName) =>
+  p10Hooks(tw, e === "p10b" ? { ...P8_POLICY, index: { ...P8_POLICY.index!, slot: "roll" } } : { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } }, events, seed, real);
 // Hooks for the start decisions of the plan: p7h start/sit simulations; p8 none (the index policy decides);
-// p9 rollouts over the index decision played by P8f.
+// p9 rollouts over the index decision played by P8f; p10 / p10b raced complete decisions.
 export function planHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName = engineName()): E.Hooks | undefined {
   if (e === "p7h") return E.startRolloutHooks(tw, POLICY, events, K, seed, real);
   if (e === "p9") return indexRolloutHooks(tw, { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } }, events, K, seed, real);
+  if (e === "p10" || e === "p10b") return p10(tw, events, seed, real, e);
   return undefined;
 }
-// Hooks for replaying a finished week: p7h lock simulations (as before); p8 none; p9 index rollouts.
+// Hooks for replaying a finished week: p7h lock simulations (as before); p8 none; p9 index rollouts; p10 / p10b races.
 export function replayHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName = engineName()): E.Hooks | undefined {
   if (e === "p7h") return E.rolloutHooks(tw, POLICY, events, "points", K, 12, seed, real);
   if (e === "p9") return indexRolloutHooks(tw, { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } }, events, K, seed, real);
+  if (e === "p10" || e === "p10b") return p10(tw, events, seed, real, e);
   return undefined;
 }
 // what cache fingerprints add: nothing for the default engine (so its fingerprints, and cached results, are unchanged)

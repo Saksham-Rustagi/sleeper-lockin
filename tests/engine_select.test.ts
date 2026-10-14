@@ -89,4 +89,9 @@ test("plan / replay hooks follow the engine", () => {
   assert.ok(h7?.decideStarts && !h7.decideIndex); assert.equal(h8, undefined); assert.ok(h9?.decideIndex);
   assert.ok(withEngine(undefined, undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real))?.decideLock);
   assert.equal(withEngine("p8", undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real)), undefined);
+  for (const e of ["p10", "p10b"]) {
+    assert.ok(withEngine(e, undefined, () => planHooks(T.tw, T.events, 10, 1, T.real))?.decideIndex, `${e} plan hooks`);
+    assert.ok(withEngine(e, undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real))?.decideIndex, `${e} replay hooks`);
+    assert.equal(withEngine(e, undefined, engineName), e);
+  }
 });
