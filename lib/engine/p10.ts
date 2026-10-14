@@ -26,10 +26,10 @@ export interface P10Opts {
   kMax?: number;    // scenarios at most (default 256)
   zDrop?: number;   // drop a challenger when mean(it - leader) + zDrop * se < 0 (default 2)
   zAcc?: number;    // switch from P8's decision only if the gain is > zAcc * se ... (default 2)
-  minGain?: number; // ... and > minGain points (default 0.25)
+  minGain?: number; // ... and > minGain points (default 0.5, the clear-gain threshold of P7H / P9)
   pairs?: boolean;  // local swaps (default true)
 }
-const DEF: Required<P10Opts> = { nCand: 8, margin: 15, batch: 16, kMin: 32, kMax: 256, zDrop: 2, zAcc: 2, minGain: 0.25, pairs: true };
+const DEF: Required<P10Opts> = { nCand: 8, margin: 15, batch: 16, kMin: 32, kMax: 256, zDrop: 2, zAcc: 2, minGain: 0.5, pairs: true };
 const NEG = -Infinity;
 
 export const decisionKey = (d: IndexDecision) =>
