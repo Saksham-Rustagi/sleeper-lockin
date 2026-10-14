@@ -301,7 +301,8 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
 //         scenarios, and the monotonicity test for P2LAH: drop each player in turn, NMONO paired (CRN) scenarios.
 //  mono7: the monotonicity test for P7H for the players in env PLAYERS (comma list of player indices), on the first
 //         N7 scenarios of research/gap.ts (same seeds, so the full-roster arm is gap.ts's P7H run).
-if (typeof require !== "undefined" && require.main === module) {
+// (only when this file is the entry point: inside another bundle, e.g. gap.cjs or p10run.cjs, require.main === module too)
+if (typeof require !== "undefined" && require.main === module && /invariants(\.cjs|\.ts)?$/.test(process.argv[1] ?? "")) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require("fs"); const { S, fitModel, teamWeek } = require("./btcommon"); const PL = require("./policies");
   const [week, rid, out, mode = "main"] = [Number(process.argv[2]), process.argv[3], process.argv[4], process.argv[5]];

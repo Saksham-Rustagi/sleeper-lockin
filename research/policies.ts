@@ -2,6 +2,7 @@
 // seeds for real outcomes), so instrumented runs reproduce the backtest numbers.
 import * as E from "./engine";
 import { indexRolloutHooks } from "../lib/engine/p8";
+import { p10Hooks, type P10Opts } from "../lib/engine/p10";
 
 const K = Number(process.env.K || 200), KS = Number(process.env.KS || K);
 export const POL: Record<string, E.Policy> = {
@@ -18,10 +19,15 @@ export const POL: Record<string, E.Policy> = {
 POL.P9 = { ...POL.P8, name: "P9" };
 // P9b = P8 + rollouts played by P8 itself (prices re-solved at every tip-off inside the rollout too), K = 50
 POL.P9b = { ...POL.P8, name: "P9b" };
+// P10 = one complete decision per tip-off: P8's decision and its best alternatives raced by rollouts (common random
+// numbers, adaptive sampling); continuations played by P8f (P10) or P8 (P10b). P10x:base=P8|P8f,<P10Opts key>=val,...
+POL.P10 = { ...POL.P8, name: "P10" };
+POL.P10b = { ...POL.P8, name: "P10b" };
 // <name>_L = with every bug fixed in engine-v2 phase 1 re-enabled (= the engine the phase-1 numbers were measured on);
 // <name>_L<bug>[+<bug>] = only those bugs re-enabled (strand, negEnd, reseat, stop, heldTie)
 export function policy(name: string): E.Policy {
   if (POL[name]) return POL[name];
+  if (/^P10x:/.test(name)) return { ...POL.P8, name };
   // ad-hoc index-policy variants: P8x:key=val,key=val (keys of IndexOpts); P9x:... = the same with rollouts
   const x = name.match(/^(P8|P9)x:(.*)$/);
   if (x) {
@@ -46,6 +52,12 @@ export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { a
   // P9 base inside rollouts: env P9BASE = IndexOpts overrides for the base (default: the current prices, no re-solve)
   if (name === "P9b") hooks = indexRolloutHooks(tw, { ...pol, name: "P8base", index: { ...pol.index!, slot: "roll" } }, events, Number(process.env.KB || 50), seed, realised);
   else if (/^P9/.test(name)) hooks = indexRolloutHooks(tw, { ...pol, name: "P8base", index: { ...pol.index!, resolve: "never", ...baseOpts(), slot: "roll" } }, events, KS, seed, realised);
+  if (/^P10/.test(name)) {
+    const o: any = {}; for (const kv of (name.match(/^P10x:(.*)$/)?.[1] ?? "").split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^[\d.]+$/.test(v) ? Number(v) : v === "false" ? false : v; }
+    const b8 = (o.base ?? (name === "P10b" ? "P8" : "P8f")) === "P8"; delete o.base;
+    const base: E.Policy = { ...POL.P8, name: "P10base", index: b8 ? { resolve: "tip", iters: 100, slot: "roll" } : { resolve: "info", iters: 30, slot: "roll" } };
+    hooks = p10Hooks(tw, base, events, seed, realised, o as P10Opts);
+  }
   if (/^P7H/.test(name)) hooks = E.startRolloutHooks(tw, { ...POL.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, events, KS, seed, realised, hooks);
   return { pol, events, hooks };
 }

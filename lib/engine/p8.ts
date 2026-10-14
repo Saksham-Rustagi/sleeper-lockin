@@ -75,7 +75,7 @@ function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
 // a new top-level simulation of this week starts: back to the week-start prices
 export function resetPrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (c) { const ps = slotOf(c, slot); ps.cur = c.week; ps.day = -1; ps.ends = 0; } }
 // a rollout starts from the real decision's current prices
-function seedPrices(tw: E.TeamWeek, to: string, from = "top") { const c = CACHE.get(tw); if (c) { const a = slotOf(c, from), b = slotOf(c, to); b.cur = a.cur; b.day = a.day; b.ends = a.ends; } }
+export function seedPrices(tw: E.TeamWeek, to: string, from = "top") { const c = CACHE.get(tw); if (c) { const a = slotOf(c, from), b = slotOf(c, to); b.cur = a.cur; b.day = a.day; b.ends = a.ends; } }
 
 // ---------------- values from the priced DPs ----------------
 function playProb(tw: E.TeamWeek, p: number, gi: number, lp: number) {
@@ -126,8 +126,10 @@ class Values {
 
 // ---------------- decisions ----------------
 export interface IndexDecision { starts: Map<number, number>; locks: Map<number, number>; holds: Map<number, number> }
-type Act = 0 | 1 | 2; // 0 start, 1 lock, 2 hold
-interface Cand { p: number; tipping: boolean; held: boolean; gi: number; w: Float64Array; act: Uint8Array; base: number; raw: number }
+export type Act = 0 | 1 | 2; // 0 start, 1 lock, 2 hold
+// w/act: the index policy's slot weights and the action each stands for; wa[a]: the raw priced advantage (value minus
+// the let-go/bench baseline) of action a in each slot, before P8's filters (NaN-free, -Infinity = not possible)
+export interface Cand { p: number; tipping: boolean; held: boolean; gi: number; w: Float64Array; act: Uint8Array; base: number; raw: number; wa: Float64Array[] }
 export interface IndexContext {
   t: number; cands: Cand[]; free: number[]; best: IndexDecision; bestScore: number;
   solve: (force?: Map<number, number>, actForce?: Map<number, Act>) => { d: IndexDecision; score: number } | null;
@@ -135,7 +137,7 @@ export interface IndexContext {
 const NEG = -Infinity;
 // exact max-weight assignment of candidates to free slots (bitmask DP over at most 9 free slots); force: candidate ->
 // +1 must be seated / -1 must not
-function assign(cands: Cand[], free: number[], force?: Map<number, number>): { pick: Int32Array; score: number } | null {
+export function assign(cands: Cand[], free: number[], force?: Map<number, number>): { pick: Int32Array; score: number } | null {
   const f = free.length, M = 1 << f, nc = cands.length;
   let dp = new Float64Array(M).fill(NEG); dp[0] = 0;
   const choice = new Int8Array(nc * M);
@@ -159,7 +161,7 @@ function assign(cands: Cand[], free: number[], force?: Map<number, number>): { p
   for (let c = nc - 1; c >= 0; c--) { const j = choice[c * M + mask]; if (j > 0) { pick[c] = free[j - 1]; mask &= ~(1 << (j - 1)); } }
   return { pick, score: bv };
 }
-function toDecision(cands: Cand[], pick: Int32Array, actForce?: Map<number, Act>): IndexDecision {
+export function toDecision(cands: Cand[], pick: Int32Array, actForce?: Map<number, Act>): IndexDecision {
   const d: IndexDecision = { starts: new Map(), locks: new Map(), holds: new Map() };
   cands.forEach((c, i) => {
     const s = pick[i]; if (s < 0) return;
@@ -183,13 +185,14 @@ export function indexContext(tw: E.TeamWeek, pol: E.Policy, st: E.State, e: E.Ev
     const held = !Number.isNaN(st.pendingX[p]); const gi = tipGame.get(p);
     if (gi === undefined && !held) continue;
     const w = new Float64Array(nS).fill(NEG); const act = new Uint8Array(nS); const lp = st.lastPlayed[p] ? 1 : 0;
+    const wa = [0, 1, 2].map(() => new Float64Array(nS).fill(NEG));
     let base: number, raw = 0;
     if (gi !== undefined) {
       const [sv, bench] = V.startVals(p, gi, lp, freeMask); base = bench; raw = V.rawStart(p, gi, lp) - bench;
       for (const s of free) {
         if (Number.isNaN(sv[s])) continue;
-        let val = sv[s], a: Act = 0;
-        if (held) { const lv = V.lockVal(st.pendingX[p], s); if (lv > val) { val = lv; a = 1; } } // deadline: lock or play
+        let val = sv[s], a: Act = 0; wa[0][s] = val - bench;
+        if (held) { const lv = V.lockVal(st.pendingX[p], s); wa[1][s] = lv - bench; if (lv > val) { val = lv; a = 1; } } // deadline: lock or play
         if (val - base > 1e-9) { w[s] = val - base; act[s] = a; }
       }
     } else {
@@ -202,12 +205,12 @@ export function indexContext(tw: E.TeamWeek, pol: E.Policy, st: E.State, e: E.Ev
       const holdW = Math.max(hvMax - base, 0) + 1e-6 * (1 + Math.max(0, x) / 100) + (x > 0 ? (pol.index!.keep ?? 0) : 0);
       for (const s of free) {
         if (!(tw.slots[s] & tw.pmask[p])) continue;
-        const lv = V.lockVal(x, s);
+        const lv = V.lockVal(x, s); wa[1][s] = lv - base; wa[2][s] = hvMax - base;
         if (lv > hvMax && lv - base > 0 && x > 0 && lv - base > holdW) { w[s] = lv - base; act[s] = 1; }
         else { w[s] = holdW + (st.lastSlot[p] === s ? 1e-7 : 0); act[s] = 2; }
       }
     }
-    cands.push({ p, tipping: gi !== undefined, held, gi: gi ?? -1, w, act, base, raw });
+    cands.push({ p, tipping: gi !== undefined, held, gi: gi ?? -1, w, act, base, raw, wa });
   }
   if (!cands.length) return null;
   const solve = (force?: Map<number, number>, actForce?: Map<number, Act>) => {
@@ -234,7 +237,7 @@ export function debugStart(tw: E.TeamWeek, pol: E.Policy, st: E.State, e: E.Ev, 
 }
 // Start leftover tipping players in free slots the decision leaves empty (starting is a free option when nobody else
 // needs the slot during his game; "all" ignores later demand). Narrowest eligible slot first.
-function fillIdle(tw: E.TeamWeek, st: E.State, t: number, cands: Cand[], d: IndexDecision, free: number[], mode: "idle" | "all", force?: Map<number, number>) {
+export function fillIdle(tw: E.TeamWeek, st: E.State, t: number, cands: Cand[], d: IndexDecision, free: number[], mode: "idle" | "all", force?: Map<number, number>) {
   const used = new Set<number>([...d.starts.values(), ...d.locks.values(), ...d.holds.values()]);
   const left = free.filter((s) => !used.has(s)).sort((a, b) => popc(tw.slots[a]) - popc(tw.slots[b]));
   const order = cands.map((c, i) => [c, i] as [Cand, number]).filter(([c, i]) => c.tipping && !d.starts.has(c.p) && !d.locks.has(c.p) && (force?.get(i) ?? 0) >= 0).sort((a, b) => b[0].raw - a[0].raw);
