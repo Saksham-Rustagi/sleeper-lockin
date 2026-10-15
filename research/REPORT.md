@@ -1491,3 +1491,359 @@ python3 ../perfcmp.py pcbase pcnew3 && python3 ../perfcmp.py pc10base pc10new3
 checks seeded their prices from it, which produced NaN hold values — up to 38 pts of spurious "regret" for P10b. Found
 by the `forcedOk` diagnostic, fixed in the planner and hardened in `p8.ts` above; the tables themselves were unaffected
 and were re-checked with `TABLE=`.)
+
+## Engine v2 — Phase 5: playing for the win (overnight 2026-10-15, task E)
+Goal: decisions that maximise the probability of beating **this week's** opponent, with a small weight on points
+(points-for is the standings tiebreaker). Behind late in the week → take variance; ahead → secure points.
+
+**Summary.**
+- **Policy.** P11 = P10 with every raced continuation scored by T + β·F_opp(T). F_opp is the CDF of the opponent's
+  final total, simulated as a human from what we can see of him. β = 1000, phased in over the last 3 game days, with a
+  risk dial that makes the continuations' own decisions play to the score.
+- **(b) Simulated weeks against human-model opponents.**
+  - Fresh confirmation, 674 weeks: **+0.40 pp** win probability vs P10 (95% CI ± 0.35 naive / ± 0.46 week-clustered).
+  - All 1,118 simulated weeks: **+0.53 ± 0.31** pp (week-clustered).
+- **(a) Real 2025-26 season against the real opponents' actual scores.**
+  - **145-68-1** vs P10's 142-70-2: +1.17 pp, 4 weeks flipped to wins and 1 to a loss.
+  - The pre-registered opponent model: 144-68-2 (+0.93 pp).
+- **Points and rules.** Points unchanged (−0.15 ± 0.28 simulated, +0.09 real). 0 rule violations.
+- **Gate (win rate improves on both, 0 violations): met.** The gain is real but small: about half a win per 100 weeks.
+  The objective is a config option (`objective: "win"`, with engine `p10` / `p10b`); the default is unchanged.
+
+### Design (`lib/engine/p11.ts`, `lib/engine/human.ts`, `lib/live/opponent.ts`; tests `tests/p11.test.ts`)
+**Objective.** At each tip-off P10 races complete decisions: P8's decision and its best alternatives, scored on common
+scenarios of the rest of the week. P11 scores each continuation by
+
+  U = T + β(t) · F_opp(T)      (U/β = P(win) + E[points]/β, i.e. w_pts = 1/β)
+
+- T is our simulated final.
+- F_opp is the CDF of the opponent's final total, given what is known of him at t.
+- β is points per unit of win probability: β = 1000 means one percentage point of win probability is worth 10 points.
+
+The race rules are P10's, in U units. P8's own decision is the incumbent and is replaced only by a candidate that is
+better by > 0.5 and by > 2 se. With β = 0, or before the phase-in, **P11 is P10 exactly** (bit-identical, tested).
+
+**Fix 1: the opponent distribution once per decision moment, not one paired opponent sample per rollout.**
+- **The old method.** P4/P4S scored every rollout as win/loss against one simulated opponent week. The opponent's rest
+  of the week doesn't depend on our action.
+- **The new method.**
+  - At each decision moment P11 simulates the opponent M = 400 times from his current state (human model below).
+  - It keeps the finals and smooths their empirical CDF with a Gaussian kernel (Silverman bandwidth ≥ 1 pt, tabulated on
+    a 0.25-pt grid).
+  - Every continuation is scored by F_opp(T). The distribution is memoised per opponent state, since it changes only
+    when his games tip off or end.
+- **Variance reduction, measured.** The diagnostic `vr` used 64 extra scenarios per decision and its own random stream,
+  so decisions were unchanged. It ran at 2,443 win-phase decisions of the real season (`research/summ_p11b.py vr`).
+  - It compares the per-scenario variance of the paired difference between P8's decision and the first challenger.
+  - That variance is **7.5× lower** with the smooth score than with win/loss against one paired opponent sample:
+    0.00115 vs 0.00862. 7.4× in the second run.
+  - So the same race precision needs 7.5× fewer continuations. In about half of the decisions both variances are 0
+    (the week is decided).
+
+**Fix 2: the opponent is a human (`lib/engine/human.ts`, fit and checks in `research/humanfit.ts`).** A "physical
+lineup" model of how the 2025-26 managers played.
+- **Bookkeeping.**
+  - Slot occupants persist until the manager changes them.
+  - Whoever sits in a starting slot at tip-off is started; benching a held score forfeits it.
+  - At week end every unlocked occupant's held score counts. Rules 1–7 hold by construction, and the unit tests check
+    the bookkeeping.
+- **Behaviour.**
+  - **Engagement.** e ~ Beta(engA, engB) per team-week = P(active) on each game day.
+  - **Management.** An active day is managed at every tip-off, with same-day slot reuse, with probability pt; otherwise
+    once before the first tip-off.
+  - **Week start.** The week starts from a standing lineup with probability sl, else from empty slots.
+  - **Locks.** Once per active day, each held starter with games left is locked with probability
+    σ(c0 + u + c1·z + c2·d), where:
+    - z = (score − his remaining games' optimal-stopping value) / sd;
+    - d = share of game days past;
+    - u ~ N(0, su²) per team-week.
+  - **Lineup.** Exact assignment of tonight's players (weighted by start-vs-skip value) and of held scores without a game
+    today (weighted by (1 − tf) × keep-vs-let-go value). A DNP is known in advance with probability kd.
+- **Fit.** Method of simulated moments (Nelder-Mead, common random numbers) on the real team-weeks, each replayed on its
+  **real** outcomes so that only the manager's choices are random. Moments matched:
+  - mean, sd, and 10% / 90% quantiles of the weekly total (the mean weighted most);
+  - the share of slots ending at 0;
+  - the share of slot scores from a player's first / last game;
+  - the mean z of kept scores.
+- **Two fits.** The first fit used all 230 team-weeks (`HUMAN_ALL`). The real-season calibration of validation (a)
+  then showed it ~16 pts low on the opponents we actually face: the 16 team-weeks without an opponent (playoff-week byes
+  of eliminated teams) averaged ~83 pts and pulled it down. It was refit on the 214 team-weeks with an opponent
+  (`HUMAN`, used by the live option and run a2). The simulated validation (b) used `HUMAN_ALL` throughout: there the
+  opponents *are* that model, so it is internally consistent.
+
+| moment (2025-26) | managers | `HUMAN_ALL` (all 230) | managers, 214 with an opponent | **`HUMAN`** (214) |
+|---|---|---|---|---|
+| mean weekly total | 232.5 | 225.4 | 241.5 | **238.8** |
+| sd of weekly totals | 76.2 | 57.8 | 69.7 | 51.8 |
+| 10% / 50% / 90% quantile | 121 / 249 / 325 | 155 / 233 / 288 | 138 / 256 / 326 | 176 / 244 / 298 |
+| share of slots ending at 0 | 20.1% | 10.5% | 18.4% | 7.3% |
+| slot scores from the player's first / last game (≥ 2 games) | 34% / 32% | 34% / 32% | 35% / 29% | 35% / 32% |
+| mean z of kept scores | 0.90 | 0.66 | 0.95 | 0.71 |
+| corr(simulated mean, real total) per team-week | | 0.62 | | 0.69 |
+
+**Fitted `HUMAN`:**
+- **Engagement.** Beta(1.28, 0.12): mean 0.91; 72% of team-weeks have e > 0.95 and 6% have e < 0.5.
+- **Lock logit.** c0 = −3.37, c1 = 5.34, c2 = 1.72, su = 1.28. A held score is locked once it beats the value of waiting
+  by about 0.6 sd at week start, 0.5 mid-week and 0.3 at the end.
+- **Lineup.** tf = 0.79 (held scores mostly give way to tonight's players); pt = 1.00 (active days are managed
+  tip-off by tip-off).
+- **Rest.** kd = 0.005 (the fit found no use for advance DNP knowledge); sl = 0.19.
+
+**What the model gets right and wrong.**
+- **Right.** It reproduces the level, the timing of kept games and most of the shape.
+- **Too consistent.** Real managers have more very bad weeks (zero slots, abandoned weeks) and more very good ones
+  (kept scores 0.95 sd above the mean vs 0.71). The mechanistic model can't reach either tail; no tested mechanism did,
+  including advance injury news and per-week threshold offsets.
+- **Fix.** The opponent's distribution gets a calibrated residual N(δ, σ²·ρ) while games remain, with ρ = share of his
+  games not yet tipped off: δ = −5, σ = 55 (`HUMAN_RESID`; −5 / 60 with `HUMAN_ALL`).
+- **How it was chosen.** Grid search for uniform PITs of the real totals under the model's distribution from no-look-ahead
+  snapshots (`research/oppreal.ts`), at the start of every game day.
+
+| `calibm` (HUMAN + residual, 214 team-weeks; at the start of each of his game days) | game days left 1 | 2 | 3 | 4 | 5 | 6 | 7+ |
+|---|---|---|---|---|---|---|---|
+| predicted mean − actual mean | +2.8 | +2.4 | +3.4 | +2.0 | +2.5 | +0.4 | −2.1 |
+| PIT quintiles (uniform = n/5 each) | 55/36/33/40/50 | 48/35/41/47/43 | 49/28/41/56/40 | 44/35/37/59/39 | 43/33/36/52/41 | 38/31/35/54/38 | 33/24/27/46/33 |
+| (raw model, no residual: PIT) | 82/25/23/25/59 | 74/25/29/20/66 | 67/33/19/31/64 | 69/23/27/29/66 | 64/27/20/31/63 | 63/17/21/30/65 | 49/14/21/21/58 |
+
+**What P11 sees of the opponent.**
+- **Live** (`lib/live/opponent.ts`): his Sleeper state, i.e. locks and points, held scores in his starting slots,
+  players in a game, lineup, finished games, and injury tags (play probabilities of his next games).
+- **Real-season backtest.** Only what the data proves at t (`research/oppreal.ts`):
+  - the final lineup's counted scores, matched to games;
+  - such a score is "in a game" while its game runs, "held" until the player's next tip-off (the last moment he could
+    lock it), and "locked" after;
+  - everything else is unknown until week end. Scores he held and later let go are never seen: less than the live app
+    sees.
+
+**Fix 3: phase-in and a risk dial.**
+- **Phase-in schedules.** `late` = β in the last 3 game days of our week (chosen); `ramp` = linear over the game days;
+  `const` = all week.
+- **Risk dial.** The continuations are played by P8f, which maximises points. With the dial, their own future decisions
+  play to the score:
+  - **Tilt.** Every game's mean in the priced DPs is shifted by γ·sd², the certainty equivalent under a locally
+    exponential utility (`lagrange.gameDist` tilt, `IndexOpts.tilt`). A view with another tilt forces a warm-started
+    price re-solve.
+  - **γ formula.** γ = ½·E[U″]/E[U′] at our projected final T ~ N(μ, sd²), from 32 pilot continuations of P8's
+    decision against the opponent samples O_i. With z = (μ − O_i)/s and s² = sd² + h²:
+    - E[F′] = mean φ(z)/s;
+    - E[F″] = mean −zφ(z)/s².
+  - **Sign.** γ > 0 when behind (holding for ceilings, higher lock cut-offs and volatile starters look better). γ < 0
+    when ahead. γ → 0 when the week is decided either way: then points (the tiebreaker) decide.
+  - **Limits.** |γ| ≤ 0.05/pt. |γ| < 0.001 → 0, so decided weeks play as P10.
+  - **Candidate.** P8's decision under the tilt joins the race.
+
+### Validation design
+- **Base engine.** P11 is built on P10 (continuations by P8f): it costs 1/5 of P10b and was within 0.4 ± 0.65 pts/wk of
+  it in Phase 3. `P11b` (on P10b) exists, and the live option works with either engine.
+- **Pairing and population.** Every comparison is paired with P10, with the same seeds. The population is team-weeks
+  with an opponent: 214 of 230 in 2025-26 and all 690 in 2024-25.
+- **(b) Simulated weeks** (`research/p11run.ts` sim). Our games and the opponent's are drawn from the walk-forward
+  model; the human model plays the opponent with traits drawn per week; P11 sees his exact state, as the live app does.
+  Win-rate differences under 1 pp need variance reduction, all of it unbiased:
+  - **Shared prefix.** All arms are identical before the phase-in, so the week is played once up to the first tip-off of
+    the third-last game day. Each arm continues from that state with the same random streams and prices. Spot checks
+    against from-scratch runs through the invariant checker matched exactly (3 arms in development, then 44 runs, see the
+    rules section).
+  - **More completions for open weeks.** If P10's win probability at the branch is in (0.02, 0.98), the rest of the
+    week is redrawn 6 times: ours and his, his decisions included, his traits kept. Every arm plays each redraw. The
+    choice uses only information at the branch, so each week's mean over its completions is unbiased.
+  - **Rao-Blackwellized (RB) win.** P(his final < ours | his state at our last tip-off, his true traits), from 400
+    simulations of his remaining games. It has the same expectation as the 0/1 result and less noise; binary win/loss is
+    reported too.
+- **Tuning set and pre-registered choice.** The tuning set is 2025-26 (214 team-weeks, model week j = 0) plus 2024-25
+  league A (rids 1–10, 230). The rule, fixed before the results: the largest RB gain vs P10; within 0.1 pp, the smaller
+  points cost.
+- **Confirmation on fresh data.** 2024-25 leagues B and C (460, j = 0) and 2025-26 (214, new draws j = 1), the chosen
+  arm vs P10.
+- **(a) Real 2025-26 season** (`research/p11run.ts` real). Our team is played on the real outcomes through the invariant
+  checker, against the opponent visible in the data. Every final is compared with his **actual** score. The P10
+  baseline is the Phase-3 season run `s10` (same seeds, reproduced exactly).
+- **Gate criterion, stated before the runs.** (b) must be significantly positive on the confirmation set; (a) must not be
+  negative. 214 real weeks cannot resolve ~1 pp: its CI is about ± 1.5–2.5 pp.
+
+### Results
+**Tuning (444 model weeks; 311 still open at the branch, 1,999 completions; P10 won 82.9% (RB);
+`summ_p11.py sim p11/u25,p11/u24 P10`).** All arms use the late schedule. Win% diffs are in percentage points; 95%
+CIs naive / week-clustered.
+
+| arm | **RB win% diff** | binary win% diff | weeks flipped L→W / W→L | pts/wk diff | 2025-26 RB | 2024-25 A RB | rule viol. (real-week checker runs) |
+|---|---|---|---|---|---|---|---|
+| β = 100 | +0.51 ± 0.35 / ± 0.44 | +0.53 ± 0.46 | 22 / 9 | +0.32 ± 0.37 | +0.77 ± 0.52 | +0.27 ± 0.47 | — |
+| β = 300 | +0.62 ± 0.39 / ± 0.41 | +0.75 ± 0.54 | 32 / 13 | +0.00 ± 0.35 | +0.80 ± 0.54 | +0.45 ± 0.56 | — |
+| **β = 1000 (chosen)** | **+0.73 ± 0.37 / ± 0.43** | +0.41 ± 0.53 | 28 / 19 | −0.27 ± 0.49 | +0.59 ± 0.55 | +0.85 ± 0.51 | 0 |
+| β = 300, no risk dial | +0.45 ± 0.36 / ± 0.39 | +0.64 ± 0.47 | 24 / 8 | −0.25 ± 0.36 | +0.19 ± 0.53 | +0.69 ± 0.48 | — |
+
+- **Open vs decided weeks.** In weeks still open at the branch (70%) β = 1000 gains +1.04 ± 0.53. In decided weeks
+  every arm is within 0.03 pp of P10: points decide there, by design.
+- **The choice.** β = 1000 had the largest gain; β = 300 was 0.11 pp behind, outside the tie window. The ordering of β
+  is within noise, and the two seasons disagree on it. All β gain about 0.5–0.7 pp at ≤ 0.3 pts/wk.
+- **The risk dial adds +0.17 pp at β = 300.** Not significant: 2025-26 +0.80 vs +0.19, 2024-25 +0.45 vs +0.69. It is
+  kept because it makes the imagined future decisions play to the score.
+
+**Schedule** (β = 300; 2025-26, 214 weeks, completion 0 only, paired across `p11/v25` and `p11/u25` with `--c0`):
+
+| schedule | RB win% diff vs P10 | pts/wk diff | win-phase decisions/wk | decisions changed/wk |
+|---|---|---|---|---|
+| late (the last 3 game days) | +1.29 ± 1.30 | −0.10 ± 1.05 | 11.8 | 1.9 |
+| ramp (linear over the week's game days) | −0.01 ± 0.85 | −0.13 ± 1.21 | 21.8 | 3.1 |
+| (late, β = 1000) | +1.73 ± 1.38 | +0.21 ± 1.16 | 11.9 | 2.0 |
+
+Earlier phase-in gains nothing:
+- Early in the week the opponent's final is wide open: F_opp is flat and the dial is near 0.
+- The extra raced changes are noise.
+- `late` stays: the rule fixed beforehand was that ramp replaces late only if it is significantly better.
+
+**(b) Confirmation on fresh model weeks (P10 vs P11 β = 1000; `p11/c24`, `p11/c25`).**
+
+| set | model weeks (open at branch) | **RB win% diff** | binary win% diff | flips L→W / W→L | pts/wk diff |
+|---|---|---|---|---|---|
+| 2024-25 leagues B + C | 460 (335) | **+0.51 ± 0.43 / ± 0.43** | +0.33 ± 0.47 | 23 / 14 | −0.17 ± 0.35 |
+| 2025-26, new draws (j = 1) | 214 (155) | +0.16 ± 0.63 / ± 0.81 | +0.00 ± 0.81 | 10 / 9 | +0.15 ± 0.69 |
+| **confirmation pooled** | 674 (490) | **+0.40 ± 0.35 / ± 0.46** | +0.22 ± 0.41 | 33 / 23 | −0.07 ± 0.32 |
+| all simulated weeks (tuning + confirmation) | 1,118 | **+0.53 ± 0.26 / ± 0.31** | +0.30 ± 0.33 | 61 / 42 | −0.15 ± 0.28 |
+
+- Base win rate against the human-model opponents: P10 ≈ 83%.
+- The confirmation's naive CI excludes 0. Its week-clustered CI (2024-25's leagues share most players) touches 0:
+  −0.06 to +0.86.
+
+**(a) Real 2025-26 season, real opponents' actual scores** (214 team-weeks; `summ_p11.py real p11/a25,s10:P10 P10`):
+
+| run | W-L-T | win% | win% diff vs P10 (CI naive / week) | flips L→W / W→L | pts/wk | pts diff | L_ rule violations |
+|---|---|---|---|---|---|---|---|
+| P10 (`s10`) | 142-70-2 | 66.8% | | | 285.7 | | 0 |
+| **P11 β = 1000, pre-registered opponent model (`HUMAN_ALL`)** | **144-68-2** | 67.8% | +0.93 ± 1.29 / ± 2.34 | 2 / 0 | 286.1 | +0.37 ± 1.09 | **0** |
+| P11 β = 1000, refit opponent model (`HUMAN`; a2) | 145-68-1 | 68.0% | +1.17 ± 1.89 / ± 2.65 | 4 / 1 | 285.8 | +0.09 ± 1.08 | 0 |
+
+- **The flipped weeks** are close ones where P11 found the points late. For example, w19 r1: 237.5 → 246 against the
+  human's 245; w22 r2: 272 → 281 against 273.5.
+- **a2 was run after the refit.** The refit was prompted by run (a)'s calibration table (below), not by its wins. a2 is
+  reported as secondary.
+- **The opponent model as P11 used it in the real season** (`summ_p11b.py calib`):
+  - F_opp(actual final) at each of our tip-offs, by our game days left;
+  - predicted mean vs actual: `HUMAN_ALL` 225–239 vs 242–252; `HUMAN` 233–246.
+  - With `HUMAN`, PIT quintiles are still skewed high mid-week (e.g. 2 days left: 169/125/141/173/293). Real opponents
+    in real matchups still score a few points more than the model expects.
+
+**(c) Sanity: monotone risk response** (`research/p11risk.ts`; `summ_p11b.py risk p11/risk`).
+- **Setup.** 44 real 2025-26 states (two teams per week, P10 played to the first tip-off of the third-last game day).
+  P11 (β = 1000) decided that tip-off against opponents placed at a margin m below our projected final (sd 25).
+- **Measured, against P8's decision:** the change in the sd of our final and in expected points (96 common scenarios,
+  untilted continuations).
+
+| margin m (our projected final − his mean) | dial γ (mean) | P(win) | decision changed vs P8 | sd of our final, chosen − P8 | E[points], chosen − P8 | P(win), chosen − P8 |
+|---|---|---|---|---|---|---|
+| −150 (hopeless) | 0.0000 | 0.000 | 16% | −0.12 ± 0.17 | +0.35 ± 0.51 | 0.00 pp |
+| −50 | +0.0171 | 0.068 | 16% | −0.05 ± 0.07 | +0.35 ± 0.49 | +0.16 ± 0.27 pp |
+| −20 | +0.0082 | 0.269 | 23% | −0.01 ± 0.06 | +0.42 ± 0.42 | +0.42 ± 0.42 pp |
+| 0 (close) | +0.0005 | 0.485 | 34% | −0.04 ± 0.21 | +0.39 ± 0.54 | +0.40 ± 0.54 pp |
+| +20 | −0.0071 | 0.703 | 20% | −0.01 ± 0.20 | +0.25 ± 0.51 | +0.18 ± 0.41 pp |
+| +50 | −0.0165 | 0.914 | 25% | −0.24 ± 0.32 | +0.37 ± 0.52 | +0.21 ± 0.23 pp |
+| +150 (far ahead) | 0.0000 | 1.000 | 18% | −0.12 ± 0.17 | +0.35 ± 0.51 | 0.00 pp |
+
+- **The dial's sign is right in every state** (44/44): γ ≥ 0 at every margin behind, γ ≤ 0 at every margin ahead, and
+  γ = 0 when the week is decided.
+- **Manager's invariant, relative to neutral: 0/44 violations.** "Far ahead never more risk than close" and
+  "hopelessly behind never less risk than close" hold as: far ahead is never more risk-seeking than max(γ_close, 0), and
+  hopeless is never more risk-averse than min(γ_close, 0).
+  - The strict ordering γ(far ahead) ≤ γ(close) ≤ γ(hopeless) fails in 32/44 states, by design. "Close" is rarely
+    exactly even: slightly ahead makes it mildly averse. Far ahead and hopeless are neutral because nothing is left to
+    win, and the points tiebreaker decides there.
+  - The unit test reproduces the shape on a lock-or-gamble decision. With one game left, a sure 22 vs a final game of
+    mean 20 / sd 12:
+    - far ahead → lock;
+    - close → lock;
+    - behind by 10 → gamble;
+    - hopeless → lock (the points choice).
+- **Realized risk at single decisions is small.** The sd changes above are at most 0.24 pt. With a 0.25-pt tolerance,
+  per-state comparisons with "close" show far ahead taking more risk in 2/44 and hopeless taking less in 4/44. Both are
+  within noise: in those states both decisions are P10-like.
+- **No decision is perverse.** Any changed decision never costs expected points on average (+0.25 to +0.42 at every
+  margin). The win-probability effect is positive where the week is open.
+
+**Rules (invariant checker).**
+- **Real season.** 0 L_ violations in 2 × 214 real team-weeks for P11; recount = engine total everywhere.
+  - 0 unforced let-gos and 0 ex-ante idle benchings.
+  - The other counters are at P10's levels (per week, P11 / P10): deadline let-go-then-sat 0.52 / 0.55, lock into a
+    wider slot 0.07 / 0.06, final-game locks 0.36 / 0.30, race overrides of P8 3.5 / 3.2.
+- **Simulated weeks.** `p11/chk`: 23 model weeks (one team per 2025-26 week), P10 and P11 each run from scratch through
+  the checker. 22 model weeks with an opponent: 44 checked runs, **0 L_ violations**. Each equals its
+  shared-prefix continuation exactly (44/44).
+- **Unit tests.** `tests/p11.test.ts`:
+  - the opponent CDF;
+  - the dial's sign, cap and the invariants;
+  - the schedules;
+  - P11 ≡ P10 at β = 0 and before the phase-in;
+  - the monotone lock-or-gamble response;
+  - every P11 decision legal on random weeks with opponents close / far ahead / far behind;
+  - the human model's bookkeeping.
+
+  `tests/engine_select.test.ts` covers the live option. `npm test`: 67/67.
+
+**Compute.**
+- **Per decision.** A win-phase decision adds 400 opponent simulations (~20–50 ms), 32 pilot continuations and, if
+  γ ≠ 0, one tilted price re-solve plus one more raced candidate.
+- **Per week.** On real weeks P11 cost 65 s of decision time per week vs P10's 70 s (both measured under 14-way load;
+  P11's figure includes the variance diagnostic): the difference is within load noise.
+- **Validation.** The pipelines took about 7 h on 14 cores.
+
+### Live option (`lib/live/engine.ts`, `lib/live/opponent.ts`, `lib/live/advise.ts`)
+- **Setting.** `objective: "points" | "win"`, via env `LOCKIN_OBJECTIVE` or `"objective"` in `~/.sleeper-lockin/config.json`.
+  The env wins, the setting is re-read every 30 s, and unknown values mean `points`. **The default is `points`, which
+  changes nothing.**
+- **When "win" is active.** Only with a race engine (`p10` / `p10b`); with `p7h` / `p8` / `p9` it is ignored, with a
+  warning. Then:
+  - the plan's tip-off decisions use P11 (`WIN_OPTS` = β 1000, late 3 days);
+  - the lock / hold / bench options of held scores are ranked by points + β·P(win), with the win probability against
+    the human model of the opponent.
+- **The opponent.** He comes from his Sleeper state (`humanSnapshot`): locks and points, held scores in starting slots,
+  players in a game, lineup, finished games, and injury tags via his next games' play probabilities. His distribution is
+  `HUMAN` + `HUMAN_RESID`, 400 simulations, once per view.
+- **Caches.** The tag is `<engine>+win` when active. The views' fingerprints already contain the opponent's state
+  (`teamFingerprint(opp)`). Default fingerprints are byte-identical (tested).
+- **Not covered.** Replay of a finished week stays on points.
+- **The live app was not touched, built or restarted.**
+
+### Recommendation
+- **The gate is met.** Win rate improves on both validations with 0 rule violations:
+  - simulated: +0.40 pp on fresh weeks, +0.53 ± 0.31 pp on all 1,118;
+  - real: 144-68-2 / 145-68-1 vs 142-70-2.
+  - Points are unchanged.
+- **Turning it on.** Set `"objective": "win"` together with engine `p10b` (or `p10`). The default stays `points`, and
+  switching is the user's decision: it was not done here.
+- **What to expect.** About +0.5 pp of win probability, ≈ 0.1 extra wins per 23-week season, at no measurable points
+  cost.
+  - The gain comes from the ~70% of weeks still open after the fourth game day (+1 pp there). P10 already wins ~67% of
+    real matchups (~83% of simulated ones); most weeks are decided before any late decision matters.
+  - It is small because the levers late in a Lock-In week are few: hold or lock a score, start a volatile player or not.
+- **Caveats.**
+  - The opponent model is the weak link. It is calibrated on average, but real managers are more erratic than it.
+  - The early-week win objective (ramp) does not help.
+  - The ordering among β = 100 / 300 / 1000 is not resolved; all of them help.
+  - P11 was validated on P10. On P10b the mechanism is the same, but it was not separately backtested.
+- **Follow-ups.**
+  - Per-manager engagement estimated from his past weeks (some managers are reliably active, others not).
+  - Use the opponent's visible lineup in the backtest snapshot (the live app has it).
+  - P11b on the real season (about 1.6 h).
+
+### Reproduce
+```
+npx esbuild research/humanfit.ts --bundle --platform=node --format=cjs --outfile=research/dist/humanfit.cjs --log-level=error   # (+ p11run as p11run2/p11run3.cjs, p11risk)
+node research/dist/humanfit.cjs fitm research/out/humanfit_m.json                 # opponent model (fit, evalm, calibm "<params>", scan)
+node research/dist/humanfit.cjs calibm research/out/humancalib_m.json "1.2844,0.1235,-3.3698,5.3396,1.7237,1.2764,0.7909,0.9989,0.0054,0.1877"
+node research/runtasks.mjs research/dist/p11run2.cjs p11/u25 sim "POLS=P10;P11:beta=100;P11:beta=300;P11:beta=1000;P11:beta=300,dial=false" KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/u24 sim SEASON=research/data/season2024.json TASKS=<w:1..10> <same POLS> KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/v25 sim "POLS=P11:beta=300,sched=ramp" KC=1 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/a25 real "POLS=P11:beta=1000,vr=64" PAR=14          # (a); a2: p11run3.cjs -> p11/a25m
+node research/runtasks.mjs research/dist/p11risk.cjs p11/risk "" TASKS=<46 team-weeks> PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/c24 sim SEASON=research/data/season2024.json TASKS=<w:11..30> "POLS=P10;P11:beta=1000" KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/c25 sim "POLS=P10;P11:beta=1000" S0=1 KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run3.cjs p11/chk sim TASKS=<23> "POLS=P10;P11:beta=1000" CHECKBRANCH=1 KC=1 PAR=14
+cd research/out && python3 ../summ_p11.py sim p11/u25,p11/u24 P10 && python3 ../summ_p11.py sim p11/c24,p11/c25 P10
+python3 ../summ_p11.py sim p11/u25,p11/v25 P10 "P11:beta=300" "P11:beta=300,sched=ramp" --c0
+python3 ../summ_p11.py real p11/a25,s10:P10 P10 && python3 ../summ_p11b.py vr p11/a25 "P11:beta=1000,vr=64" && python3 ../summ_p11b.py calib p11/a25
+python3 ../summ_p11b.py risk p11/risk
+```
+- **Bundles.** `p11run2.cjs` was built at commit 75564de, with `HUMAN_ALL` as `HUMAN`. `p11run3.cjs` uses the refit
+  `HUMAN`; it was built separately so the running pipeline kept one consistent bundle.
+- **Drivers and outputs.** The drivers are `research/scratch/p11/pipeline*.mjs`. Single-draw tuning outputs from an
+  earlier design (`p11/t25`, superseded) are kept; their P10 totals equal `p11/u25`'s completion 0 exactly.

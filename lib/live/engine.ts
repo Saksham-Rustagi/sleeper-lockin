@@ -66,8 +66,9 @@ export function winActive(e: EngineName = engineName(), o: Objective = objective
   return false;
 }
 let warned = false;
-// P11 settings (beta = points per unit of win probability, phase-in schedule), chosen by validation: REPORT Phase 5
-export const WIN_OPTS: P11Opts = { beta: 300, sched: "late", lateDays: 3 };
+// P11 settings, chosen by validation (REPORT "Engine v2 - Phase 5"): beta = 1000 points per unit of win probability
+// (1 pp of win probability = 10 pts; w_pts = 1/1000), phased in over the last 3 game days of the week, risk dial on
+export const WIN_OPTS: P11Opts = { beta: 1000, sched: "late", lateDays: 3 };
 export function parseEngine(s: string): EngineName {
   const v = s.trim().toLowerCase();
   if ((ENGINES as string[]).includes(v)) return v as EngineName;
