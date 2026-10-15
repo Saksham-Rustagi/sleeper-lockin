@@ -96,6 +96,8 @@ export function simPolicy(e: EngineName = engineName()): E.Policy { return e ===
 // (the plan's first step), not the best of the options' quick simulations (those play the rest of the week by POLICY
 // and are shown for information)
 export function engineDecidesHolds(e: EngineName = engineName()): boolean { return e === "p10b"; }
+// the race engines replay a week in minutes (a race at every tip-off): the notifier precomputes last week's replay
+export function replayIsSlow(e: EngineName = engineName()): boolean { return RACE.includes(e); }
 
 // P10 / P10b: raced complete decisions, continuations played by P8f / P8 on their own price state (K is not used: the
 // number of rollouts is adaptive)

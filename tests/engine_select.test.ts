@@ -7,7 +7,7 @@ import os from "os";
 import path from "path";
 import * as E from "../lib/engine/core";
 import { POLICY, type LiveTeam } from "../lib/live/week";
-import { engineName, resetEngineCache, decisionPolicy, simPolicy, planHooks, replayHooks, engineTag, simTag, engineDecidesHolds, P8_POLICY, objectiveName, winActive } from "../lib/live/engine";
+import { engineName, resetEngineCache, decisionPolicy, simPolicy, planHooks, replayHooks, engineTag, simTag, engineDecidesHolds, replayIsSlow, P8_POLICY, objectiveName, winActive } from "../lib/live/engine";
 import { computeAdvice, engineCall } from "../lib/live/advise";
 import { humanSnapshot, liveOppSource } from "../lib/live/opponent";
 import { fingerprint } from "../lib/live/cache";
@@ -144,6 +144,9 @@ test("p10b: decisions by P10b, mass simulations (projections, cut-offs) exactly 
     assert.equal(decisionPolicy(), P8_POLICY); assert.ok(simPolicy().index?.fresh, "p10b-full simulates with P8f"); assert.ok(!engineDecidesHolds());
   });
   for (const e of [undefined, "p8", "p9", "p10"]) assert.ok(!withEngine(e, undefined, () => engineDecidesHolds()), `${e ?? "p7h"} unchanged`);
+  // the notifier precomputes replays (quiet hours) only for the race engines; p7h's notifier is unchanged
+  for (const e of ["p10", "p10b", "p10b-full"]) assert.ok(withEngine(e, undefined, () => replayIsSlow()), e);
+  for (const e of [undefined, "p8", "p9"]) assert.ok(!withEngine(e, undefined, () => replayIsSlow()), e ?? "p7h");
   const T = liveTeam(); const asOf = T0 + 12 * H;
   const v7 = withEngine(undefined, undefined, () => weekValues(T, 60, 11, asOf));
   assert.deepEqual(withEngine("p10b", undefined, () => weekValues(T, 60, 11, asOf)), v7, "p10b projections = p7h's");

@@ -198,10 +198,11 @@ function decisions(ctx: WeekContext, K: number, seed: number, eng?: { st: E.Stat
     if (eng) {
       // p10b decides; the quick simulations (rest of the week by the fast rule) are shown, and flagged when they disagree
       const what = o.action === "LOCK" ? `lock ${x.toFixed(1)} now` : o.action === "BENCH" ? `let ${x.toFixed(1)} go (bench him)` : next ? `keep holding ${x.toFixed(1)} in a starting slot (don't bench!)` : `leave him in a starting slot - his last game counts automatically`;
-      const q = options[quick];
-      reason = `P10b (complete decision for the ${fmtTime(eng.tip)} tip-off, raced by simulation): ${what}.` + (alts[quick].action !== o.action
-        ? ` The quick simulations rate ${q.action === "LOCK" ? "locking" : q.action === "BENCH" ? "benching" : "holding"} ${(q.expPoints - o.expPoints).toFixed(1)} pts higher; P10b's search is the better-tested one (backtest +2.4 pts/wk).`
-        : "");
+      const q = options[quick]; const gap = q.expPoints - o.expPoints;
+      const qa = q.action === "LOCK" ? "locking" : q.action === "BENCH" ? "benching" : "holding";
+      reason = `P10b (complete decision for the ${fmtTime(eng.tip)} tip-off, raced by simulation): ${what}.` + (alts[quick].action === o.action ? ""
+        : gap > 0.5 ? ` The quick simulations rate ${qa} ${gap.toFixed(1)} pts higher; P10b's search is the better-tested one (backtest +2.4 pts/wk).`
+        : ` The quick simulations call it a near-tie (${qa} ${gap >= 0 ? "+" : ""}${gap.toFixed(1)} pts).`);
     }
     const bestAlt = alts[best];
     const moves = o.action === "LOCK" && bestAlt.slot !== null
