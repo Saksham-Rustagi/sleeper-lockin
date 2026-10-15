@@ -110,6 +110,7 @@ async function main() {
   const h = etHour(now);
   if (!process.env.FORCE && h >= 3 && h < 11) { await warmReplay(cfg); log("quiet hours"); return; }
   const a = await advise({ leagueId: cfg.leagueId, rosterId: cfg.rosterId, K: Number(process.env.K || 250) });
+  log(`engine ${engineName()}: advice ${a.cached ? "cached" : "computed"} in ${((Date.now() - now) / 1000).toFixed(0)} s since start`);
   if (!process.env.DRY_RUN) logAdvice(DATA, a.season, a);
   const sent: Record<string, number> = fs.existsSync(SENT) ? JSON.parse(fs.readFileSync(SENT, "utf8")) : {};
   const msgs = messages(a, now);
@@ -149,7 +150,7 @@ async function main() {
   } catch (e: any) { log("IR ERROR", e?.message || e); }
   for (const [k, t] of Object.entries(sent)) if (now - t > 10 * 86400e3) delete sent[k];
   if (!process.env.DRY_RUN) fs.writeFileSync(SENT, JSON.stringify(sent));
-  log(`week ${a.week} (engine ${engineName()}): ${a.decisions.length} decisions, ${a.plan.length} tip-offs planned, win ${a.outlook.winProb === null ? "–" : Math.round(a.outlook.winProb * 100) + "%"}, ${n} new reminders`);
+  log(`week ${a.week}: ${a.decisions.length} decisions, ${a.plan.length} tip-offs planned, win ${a.outlook.winProb === null ? "–" : Math.round(a.outlook.winProb * 100) + "%"}, ${n} new reminders`);
 }
 if (/notify\.(c?js|ts)$/.test(process.argv[1] || "")) {
   // Exit explicitly: background simulation workers / open handles must never keep a finished run alive (launchd
