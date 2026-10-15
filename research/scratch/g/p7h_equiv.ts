@@ -1,3 +1,4 @@
+// @ts-nocheck - imports ./live_src (untracked, made by extract_live.mjs): keep `next build` / tsc of a fresh checkout green
 // Deploy check (task G): the live code (branch lockin-live, extracted to ./live_src by extract_live.mjs) vs engine-v2,
 // in ONE process on the SAME live contexts (no second fetch): with the default engine every number must be identical,
 // and with p10b every mass simulation must be identical too.
