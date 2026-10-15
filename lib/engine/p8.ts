@@ -32,10 +32,22 @@ export interface IndexOpts {
                                     // started mid-week, e.g. the live app's projections); otherwise only at event 0
 }
 // ---------------- prices ----------------
-interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number }
-interface Cache { week: View; slots: Map<string, { cur: View; day: number; ends: number }>; solves: number; solveMs: number; endTimes: number[] }
+interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number; id: number }
+interface Cache { week: View; slots: Map<string, { cur: View; day: number; ends: number }>; solves: number; solveMs: number; endTimes: number[]; memo: Map<string, View>; hits: number }
 const CACHE = new WeakMap<E.TeamWeek, Cache>();
-export function priceStats(tw: E.TeamWeek) { const c = CACHE.get(tw); return c ? { solves: c.solves, solveMs: c.solveMs, weekBound: c.week.bound } : null; }
+let VIEW_ID = 0;
+export function priceStats(tw: E.TeamWeek) { const c = CACHE.get(tw); return c ? { solves: c.solves, solveMs: c.solveMs, weekBound: c.week.bound, memoHits: c.hits } : null; }
+// A warm re-solve is a pure function of (the prices it starts from, the state fromState reads, t, iterations, rate):
+// rollouts that reach the same state from the same prices (e.g. every continuation of one candidate at the later
+// tip-offs of the same night, before any game ends) share it. LRU per team-week, at most MEMO_MAX views.
+const MEMO_MAX = 1000;
+function stateKey(st: E.State, t: number, iters: number, lr: number) {
+  const f = (x: number) => (Object.is(x, -0) ? "-0" : String(x));
+  let k = `${t}|${iters}|${lr}`;
+  for (let s = 0; s < st.lockedBy.length; s++) k += `|${st.lockedBy[s]},${f(st.lockedPts[s])},${st.pinned[s]}`;
+  for (let p = 0; p < st.isLocked.length; p++) k += `|${st.isLocked[p]},${st.inGame[p]},${st.lastPlayed[p]},${f(st.pendingX[p])}`;
+  return k;
+}
 const slotOf = (c: Cache, name: string) => { let x = c.slots.get(name); if (!x) { x = { cur: c.week, day: -1, ends: 0 }; c.slots.set(name, x); } return x; };
 const endedBy = (c: Cache, t: number) => { let lo = 0, hi = c.endTimes.length; while (lo < hi) { const m = (lo + hi) >> 1; if (c.endTimes[m] <= t) lo = m + 1; else hi = m; } return lo; };
 function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: number, from?: View): View {
@@ -54,7 +66,7 @@ function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: nu
     }
   }
   const r = from ? L.minimizeBound(si.inst, { method: "adam", lr, iters, mu0 }) : L.tightBound(si.inst, iters);
-  return { Tb: L.tables(r.P, r.mu), si, t0: t, bound: r.bound };
+  return { Tb: L.tables(r.P, r.mu), si, t0: t, bound: r.bound, id: ++VIEW_ID };
 }
 // prices for a decision at time t; top-level policies may re-solve, rollout bases (resolve "never") reuse them
 function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
@@ -63,11 +75,21 @@ function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
   if (!c) {
     const t0 = Math.min(...tw.games.map((g) => g.tip));
     const t1 = Date.now(); const week = solveView(tw, E.initState(tw), t0, o.weekIters ?? 100000, 0);
-    c = { week, slots: new Map(), solves: 1, solveMs: Date.now() - t1, endTimes: tw.games.map((g) => g.end).sort((a, b) => a - b) }; CACHE.set(tw, c);
+    c = { week, slots: new Map(), solves: 1, solveMs: Date.now() - t1, endTimes: tw.games.map((g) => g.end).sort((a, b) => a - b), memo: new Map(), hits: 0 }; CACHE.set(tw, c);
   }
   const ps = slotOf(c, o.slot ?? "top"); const day = E.dayEnd(t); const ends = endedBy(c, t);
   if (o.resolve === "tip" || (o.resolve === "day" && day !== ps.day) || (o.resolve === "info" && ends !== ps.ends)) {
-    if (ps.cur.t0 !== t) { const t1 = Date.now(); ps.cur = solveView(tw, st, t, o.iters ?? 100, o.lr ?? 0.03, ps.cur); c.solves++; c.solveMs += Date.now() - t1; }
+    if (ps.cur.t0 !== t) {
+      // (re-solving only after new results, "info", the states hardly ever repeat: no memo)
+      const it = o.iters ?? 100, lr = o.lr ?? 0.03; const key = o.resolve === "info" ? "" : `${ps.cur.id}#${stateKey(st, t, it, lr)}`;
+      const hit = key ? c.memo.get(key) : undefined;
+      if (hit) { c.memo.delete(key); c.memo.set(key, hit); ps.cur = hit; c.hits++; }
+      else {
+        const t1 = Date.now(); const v = solveView(tw, st, t, it, lr, ps.cur); c.solves++; c.solveMs += Date.now() - t1;
+        if (key) { c.memo.set(key, v); if (c.memo.size > MEMO_MAX) c.memo.delete(c.memo.keys().next().value!); }
+        ps.cur = v;
+      }
+    }
     ps.day = day; ps.ends = ends;
   }
   return ps.cur;
