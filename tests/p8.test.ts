@@ -73,3 +73,38 @@ test("P8 assignment is the exact max-weight matching (vs brute force)", () => {
     assert.ok(Math.abs(ctx.bestScore - best) < 1e-9, `${ctx.bestScore} vs ${best}`);
   }
 });
+
+test("P8 simulations are repeatable: same inputs give identical totals regardless of call order", () => {
+  // two team-weeks, model scenarios simulated from a mid-week state (as the live app / research/p10cmp.ts do) and from
+  // event 0, in different orders and interleaved with the other team; P8 (re-solve every tip-off), P8f, P8f "fresh"
+  const r = E.rng(11); const POS = [["PG"], ["SG"], ["PG", "SG"], ["SF"], ["PF"], ["SF", "PF"], ["C"], ["PF", "C"]];
+  const mk = () => tw(["PG", "SG", "G", "SF", "PF", "F", "C", "UTIL", "UTIL"], Array.from({ length: 13 }, () => ({
+    pos: POS[Math.floor(r() * POS.length)], games: [0, 1, 2, 3, 4, 5, 6].filter(() => r() < 0.55).map((d) => ({ tip: T0 + d * 24 * H + Math.floor(r() * 4) * H, mu: 10 + Math.round(r() * 30) })) })));
+  const teams = [mk(), mk()].map((t) => {
+    const ev = E.buildEvents(t, true); const base = { actual: real(t).a, played: real(t).p };
+    const sc = [0, 1, 2, 3].map((k) => E.sampleScenario(t, null, -Infinity, E.rng(100 + k), base));
+    // the mid-week state: P8 on scenario 0 until Thursday (computed once; later runs start from a copy of it)
+    const pre = E.simulate(t, P8, ev, sc[0].actual, sc[0].played, E.initState(t), 0, undefined, T0 + 72 * H - 1);
+    return { t, ev, sc, st: E.cloneState(pre.st), i: pre.evIdx };
+  });
+  const pols: E.Policy[] = [
+    { ...P8, index: { resolve: "tip", iters: 60, weekIters: 20000 } },
+    { ...P8, index: { resolve: "info", iters: 30, weekIters: 20000 } },
+    { ...P8, index: { resolve: "info", iters: 30, weekIters: 20000, slot: "sim", fresh: true } },
+  ];
+  for (const pol of pols) for (const mid of [true, false]) {
+    const run = (j: number, k: number) => { const T = teams[j]; return E.simulate(T.t, pol, T.ev, T.sc[k].actual, T.sc[k].played, mid ? E.cloneState(T.st) : E.initState(T.t), mid ? T.i : 0).total; };
+    const a = [0, 1, 2, 3].map((k) => run(0, k));
+    const again = [0, 1, 2, 3].map((k) => run(0, k));
+    const rev = [3, 2, 1, 0].map((k) => run(0, k)).reverse();
+    const inter = [0, 1, 2, 3].map((k) => (run(1, 3 - k), run(0, k)));
+    const tag = `${pol.index!.resolve}${pol.index!.fresh ? " fresh" : ""} ${mid ? "mid-week" : "event 0"}`;
+    assert.deepEqual(again, a, tag); assert.deepEqual(rev, a, tag); assert.deepEqual(inter, a, tag);
+  }
+  // a run stepped in chunks (the same State object resumed where it stopped) equals the run in one go
+  const T = teams[0]; const pol = pols[0];
+  const whole = E.simulate(T.t, pol, T.ev, T.sc[1].actual, T.sc[1].played, E.initState(T.t), 0).total;
+  let st = E.initState(T.t), i = 0;
+  for (let d = 1; d <= 7; d++) { const res = E.simulate(T.t, pol, T.ev, T.sc[1].actual, T.sc[1].played, st, i, undefined, T0 + d * 24 * H); st = res.st; i = res.evIdx; }
+  assert.equal(E.simulate(T.t, pol, T.ev, T.sc[1].actual, T.sc[1].played, st, i).total, whole);
+});

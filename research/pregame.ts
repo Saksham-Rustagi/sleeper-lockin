@@ -31,7 +31,7 @@
 import fs from "fs";
 import * as E from "./engine";
 import * as PL from "./policies";
-import { assign, toDecision, fillIdle, seedPrices, type IndexContext, type IndexDecision } from "../lib/engine/p8";
+import { assign, toDecision, fillIdle, seedPrices, continuePrices, type IndexContext, type IndexDecision } from "../lib/engine/p8";
 
 // KEY=VAL arguments set the environment (e.g. BUDGET_S=600); the rest are positional
 for (const a of process.argv.slice(2)) { const m = a.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/); if (m) process.env[m[1]] = m[2]; }
@@ -103,6 +103,7 @@ export function plan(inp: PlanInput, log: (s: string) => void = () => {}) {
   const night = tw.games.filter((g) => g.tip >= inp.t0 && g.tip < E.dayEnd(inp.t0));
   const firstEnd = Math.min(...night.map((g) => g.end)); const lastTip = Math.max(...night.map((g) => g.tip));
   const ru = PL.runner(ENGINE, tw, inp.seed, real);
+  continuePrices(tw, ru.pol.index?.slot ?? "top"); // (continues the history's prices: the same simulated week)
   const res = E.simulate(tw, ru.pol, events, real.actual, real.played, E.cloneState(inp.st), inp.evIdx, ru.hooks, Math.min(lastTip, firstEnd - 1));
   const S = E.cloneState(res.st); const evS = res.evIdx; seedPrices(tw, "plan0", "top");
   const laterTips = night.filter((g) => g.tip > Math.min(lastTip, firstEnd - 1)).length; // decided inside the continuations
@@ -196,7 +197,7 @@ function realtimeActions(inp: PlanInput, pl: PlanOut, name: string, S: E.State, 
   const seen = new Map<number, number>(); // p -> decision time (at or after D)
   const wrap: E.Hooks = { ...hooks, decideIndex: (st, t, i, ctx) => { if (t >= D) for (const c of ctx.cands) if (c.held && want.has(c.p) && !seen.has(c.p)) seen.set(c.p, t); return hooks?.decideIndex?.(st, t, i, ctx); } };
   const out = new Map<number, { act: Act; t: number; early: boolean; before: E.State; evBefore: number }>();
-  let st = E.cloneState(S); let i = ev;
+  let st = E.cloneState(S); let i = ev; continuePrices(tw, pol.index?.slot ?? "top"); // (its prices continue from S)
   const times = [...new Set(events.slice(ev).map((e) => e.t))].filter((t) => t <= D).sort((a, b) => a - b);
   const status = (s: E.State, p: number): Act => (s.isLocked[p] ? "lock" : !Number.isNaN(s.pendingX[p]) || s.inGame[p] >= 0 ? "keep" : "free");
   for (const t of times) {

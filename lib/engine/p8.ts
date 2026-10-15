@@ -28,17 +28,25 @@ export interface IndexOpts {
   fill?: "none" | "idle" | "all";
   slot?: string;                    // price state used ("top": real decisions; rollouts use their own, seeded from top)
   keep?: number;                    // extra weight (pts) for keeping a positive held score (default 0)
-  fresh?: boolean;                  // every simulate() call starts from the week-start prices (independent simulations
-                                    // started mid-week, e.g. the live app's projections); otherwise only at event 0
+  fresh?: boolean;                  // every simulate() call starts from the week-start prices, even a continuation or an
+                                    // armed slot (otherwise: see "prices" below)
   tilt?: number;                    // risk dial (Phase 5, lib/engine/p11.ts): game means shifted by tilt * sd^2 in the priced
                                     // DPs (lagrange gameDist); a re-solve is forced when the current view has another tilt
 }
 // ---------------- prices ----------------
+// Price states ("slots": "top" for real decisions, "roll" / "sim" / ... for simulations) live per team-week. A simulate()
+// run uses its slot's state only when it CONTINUES a simulation: the same State object resumed at the event index where
+// the last run on that slot stopped (chunked runs: the live plan, replays, the invariant checker), or a slot armed just
+// before by seedPrices / restorePrices / continuePrices (rollouts, research branches). Every other run starts from the
+// week-start prices, so its result is a pure function of (team-week, state, event index, outcomes): independent of what
+// was simulated before (P8 simulation repeatability, REPORT).
 interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number; id: number; tilt: number }
-interface Cache { week: View; slots: Map<string, { cur: View; day: number; ends: number }>; solves: number; solveMs: number; endTimes: number[]; memo: Map<string, View>; hits: number }
+// cur null = the week-start prices (solved on first use, per weekIters)
+interface PriceSlot { cur: View | null; day: number; ends: number; armed: boolean; st: E.State | null; ev: number }
+interface Cache { weeks: Map<number, View>; slots: Map<string, PriceSlot>; solves: number; solveMs: number; endTimes: number[]; memo: Map<string, View>; hits: number }
 const CACHE = new WeakMap<E.TeamWeek, Cache>();
 let VIEW_ID = 0;
-export function priceStats(tw: E.TeamWeek) { const c = CACHE.get(tw); return c ? { solves: c.solves, solveMs: c.solveMs, weekBound: c.week.bound, memoHits: c.hits } : null; }
+export function priceStats(tw: E.TeamWeek) { const c = CACHE.get(tw); const w = c?.weeks.values().next().value; return c && w ? { solves: c.solves, solveMs: c.solveMs, weekBound: w.bound, memoHits: c.hits } : null; }
 // A warm re-solve is a pure function of (the prices it starts from, the state fromState reads, t, iterations, rate):
 // rollouts that reach the same state from the same prices (e.g. every continuation of one candidate at the later
 // tip-offs of the same night, before any game ends) share it. LRU per team-week, at most MEMO_MAX views.
@@ -50,7 +58,21 @@ function stateKey(st: E.State, t: number, iters: number, lr: number) {
   for (let p = 0; p < st.isLocked.length; p++) k += `|${st.isLocked[p]},${st.inGame[p]},${st.lastPlayed[p]},${f(st.pendingX[p])}`;
   return k;
 }
-const slotOf = (c: Cache, name: string) => { let x = c.slots.get(name); if (!x) { x = { cur: c.week, day: -1, ends: 0 }; c.slots.set(name, x); } return x; };
+const cacheOf = (tw: E.TeamWeek) => {
+  let c = CACHE.get(tw);
+  if (!c) { c = { weeks: new Map(), slots: new Map(), solves: 0, solveMs: 0, endTimes: tw.games.map((g) => g.end).sort((a, b) => a - b), memo: new Map(), hits: 0 }; CACHE.set(tw, c); }
+  return c;
+};
+const slotOf = (c: Cache, name: string) => { let x = c.slots.get(name); if (!x) { x = { cur: null, day: -1, ends: 0, armed: false, st: null, ev: -1 }; c.slots.set(name, x); } return x; };
+// the week-start prices for this many iterations (a function of the team-week alone, solved once)
+function weekView(tw: E.TeamWeek, c: Cache, iters: number): View {
+  let w = c.weeks.get(iters);
+  if (!w) {
+    const t1 = Date.now(); w = solveView(tw, E.initState(tw), Math.min(...tw.games.map((g) => g.tip)), iters, 0);
+    c.weeks.set(iters, w); c.solves++; c.solveMs += Date.now() - t1;
+  }
+  return w;
+}
 const endedBy = (c: Cache, t: number) => { let lo = 0, hi = c.endTimes.length; while (lo < hi) { const m = (lo + hi) >> 1; if (c.endTimes[m] <= t) lo = m + 1; else hi = m; } return lo; };
 function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: number, from?: View, tilt = 0): View {
   const si = L.fromState(tw, st, t, tilt);
@@ -74,13 +96,9 @@ const sameLocks = (v: View, st: E.State) => { for (let s = 0; s < st.lockedBy.le
 // prices for a decision at time t; top-level policies may re-solve, rollout bases (resolve "never") reuse them
 function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
   const o = pol.index!;
-  let c = CACHE.get(tw);
-  if (!c) {
-    const t0 = Math.min(...tw.games.map((g) => g.tip));
-    const t1 = Date.now(); const week = solveView(tw, E.initState(tw), t0, o.weekIters ?? 100000, 0);
-    c = { week, slots: new Map(), solves: 1, solveMs: Date.now() - t1, endTimes: tw.games.map((g) => g.end).sort((a, b) => a - b), memo: new Map(), hits: 0 }; CACHE.set(tw, c);
-  }
+  const c = cacheOf(tw);
   const ps = slotOf(c, o.slot ?? "top"); const day = E.dayEnd(t); const ends = endedBy(c, t); const tilt = o.tilt ?? 0;
+  if (!ps.cur) ps.cur = weekView(tw, c, o.weekIters ?? 100000);
   if (o.resolve === "tip" || (o.resolve === "day" && day !== ps.day) || (o.resolve === "info" && ends !== ps.ends) || (o.resolve !== "never" && ps.cur.tilt !== tilt)) {
     // (a view of this very moment is reused only if it was solved for the same locked slots: a price state seeded from
     // another simulation at the same time would map a free slot to none, and NaN prices would drop held scores)
@@ -99,13 +117,26 @@ function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
   }
   return ps.cur;
 }
-// a new top-level simulation of this week starts: back to the week-start prices
-export function resetPrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (c) { const ps = slotOf(c, slot); ps.cur = c.week; ps.day = -1; ps.ends = 0; } }
-// a rollout starts from the real decision's current prices
-export function seedPrices(tw: E.TeamWeek, to: string, from = "top") { const c = CACHE.get(tw); if (c) { const a = slotOf(c, from), b = slotOf(c, to); b.cur = a.cur; b.day = a.day; b.ends = a.ends; } }
-// a price state saved and restored (research: continue several policies from one mid-week state, research/p11run.ts)
+// back to the week-start prices
+export function resetPrices(tw: E.TeamWeek, slot = "top") { const ps = slotOf(cacheOf(tw), slot); ps.cur = null; ps.day = -1; ps.ends = 0; ps.armed = false; }
+// simulate() starts / stops a run on the policy's price slot (see "prices" above): the slot's state is kept only for a
+// continuation (same State object at the event index the last run stopped at) or an armed slot; fresh: always reset
+export function beginPrices(tw: E.TeamWeek, o: IndexOpts, st: E.State, fromEv: number) {
+  const ps = slotOf(cacheOf(tw), o.slot ?? "top");
+  const cont = !o.fresh && fromEv > 0 && (ps.armed || (ps.st === st && ps.ev === fromEv));
+  if (!cont) { ps.cur = null; ps.day = -1; ps.ends = 0; }
+  ps.armed = false;
+}
+export function endPrices(tw: E.TeamWeek, o: IndexOpts, st: E.State, ev: number) { const ps = slotOf(cacheOf(tw), o.slot ?? "top"); ps.st = st; ps.ev = ev; }
+// the next run on slot `to` continues from the real decision's current prices (a rollout)
+export function seedPrices(tw: E.TeamWeek, to: string, from = "top") { const c = cacheOf(tw); const a = slotOf(c, from), b = slotOf(c, to); b.cur = a.cur; b.day = a.day; b.ends = a.ends; b.armed = true; }
+// the next run on this slot continues its current prices from whatever state it is given (the caller continues the same
+// simulated week from a copy of its state, e.g. research/pregame.ts)
+export function continuePrices(tw: E.TeamWeek, slot = "top") { slotOf(cacheOf(tw), slot).armed = true; }
+// a price state saved and restored (research: continue several policies from one mid-week state, research/p11run.ts);
+// restoring arms the slot for the next run
 export function savePrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (!c) return null; const a = slotOf(c, slot); return { cur: a.cur, day: a.day, ends: a.ends }; }
-export function restorePrices(tw: E.TeamWeek, saved: ReturnType<typeof savePrices>, slot = "top") { const c = CACHE.get(tw); if (c && saved) { const a = slotOf(c, slot); a.cur = saved.cur; a.day = saved.day; a.ends = saved.ends; } }
+export function restorePrices(tw: E.TeamWeek, saved: ReturnType<typeof savePrices>, slot = "top") { if (!saved) return; const a = slotOf(cacheOf(tw), slot); a.cur = saved.cur; a.day = saved.day; a.ends = saved.ends; a.armed = true; }
 
 // ---------------- values from the priced DPs ----------------
 function playProb(tw: E.TeamWeek, p: number, gi: number, lp: number) {

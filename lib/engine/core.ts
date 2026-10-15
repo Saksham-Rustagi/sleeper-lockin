@@ -8,7 +8,7 @@
 //  - Unlocked starter at week end => his final game counts automatically (0 if DNP).
 //  - A slot can host several players in one day if their games don't overlap.
 
-import { indexGroup, resetPrices, type IndexContext, type IndexDecision, type IndexOpts } from "./p8";
+import { indexGroup, beginPrices, endPrices, type IndexContext, type IndexDecision, type IndexOpts } from "./p8";
 
 export const SLOT_MASK: Record<string, number> = { PG: 1, SG: 2, G: 3, SF: 4, PF: 8, F: 12, C: 16, UTIL: 31 };
 const POS_BIT: Record<string, number> = { PG: 1, SG: 2, SF: 4, PF: 8, C: 16, G: 3, F: 12 };
@@ -556,7 +556,7 @@ export interface Hooks {
 export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float64Array, played: Uint8Array,
   st: State = initState(tw), fromEv = 0, hooks?: Hooks, toTime = Infinity): { total: number; st: State; evIdx: number } {
   const nP = tw.pmask.length; const eps = pol.eps ?? 0;
-  if (pol.index && (fromEv === 0 || pol.index.fresh)) resetPrices(tw, pol.index.slot); // a new week / simulation: week-start prices
+  if (pol.index) beginPrices(tw, pol.index, st, fromEv); // week-start prices unless this run continues one (lib/engine/p8.ts)
   let i = fromEv;
   for (; i < events.length; i++) {
     const e = events[i];
@@ -603,6 +603,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
     const a = assignExact(tw.slots, openMaskOf(st), open, tw.pmask, w);
     for (const p of a.slotOf.keys()) total += st.pendingX[p];
   }
+  if (pol.index) endPrices(tw, pol.index, st, i);
   return { total, st, evIdx: i };
 }
 
