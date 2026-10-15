@@ -68,6 +68,7 @@ function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: nu
   const r = from ? L.minimizeBound(si.inst, { method: "adam", lr, iters, mu0 }) : L.tightBound(si.inst, iters);
   return { Tb: L.tables(r.P, r.mu), si, t0: t, bound: r.bound, id: ++VIEW_ID };
 }
+const sameLocks = (v: View, st: E.State) => { for (let s = 0; s < st.lockedBy.length; s++) if ((v.si.instSlot[s] < 0) !== (st.lockedBy[s] >= 0)) return false; return true; };
 // prices for a decision at time t; top-level policies may re-solve, rollout bases (resolve "never") reuse them
 function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
   const o = pol.index!;
@@ -79,7 +80,9 @@ function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
   }
   const ps = slotOf(c, o.slot ?? "top"); const day = E.dayEnd(t); const ends = endedBy(c, t);
   if (o.resolve === "tip" || (o.resolve === "day" && day !== ps.day) || (o.resolve === "info" && ends !== ps.ends)) {
-    if (ps.cur.t0 !== t) {
+    // (a view of this very moment is reused only if it was solved for the same locked slots: a price state seeded from
+    // another simulation at the same time would map a free slot to none, and NaN prices would drop held scores)
+    if (ps.cur.t0 !== t || !sameLocks(ps.cur, st)) {
       // (re-solving only after new results, "info", the states hardly ever repeat: no memo)
       const it = o.iters ?? 100, lr = o.lr ?? 0.03; const key = o.resolve === "info" ? "" : `${ps.cur.id}#${stateKey(st, t, it, lr)}`;
       const hit = key ? c.memo.get(key) : undefined;

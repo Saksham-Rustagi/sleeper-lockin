@@ -45,6 +45,11 @@ both seasons (+2.40 ± 1.39 pts/wk), 0 rule violations, 0 dominated actions; see
 ## Phase 4 - Pre-game planner
 Before tonight's first tip: deep search (nested rollouts allowed) producing a contingency table per decision (e.g. lock
 cut-offs conditional on teammates' results), so live decisions are lookups; budget 30 min or overnight.
+**Status (2026-10-15): prototype** - `research/pregame.ts` (season replay or live league): tonight's lineup by P10b,
+then lock / keep / free cut-offs per starter for the morning-after decision, with key-teammate conditions, from P8
+continuations within `BUDGET_S`. On 13 team-week-days (41 decisions) its choices are as good as real-time P10b's
+(regret 1.65 ± 2.50 vs 3.27 ± 3.00 pts in total); precision (cut-off SEs of a few points in 30 min on one core) is the
+limit. See REPORT "Engine v2 — Phase 4 prototype". Engine speed work (task C): REPORT "Engine speed".
 
 ## Gate
 Nothing replaces the live POLICY until it beats P7H (280.3) on the season backtest (paired, CI reported), shows no

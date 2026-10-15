@@ -1316,6 +1316,8 @@ So two kernels dominate everything: the **slot assignment** (rule family: P2LAH,
   P2LAH_LheldTie, each on the real outcomes plus 2 model scenarios (seeds of `p8exp`), baseline bundle vs optimised:
   **0 differences in 2,760 totals** (and lock counts), with and without the re-solve memo (`pcbase` / `pcnew`, `pcnew2`).
 - **P10 and P10b**, real weeks on 14 team-weeks spread over the season (`pc10base` / `pc10new`): **0 differences**.
+- **Final engine** (re-solve memo + the price-view guard below): `pcnew3` (season, 2,760 totals) and `pc10new3`
+  (P10 / P10b, 14 team-weeks): **0 differences**.
 - **Unit tests** 59/59 (`npm test`), including `tests/perf.test.ts`: 3,000 random matchings (ties, zero/negative weights,
   partial open masks, random layouts and masks) against the original matcher — totals and slot maps equal; slotOrder
   after an in-place edit; memo invalidation; `emax` equal bit for bit on 20,000 random inputs.
@@ -1385,3 +1387,107 @@ cd research/out && python3 ../perfcmp.py pcbase pcnew2 && python3 ../perfcmp.py 
 node research/perftimes.mjs research/out/perftimes2.json      # idle machine, sequential (perfbench/perfprof base+new bundles, asm kernel)
 node --cpu-prof --cpu-prof-dir=research/scratch/prof research/dist/perfprof_new.cjs 5 1 P7H_LheldTie && python3 research/profsum.py <profile> 30 [fn,fn]
 ```
+
+### Engine hardening found while testing the pre-game planner (`lib/engine/p8.ts`)
+`pricesAt` reused the current price view whenever it had been solved at the same time `t`. A price state seeded from
+*another* simulation at the same moment (here: the planner's check seeded its prices from a slot another engine had
+just used) then carried a stale slot mapping: a free slot mapped to "no slot", its price read as `undefined`, the hold
+value became NaN, and `Math.max(…, NaN)` made every hold weight of that player NaN, so the assignment could not keep his
+score. The view is now re-solved unless it was solved for the same locked slots. In the engine's own flows a view is
+never reused at its own time from a different state, so nothing changes there: identity re-checked (season P8 / P7H /
+P8f / P2LAH and P10 / P10b on 14 team-weeks: see the Phase 4 reproduce block).
+
+## Engine v2 — Phase 4 prototype: pre-game planner (`research/pregame.ts`, overnight 2026-10-15)
+
+### What it produces
+Before tonight's first tip-off, from the league state (season replay, or `live <leagueId> <rosterId>` from the live
+Sleeper/ESPN data; tested once on the live league, 2026-27 week 1):
+1. **Tonight's lineup**: the decision engine (P10b) at tonight's tip-offs, up to the first moment one of tonight's games
+   ends (later tip-offs that follow a finished game are decided inside the simulations).
+2. **A contingency table for the morning-after decision** — the first tip-off of the next game day, when all of tonight's
+   results are known and a held score competes for a slot again. Per starter, as a function of his score x tonight:
+   **lock** if x ≥ lock cut-off, **keep** (hold in a starting slot, decide later) between the let-go and the lock
+   cut-off, **free the slot** below the let-go cut-off; plus the same cut-offs **conditional on a key teammate's result**
+   tonight (≥ or < that teammate's own lock cut-off) when conditioning moves the cut-off by ≥ 1 pt and > 2 SE.
+   (The first version used the first decision after each game; when that is a later tip-off the same night, keeping is
+   free and "lock" only wins for extreme scores — correct but useless to a user, so the decision moved to the morning.)
+3. JSON (`research/out/pgc_<week>_<rid>.json`, value curves included) and a readable summary, e.g. (w7 r3, Wed):
+```
+Before Thu 7:00 PM, with tonight's results:
+  Giannis Antetokounmpo [F] proj 33.8±12.5: LOCK if >= 39.4 (±9.6; P 33% if he plays); otherwise keep
+  Jamal Murray [G] proj 25±11.2: LOCK if >= 30.4 (±3.2; P 31% if he plays); keep 20.4-30.4; free the slot below 20.4
+      if Karl-Anthony Towns scores >= 41.8: lock if >= 55.7; otherwise lock if >= 29.9  (Δ 25.8 ± 10)
+  Jalen Brunson [UTIL] proj 26±11.3: LOCK if >= 29.9 (±0.5; P 36% if he plays); keep 26.4-29.9; free the slot below 26.4
+  Bennedict Mathurin [SF] proj 18.8±10.1: don't lock (not even at 46.7); keep 24.1+; free the slot below 24.1
+      if Giannis Antetokounmpo scores >= 39.4: lock if >= 23.6; otherwise lock if >= 46.7  (Δ -23.1 ± 8.4)
+```
+
+### Method (deep search, common random numbers, time budget)
+- Scenarios of tonight and the rest of the week are drawn from the model. For each starter, each scenario and each x on
+  a grid of his score (0 and μ + σ·{−1, −½, 0, ½, 1, 1.5, 2, 2.75}), the rest of the week is played three times by the
+  base policy (P8, prices re-solved at every tip-off: the continuations P10b uses) with his action at the morning-after
+  decision forced to lock / keep / free; everything else (including tonight's later tip-offs) is decided by the base.
+  Cut-offs = first crossing of the value curves (linear interpolation), SEs by bootstrap over scenarios.
+- Rounds of 16 scenarios until `BUDGET_S` (default 1800 s of search) or `KMAX`; with 4–7 starters, 27 continuations per
+  starter and scenario, 30 minutes give 430–3,900 scenarios (110k–330k continuations) per team-week-day on one core.
+- Conditional cut-offs re-use the same continuations, split by the teammate's simulated result (post-stratification):
+  no extra simulation.
+
+### Test: 13 team-week-days of 2025-26 vs the real-time engines (`pg` tables, `pgc` checks; `research/summ_pregame.py`)
+Cases spread over the season (weeks 3–21, mid-week days). History up to tonight played by P8 on the real results;
+tonight's lineup by P10b. The real-time engines (P10b, and P8 on its own price state) then play tonight and the next
+morning on the real results; for every starter still holding a score at the morning-after tip-off, the three actions are
+scored **from P10b's real state just before that decision** by 300 paired model continuations each (base P8), and every
+choice (table, P10b, P8) is charged its regret against the best of the three.
+
+| | value |
+|---|---|
+| team-week-days / tonight's starters | 13 / 61 (one day with no starter: a noon Christmas game nobody started) |
+| starters P10b still held at the morning-after decision | 41 (11 scores were already locked or let go at a later tip-off tonight; 9 n/a) |
+| scenarios per plan (30 min) | 432–3,904; lock cut-off SE median 0.4–10 pts per plan |
+| key-teammate conditions found | 13, in 7 of 12 plans (e.g. a teammate's lock moves a cut-off by 3–30 pts) |
+| agreement: table = P10b / table = P8 / P10b = P8 | 23/41 / 21/41 / **39/41** |
+| best action under the deep evaluation chosen by: table / P10b / P8 | 29/41 / 27/41 / 25/41 |
+| **total regret vs the best action, 41 decisions** (95% CI): table / P10b / P8 | **1.65 ± 2.50 / 3.27 ± 3.00 / 4.31 ± 3.23 pts** |
+
+- **Decisions as good as the real-time engine's.** The table's total regret over 41 decisions is 1.6 pts vs 3.3 for
+  real-time P10b; the difference is within noise. Most disagreements (12 of 18 exactly, 14 within 0.1 pt) are between
+  actions worth the same, mostly keep vs free when nobody needs the slot before the player's next game. The ones that cost something: the table locked
+  high scores P10b kept (Sensabaugh 47.5, Holiday 51, Gobert 43: P10b regret 0.84 / 1.55 / 0.32) and locked Giddey's
+  48.5 where keeping was 1.08 ± 0.78 better.
+- **P10b's race hardly touches these decisions** (39/41 identical to P8): the morning-after lock/hold choice is mostly
+  P8's priced comparison.
+- **Precision is the limit.** 30 minutes on one core give cut-offs with SEs of a few points; the value curves are flat
+  near the crossing, so a wrong cut-off costs little, but conditional cut-offs (split samples) are noisy (Δ ± 5–15) and
+  some look implausible. Fixes: run the rounds on the app's worker threads (12× the scenarios in the same time),
+  adaptive grids around the crossing, and pooled (regression) conditioning instead of post-stratification.
+- **What it does not cover.** Decisions at later tip-offs tonight after a game has ended (made by the base policy
+  inside the simulations, and in real time by P10b: 11 of 61 scores were resolved that way); joint conditions on more
+  than one teammate; a pre-computed start/sit table for tomorrow (tomorrow's lineup is left to the real-time engine).
+
+### Reading
+The Phase 4 idea works as a prototype: before tip-off it turns tomorrow morning's lock decisions into a short table
+("lock if ≥ X; if teammate Y also goes off, ≥ X′") whose choices are as good as P10b's real-time choices on the 41
+decisions tested. It does not beat the real-time engine (no significant difference), so its value is product-side —
+decisions become lookups available before the games, with the reasons (value curves) attached — not points. Next steps
+if pursued: worker-thread parallel search, adaptive grids, and a live-app view that shows the table next to the plan's
+existing single "lock if ≥" cut-offs (`simCutoff`, which is a lock-vs-let-go cut-off at the first decision after the
+game and does not consider keeping).
+
+### Reproduce
+```
+npx esbuild research/pregame.ts --bundle --platform=node --format=cjs --outfile=research/dist/pregame.cjs --log-level=error
+T=3:2:1,4:7:2,6:5:1,7:3:2,9:9:1,10:4:2,12:1:1,13:6:2,15:8:1,16:2:2,18:10:1,20:3:2,21:7:1      # week:rid:day
+node research/runtasks.mjs research/dist/pregame.cjs pg "" PAR=13 BUDGET_S=1800 KEVAL=300 TASKS=$T   # 35 min
+node research/runtasks.mjs research/dist/pregame.cjs pgc "" PAR=13 KEVAL=300 TABLE=research/out/pg TASKS=$T   # check only, 4 min
+cd research/out && python3 ../summ_pregame.py pgc
+node research/dist/pregame.cjs live <leagueId> <rosterId> out.json BUDGET_S=1800            # live league state
+# identity of the final engine (incl. the price-view guard):
+node research/runtasks.mjs research/dist/perfcheck_new.cjs pcnew3 "" "POLS=P8;P7H_LheldTie;P8f;P2LAH_LheldTie" NSC=2 PAR=13
+node research/runtasks.mjs research/dist/perfcheck_new.cjs pc10new3 "" "POLS=P10;P10b" NSC=0 PAR=14 TASKS=<the 14 above>
+python3 ../perfcmp.py pcbase pcnew3 && python3 ../perfcmp.py pc10base pc10new3
+```
+(The first `pg` run's checks were wrong: the P8 comparison run shared the "top" price slot with P10b and the value
+checks seeded their prices from it, which produced NaN hold values — up to 38 pts of spurious "regret" for P10b. Found
+by the `forcedOk` diagnostic, fixed in the planner and hardened in `p8.ts` above; the tables themselves were unaffected
+and were re-checked with `TABLE=`.)
