@@ -38,13 +38,16 @@ class Tracker {
   free(p: number) { this.status[p] = NONE; this.pos[p] = -1; this.heldFrom[p] = -1; }
 }
 
+// read-only view of the physical lineup for tracing (research/htrace.ts): status 0 none, 1 in a game, 2 held, 3 locked,
+// 4 phantom; pos = slot (-1 none); heldFrom = game index of the held score; heldX = held score; lockedX = per slot
+export interface TraceView { status: Uint8Array; pos: Int32Array; heldFrom: Int32Array; heldX: Float64Array; lockedX: Float64Array }
 export interface CheckResult { total: number; trackerTotal: number; rep: Report; overrides: number; tipoffs: number }
 
 // Run policy `pol` (+ its own hooks `inner`) on one realised week and check every step.
 // Decisions taken at the same instant (deadline locks/releases of players tipping at t, and the tip-off at t) form one
 // "moment": a user would bench the let-go players first, then rearrange, then lock; the check finds any legal order.
 export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual: Float64Array, played: Uint8Array, inner?: E.Hooks,
-  opts: { label?: string; maxEx?: number } = {}): CheckResult {
+  opts: { label?: string; maxEx?: number; onStep?: (i: number, e: E.Ev, tr: TraceView, st: E.State) => void; onEnd?: (counted: Map<number, number>, tr: TraceView, st: E.State) => void } = {}): CheckResult {
   const nS = tw.slots.length, nP = tw.pmask.length; const ALL = (1 << nS) - 1;
   const st = E.initState(tw); const tr = new Tracker(nP, nS); const R = newReport();
   const maxEx = opts.maxEx ?? 3; const label = opts.label ?? "";
@@ -266,6 +269,7 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
       if (st.isLocked[p] !== (tr.status[p] === LOCKED ? 1 : 0)) hit("L_state_mismatch", `${nm(p)} lock state differs`);
     }
     snaps.push({ t, occ: tr.occ(nS) });
+    opts.onStep?.(i, e, tr, st);
   }
   // week end: engine total vs independent recount
   t = events.length ? events[events.length - 1].t : 0;
@@ -285,6 +289,7 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
     if (st.pendingX[p] < 0) hit("S_weekend_negative", `week end counts ${nm(p)}'s ${st.pendingX[p]} (benching him scores 0)`, -st.pendingX[p]);
     trackerTotal += tr.heldX[p];
   }
+  opts.onEnd?.(counted, tr, st);
   if (Math.abs(total - trackerTotal) > 1e-6) hit("L_total_mismatch", `engine total ${total} vs legal recount ${trackerTotal}`, total - trackerTotal);
   for (const c of idle) {
     const expost = c.slots.some((s) => snaps.every((sn) => sn.t < c.t || sn.t >= c.end || sn.occ[s] < 0));
