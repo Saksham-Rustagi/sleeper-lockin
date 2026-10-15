@@ -13,7 +13,9 @@ import * as H from "../lib/engine/human";
 import { S, fitModel, teamWeek } from "./btcommon";
 import { realOppSnapshot } from "./oppreal";
 
-const mode = process.argv[2] || "fit"; const out = process.argv[3];
+// modes fitm / evalm / calibm / scanm: only team-weeks with an opponent (the managers we actually face; 16 playoff-week
+// byes of eliminated, mostly abandoned teams averaged ~83 pts and pulled the all-weeks fit down)
+const MATCHED = /m$/.test(process.argv[2] || ""); const mode = (process.argv[2] || "fit").replace(/m$/, ""); const out = process.argv[3];
 const [w0, w1] = (process.env.FIT || "1-23").split("-").map(Number); const R = Number(process.env.R || 12);
 const quant = (v: number[], q: number) => { const s = [...v].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
 interface TWD { week: number; rid: string; tw: E.TeamWeek; real: { actual: Float64Array; played: Uint8Array }; human: number; slots: number[]; starters: string[]; pids: string[] }
@@ -21,6 +23,7 @@ const data: TWD[] = [];
 for (const W of S.weeks) {
   const model = fitModel(W.week);
   for (const rid of Object.keys(W.teams)) {
+    if (MATCHED && !(W.matchups as number[][]).some((m) => m.map(String).includes(rid))) continue;
     const T = W.teams[rid]; const { tw, real } = teamWeek(W.week, rid, model);
     data.push({ week: W.week, rid, tw, real, human: T.human_points, slots: T.human_slot_points, starters: T.starters, pids: T.players });
   }
@@ -110,13 +113,14 @@ if (mode === "fit") {
   // PIT of the real final total under the opponent distribution from the real-data snapshot at the start of every game
   // day (research/oppreal.ts), raw and with the residual N(delta, sigma^2 * rho) on a grid; pick the residual that
   // makes the PITs uniform (chi-square of PIT quintiles, summed over groups by game days left)
+  const cx = (process.argv[4] || "").split(",").filter(Boolean).map(Number); const CPAR = cx.length >= 5 ? parOf(cx) : H.HUMAN;
   const M = Number(process.env.M || 200); const rows: { dl: number; rho: number; s: Float64Array; y: number; t: number }[] = [];
   data.forEach((d, i) => {
     const r = E.rng(777 + i); const hw = H.humanWeek(d.tw);
     hw.moments.forEach((m) => {
       if (!m.first) return;
       const snap = realOppSnapshot(d.tw, d.real, { pids: d.pids, starters: d.starters, pts: d.slots }, m.t);
-      const s = H.oppSamples(d.tw, H.HUMAN, snap.hs, snap.fromEv, m.t, d.real, M, r, { delta: 0, sigma: 0 });
+      const s = H.oppSamples(d.tw, CPAR, snap.hs, snap.fromEv, m.t, d.real, M, r, { delta: 0, sigma: 0 });
       rows.push({ dl: hw.nDays - m.d, rho: H.remainingShare(d.tw, m.t), s, y: d.human, t: m.t });
     });
   });
@@ -133,7 +137,7 @@ if (mode === "fit") {
     for (const [k, h] of [...e.g.entries()].sort()) { const rs = rows.filter((x) => groupOf(x.dl) === k); const mean = rs.reduce((a, x) => a + x.s.reduce((p, q) => p + q, 0) / x.s.length + (x.rho > 0 ? de : 0), 0) / rs.length; const y = rs.reduce((a, x) => a + x.y, 0) / rs.length;
       out.byDaysLeft[k] = { n: rs.length, pitQuintiles: h, predMean: Math.round(mean * 10) / 10, realMean: Math.round(y * 10) / 10, rho: Math.round(rs.reduce((a, x) => a + x.rho, 0) / rs.length * 100) / 100 }; }
     return out; };
-  const rep = { M, rows: rows.length, raw: show(0, 0), best: show(best.de, best.sg) };
+  const rep = { M, par: CPAR, matched: MATCHED, rows: rows.length, raw: show(0, 0), best: show(best.de, best.sg) };
   console.log(JSON.stringify(rep, null, 1)); if (out) fs.writeFileSync(out, JSON.stringify(rep, null, 1));
 } else if (mode === "scan") { // scan "a,b,c0,c1,c2;a,b,..." (argv[4]): moments on all weeks
   for (const ps of (process.argv[4] || "").split(";")) {

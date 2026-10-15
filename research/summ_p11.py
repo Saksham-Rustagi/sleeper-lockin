@@ -3,6 +3,7 @@
 #       research/p11run.ts sim-mode outputs; per model week (week, rid, j) every arm's outcome is the mean over its late-week
 #       completions (K = 1, or KC for weeks still open at the branch). Win = binary vs the opponent's final; RB win =
 #       P(his final < ours | his state at our last tip-off) (Rao-Blackwellized, same expectation, less noise).
+#       --c0: only completion 0 (the drawn week): pairs runs whose branch moments differ (e.g. the ramp schedule).
 #   real (validation a): python3 ../summ_p11.py real <prefix,...> <BASE> [ARM ...]
 #       real-mode outputs; BASE may be "s10:P10" = P10 from the Phase-3 season run (same seeds, reproduced exactly).
 # Paired diffs with 95% CIs: naive (over model / team-weeks) and clustered by week (mean of the week's diffs, CI over weeks).
@@ -10,29 +11,36 @@ import json, glob, sys, math, collections
 
 def win(t, o): return 1.0 if t > o else 0.5 if t == o else 0.0
 
+C0 = '--c0' in sys.argv  # only completion 0 (the drawn week itself): pairs runs with different branch moments
+
 def load(prefixes, mode):
     rows = {}
     for pre in prefixes.split(','):
+        # season tag from the prefix's last two digits (p11/u25, p11/c24; s10 = 2025-26): keys pair arms of one season
+        base_pre = pre.split(':')[0]
+        sea = base_pre[-2:] if base_pre[-2:].isdigit() and not base_pre.startswith('s10') else '25'
         if ':' in pre:  # s10:P10 (Phase-3 season run): pols[name].real
             pre, nm = pre.split(':')
             for f in glob.glob(f'{pre}_*.json'):
-                d = json.load(open(f)); k = (d['week'], str(d['rid']), 0)
+                d = json.load(open(f)); k = (sea, d['week'], str(d['rid']), 0)
                 rows.setdefault(k, {})[nm] = {'total': d['pols'][nm]['real']}
             continue
         for f in glob.glob(f'{pre}_*.json'):
             d = json.load(open(f))
             if mode == 'sim':
                 for r in d['rows']:
-                    k = (r['week'], str(r['rid']), r['j']); e = rows.setdefault(k, {})
+                    k = (sea, r['week'], str(r['rid']), r['j']); e = rows.setdefault(k, {})
                     comps = r.get('comps') or [{'c': 0, 'oppFinal': r['oppFinal'], 'pols': r['pols']}]
-                    e['_pB'] = r.get('pB'); e['_K'] = len(comps)
+                    if C0: comps = comps[:1]
+                    if r.get('pB') is not None or '_pB' not in e: e['_pB'] = r.get('pB')
+                    e['_K'] = len(comps)
                     for nm in comps[0]['pols']:
                         vs = [c['pols'][nm] for c in comps]
                         e[nm] = {'total': sum(v['total'] for v in vs) / len(vs), 'win': sum(win(v['total'], c['oppFinal']) for v, c in zip(vs, comps)) / len(vs),
                                  'rb': sum(v.get('smooth', win(v['total'], c['oppFinal'])) for v, c in zip(vs, comps)) / len(vs),
                                  'stats': [v.get('stats') for v in vs], 'viol': vs[0].get('viol'), 'scratch': vs[0].get('scratch'), 'total0': vs[0]['total']}
             else:
-                k = (d['week'], str(d['rid']), 0); e = rows.setdefault(k, {}); e['_opp'] = d['oppActual']; e['_calib'] = d.get('calib')
+                k = (sea, d['week'], str(d['rid']), 0); e = rows.setdefault(k, {}); e['_opp'] = d['oppActual']; e['_calib'] = d.get('calib')
                 for nm, v in d['pols'].items(): e[nm] = {**v, 'stats': [v.get('stats')]}
     if mode == 'real':
         for e in rows.values():
@@ -53,7 +61,7 @@ def summarize(rows, base, arms, label='', stratum=None):
         for key in ('win', 'rb', 'total'):
             d = [rows[k][a][key] - rows[k][base][key] for k in ks]
             byw = collections.defaultdict(list)
-            for k, x in zip(ks, d): byw[k[0]].append(x)
+            for k, x in zip(ks, d): byw[(k[0], k[1])].append(x)
             m, e = ci(d); _, ew = ci([sum(v) / len(v) for v in byw.values()])
             res[key] = (sum(rows[k][a][key] for k in ks) / len(ks), sum(rows[k][base][key] for k in ks) / len(ks), m, e, ew)
         res['flips'] = (sum(1 for k in ks if rows[k][a]['win'] > rows[k][base]['win']), sum(1 for k in ks if rows[k][a]['win'] < rows[k][base]['win']))

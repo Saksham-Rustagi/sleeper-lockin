@@ -27,8 +27,11 @@ export interface HumanParams {
   kd: number;                   // P(a player's DNP is known before the lineup decision: injury news, inactive lists)
   sl: number;                   // P(the week starts with a standing lineup); otherwise the slots start empty
 }
-// fitted on the 2025-26 human team-weeks (research/humanfit.ts); see REPORT "Engine v2 - Phase 5"
-export const HUMAN: HumanParams = { engA: 1.612, engB: 0.339, c0: -3.096, c1: 5.070, c2: 2.170, su: 0.502, tf: 0.880, pt: 0.993, kd: 0.004, sl: 0.088 };
+// fitted on the 2025-26 human team-weeks that had an opponent (research/humanfit.ts fitm; REPORT "Engine v2 - Phase 5").
+// (The first fit, on all 230 team-weeks incl. 16 playoff-week byes of mostly abandoned teams, was HUMAN_ALL: it
+// underestimated the managers we actually face by ~16 pts; the simulated validation weeks (b) were played with it.)
+export const HUMAN: HumanParams = { engA: 1.284, engB: 0.124, c0: -3.370, c1: 5.340, c2: 1.724, su: 1.276, tf: 0.791, pt: 0.999, kd: 0.005, sl: 0.188 };
+export const HUMAN_ALL: HumanParams = { engA: 1.612, engB: 0.339, c0: -3.096, c1: 5.070, c2: 2.170, su: 0.502, tf: 0.880, pt: 0.993, kd: 0.004, sl: 0.088 };
 
 export interface HState {
   occ: Int32Array;      // slot -> occupant (-1 empty)
@@ -203,7 +206,7 @@ export function oppDist(samples: ArrayLike<number>, hMin = 1): OppDist {
 // Unmodelled human variation (calibrated in research/humanfit.ts "calib"): every simulated final gets an extra
 // N(delta, sigma^2 * rho) while games remain, rho = share of his week's games not tipped off yet (1 at week start), so the opponent's distribution matches the real managers' (mean, spread, PIT calibration through the week).
 export interface Resid { delta: number; sigma: number }
-export const HUMAN_RESID: Resid = { delta: -5, sigma: 60 };
+export const HUMAN_RESID: Resid = { delta: -5, sigma: 55 }; // (with HUMAN_ALL on all 230 team-weeks: -5, 60)
 export function remainingShare(tw: E.TeamWeek, t: number) { let n = 0; for (const g of tw.games) if (g.tip >= t) n++; return tw.games.length ? n / tw.games.length : 0; }
 // M simulated finals of the human from a snapshot (state hs before event fromEv, at time t), outcomes of games that
 // end by t taken from `known`, the rest drawn from the model; the manager's traits (engagement, threshold offset,

@@ -1,5 +1,6 @@
-// ENGINE_V2 Phase 5, validation c: monotone risk response. At a real 2025-26 decision state (our team played by P10 on
-// the real outcomes up to the first tip-off of the third-last game day), P11 (beta 300) decides that tip-off against
+// ENGINE_V2 Phase 5, validation c: monotone risk response (env BETA, default 1000 = the chosen P11). At a real 2025-26
+// decision state (our team played by P10 on
+// the real outcomes up to the first tip-off of the third-last game day), P11 decides that tip-off against
 // opponents placed at a range of margins: his final ~ our projected final (P8's decision, pilot) - margin, spread 25 pts.
 // Recorded per margin: the risk dial gamma, whether P8's decision was replaced, and the risk taken: sd of our final under
 // the chosen decision minus under P8's (96 common scenarios, continuations by the untilted base), plus the change in our
@@ -18,7 +19,7 @@ const [week, rid, out] = [Number(process.argv[2]), process.argv[3], process.argv
 const margins = (process.env.MARGINS || "-150,-50,-20,0,20,50,150").split(",").map(Number);
 const { tw, real } = teamWeek(week, rid, fitModel(week)); const seed = week * 1000 + Number(rid);
 const top = PL.P11_TOP, base = PL.p11Base(false); const events = E.buildEvents(tw, true);
-const tB = phaseStart(tw, { beta: 300 });
+const BETA = Number(process.env.BETA || 1000); const tB = phaseStart(tw, { beta: BETA });
 const st = E.initState(tw);
 E.simulate(tw, top, events, real.actual, real.played, st, 0, p10Hooks(tw, base, events, seed, real), tB - 0.5);
 const evIdx = events.findIndex((e) => e.kind === 2 && e.t === tB); const e = events[evIdx];
@@ -37,7 +38,7 @@ if (ctx) {
   for (const m of margins) {
     restorePrices(tw, saved, "top");
     const r0 = E.rng(seed * 13 + 5); const D = H.oppDist(Array.from({ length: 400 }, () => mu - m + 25 * Math.sqrt(-2 * Math.log(r0() || 1e-12)) * Math.cos(2 * Math.PI * r0())));
-    const hk = p11Hooks(tw, top, base, events, seed, real, { dist: () => D }, { beta: 300, sched: "const" });
+    const hk = p11Hooks(tw, top, base, events, seed, real, { dist: () => D }, { beta: BETA, sched: "const" });
     const c2 = indexContext(tw, top, st, e)!;
     const d = hk.decideIndex!(st, tB, evIdx, c2);
     const log = hk.stats.win.log[hk.stats.win.log.length - 1];
