@@ -172,24 +172,43 @@ export function race(nCand: number, run: (alive: number[], k0: number, n: number
 // per raced decision (log): [candidates, scenarios used, continuations, candidates alive at the end, gain of the best challenger, its se, switched]
 export interface P10Stats { decisions: number; raced: number; cands: number; switched: number; scen: number; sims: number; ms: number; why: Record<string, number>; log: number[][] }
 export const newStats = (): P10Stats => ({ decisions: 0, raced: 0, cands: 0, switched: 0, scen: 0, sims: 0, ms: 0, why: {}, log: [] });
+// Extension (ENGINE_V2 Phase 5, lib/engine/p11.ts): called at every tip-off decision with the candidates; may change how
+// a continuation's final total is scored, which policy plays the continuations, and add candidate decisions (inserted
+// after P8's, de-duplicated, legality-checked). Returning undefined leaves the decision exactly as P10's.
+export interface P10Ext {
+  r?: () => number; // the race's random stream (default rng(seed ^ 0x3c6ef372))
+  prep?: (st: E.State, t: number, evIdx: number, ctx: IndexContext, cs: P10Cand[]) =>
+    { score?: (total: number) => number; base?: E.Policy; extra?: { d: IndexDecision; why: string }[] } | undefined;
+}
 // base: the policy that plays the continuations (P8f or P8; its index.slot must be its own price state, e.g. "roll")
 export function p10Hooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], seed: number,
-  realised: { actual: Float64Array; played: Uint8Array }, o: P10Opts = {}, stats: P10Stats = newStats()): E.Hooks & { stats: P10Stats } {
-  const r = E.rng(seed ^ 0x3c6ef372); const scratch = E.scratchState();
+  realised: { actual: Float64Array; played: Uint8Array }, o: P10Opts = {}, stats: P10Stats = newStats(), ext?: P10Ext): E.Hooks & { stats: P10Stats } {
+  const r = ext?.r ?? E.rng(seed ^ 0x3c6ef372); const scratch = E.scratchState();
   return {
     stats,
     decideIndex: (st, t, evIdx, ctx) => {
       const t0 = performance.now(); stats.decisions++;
       const e = events[evIdx]; const cs = candidates(tw, st, e, ctx, o);
+      const px = ext?.prep?.(st, t, evIdx, ctx, cs);
+      if (px?.extra) {
+        const seen = new Set(cs.map((c) => decisionKey(c.d)));
+        for (const x of px.extra) {
+          const d = reachable(tw, st, ctx, x.d); const k = decisionKey(d);
+          if (seen.has(k) || decisionProblem(tw, st, e, d)) continue;
+          seen.add(k); cs.splice(1, 0, { d, score: NaN, why: x.why });
+        }
+      }
       if (cs.length < 2) { stats.ms += performance.now() - t0; return undefined; }
       stats.raced++; stats.cands += cs.length;
+      const B = px?.base ?? base; const score = px?.score;
       const res = race(cs.length, (alive, _k0, n) => {
         const out = alive.map(() => [] as number[]);
         for (let k = 0; k < n; k++) {
           const scen = E.sampleScenario(tw, st, t, r, realised);
           alive.forEach((c, j) => {
-            const s2 = scratch(st); applyIndexDecision(tw, s2, e, cs[c].d); seedPrices(tw, base.index?.slot ?? "roll");
-            out[j].push(E.simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total);
+            const s2 = scratch(st); applyIndexDecision(tw, s2, e, cs[c].d); seedPrices(tw, B.index?.slot ?? "roll");
+            const tot = E.simulate(tw, B, events, scen.actual, scen.played, s2, evIdx + 1).total;
+            out[j].push(score ? score(tot) : tot);
           });
         }
         return out;

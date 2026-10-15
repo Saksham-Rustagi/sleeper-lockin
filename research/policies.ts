@@ -3,6 +3,7 @@
 import * as E from "./engine";
 import { indexRolloutHooks } from "../lib/engine/p8";
 import { p10Hooks, type P10Opts } from "../lib/engine/p10";
+import { p11Hooks, type P11Opts, type OppSource } from "../lib/engine/p11";
 
 const K = Number(process.env.K || 200), KS = Number(process.env.KS || K);
 export const POL: Record<string, E.Policy> = {
@@ -23,11 +24,14 @@ POL.P9b = { ...POL.P8, name: "P9b" };
 // numbers, adaptive sampling); continuations played by P8f (P10) or P8 (P10b). P10x:base=P8|P8f,<P10Opts key>=val,...
 POL.P10 = { ...POL.P8, name: "P10" };
 POL.P10b = { ...POL.P8, name: "P10b" };
+// P11 = P10 playing for the win (lib/engine/p11.ts): P11:key=val,... (P11Opts, e.g. beta=300,sched=late), continuations by
+// P8f; P11b:... the same on P10b (continuations by P8). Needs the opponent (runner's opp argument).
+export const P11_TOP: E.Policy = { ...POL.P8, name: "P11top" };
 // <name>_L = with every bug fixed in engine-v2 phase 1 re-enabled (= the engine the phase-1 numbers were measured on);
 // <name>_L<bug>[+<bug>] = only those bugs re-enabled (strand, negEnd, reseat, stop, heldTie)
 export function policy(name: string): E.Policy {
   if (POL[name]) return POL[name];
-  if (/^P10x:/.test(name)) return { ...POL.P8, name };
+  if (/^P10x:/.test(name) || /^P11b?(:|$)/.test(name)) return { ...POL.P8, name };
   // ad-hoc index-policy variants: P8x:key=val,key=val (keys of IndexOpts); P9x:... = the same with rollouts
   const x = name.match(/^(P8|P9)x:(.*)$/);
   if (x) {
@@ -41,7 +45,9 @@ export function policy(name: string): E.Policy {
 function baseOpts(): any { const o: any = {}; for (const kv of (process.env.P9BASE || "resolve=info,iters=30").split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^[\d.]+$/.test(v) ? Number(v) : v; } return o; }
 export interface Runner { pol: E.Policy; events: E.Ev[]; hooks?: E.Hooks }
 // realised = the "world" the policy lives in (real outcomes, or a model scenario): rollouts keep its finished games.
-export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { actual: Float64Array; played: Uint8Array }): Runner {
+export const optsOf = (spec: string) => { const o: any = {}; for (const kv of spec.split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^-?[\d.]+$/.test(v) ? Number(v) : v === "false" ? false : v === "true" ? true : v; } return o; };
+export const p11Base = (b8: boolean): E.Policy => ({ ...POL.P8, name: "P10base", index: b8 ? { resolve: "tip", iters: 100, slot: "roll" } : { resolve: "info", iters: 30, slot: "roll" } });
+export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { actual: Float64Array; played: Uint8Array }, opp?: OppSource | null, r?: () => number): Runner {
   const pol = policy(name);
   const events = E.buildEvents(tw, pol.chain);
   let hooks: E.Hooks | undefined;
@@ -58,6 +64,7 @@ export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { a
     const base: E.Policy = { ...POL.P8, name: "P10base", index: b8 ? { resolve: "tip", iters: 100, slot: "roll" } : { resolve: "info", iters: 30, slot: "roll" } };
     hooks = p10Hooks(tw, base, events, seed, realised, o as P10Opts);
   }
+  if (/^P11/.test(name)) hooks = p11Hooks(tw, P11_TOP, p11Base(/^P11b/.test(name)), events, seed, realised, opp ?? null, optsOf(name.match(/^P11b?:(.*)$/)?.[1] ?? "") as P11Opts, r);
   if (/^P7H/.test(name)) hooks = E.startRolloutHooks(tw, { ...POL.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, events, KS, seed, realised, hooks);
   return { pol, events, hooks };
 }

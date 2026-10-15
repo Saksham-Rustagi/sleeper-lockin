@@ -48,11 +48,13 @@ export function pAbove(d: ScoreDist, v: number): number {
 
 // Model instance of a backtest team-week: exactly the distribution sampleScenario() draws from
 // (Normal clamped at -5, or the empirical residual quantiles when tw.resid is set; DNP chain + pNext override).
-export function gameDist(tw: TeamWeek, gi: number): ScoreDist {
-  const g = tw.games[gi];
+// tilt (ENGINE_V2 Phase 5 risk dial): every game's mean is shifted by tilt * sd^2, the certainty equivalent of a score
+// under a locally exponential utility (tilt > 0 risk-seeking, < 0 risk-averse); 0 = the model itself.
+export function gameDist(tw: TeamWeek, gi: number, tilt = 0): ScoreDist {
+  const g = tw.games[gi]; const mu = tilt ? g.mu + tilt * g.sd * g.sd : g.mu;
   return tw.resid
-    ? { kind: "discrete", x: Array.from(tw.resid.q, (z) => Math.max(-5, g.mu + g.sd * z)), w: Array.from(tw.resid.q, () => 1 / tw.resid!.q.length) }
-    : { kind: "normal", mu: g.mu, sd: g.sd, floor: -5 };
+    ? { kind: "discrete", x: Array.from(tw.resid.q, (z) => Math.max(-5, mu + g.sd * z)), w: Array.from(tw.resid.q, () => 1 / tw.resid!.q.length) }
+    : { kind: "normal", mu, sd: g.sd, floor: -5 };
 }
 const pPlayOf = (tw: TeamWeek, gi: number) => { const p = tw.games[gi].p; const ov = tw.pNext?.[p]; return ov != null && tw.nextGameIdx?.[p] === gi ? ov : null; };
 export function fromTeamWeek(tw: TeamWeek): LInstance {
@@ -65,19 +67,19 @@ export function fromTeamWeek(tw: TeamWeek): LInstance {
 // drop out (their points are a constant), in-game players are pinned to their slot until their game ends, held scores
 // and the DNP chain carry over, and only games tipping at or after t remain.
 export interface StateInstance { inst: LInstance; slotOf: number[]; instSlot: Int32Array; instGame: Int32Array }
-export function fromState(tw: TeamWeek, st: State, t: number): StateInstance {
+export function fromState(tw: TeamWeek, st: State, t: number, tilt = 0): StateInstance {
   if (tw.avail) throw new Error("lagrange: roster windows (avail/gone) not supported");
   const slotOf: number[] = []; const instSlot = new Int32Array(tw.slots.length).fill(-1);
   let constant = 0;
   tw.slots.forEach((_, s) => { if (st.lockedBy[s] < 0) { instSlot[s] = slotOf.length; slotOf.push(s); } else constant += st.lockedPts[s]; });
   const instGame = new Int32Array(tw.games.length).fill(-1); const games: LGame[] = [];
-  tw.games.forEach((g, gi) => { if (g.tip >= t && !st.isLocked[g.p]) { instGame[gi] = games.length; games.push({ p: g.p, tip: g.tip, end: g.end, dist: gameDist(tw, gi), pPlay: pPlayOf(tw, gi) }); } });
+  tw.games.forEach((g, gi) => { if (g.tip >= t && !st.isLocked[g.p]) { instGame[gi] = games.length; games.push({ p: g.p, tip: g.tip, end: g.end, dist: gameDist(tw, gi, tilt), pPlay: pPlayOf(tw, gi) }); } });
   const init: PlayerInit[] = tw.pmask.map((_, p) => {
     if (st.isLocked[p]) return { kind: "out" };
     const lp = st.lastPlayed[p] ? 1 : 0; const gi = st.inGame[p];
     if (gi >= 0 && tw.games[gi].end > t) {
       const s = st.pinned.indexOf(p);
-      return { kind: "inGame", lp, end: tw.games[gi].end, slot: instSlot[s], dist: gameDist(tw, gi), pPlay: pPlayOf(tw, gi) };
+      return { kind: "inGame", lp, end: tw.games[gi].end, slot: instSlot[s], dist: gameDist(tw, gi, tilt), pPlay: pPlayOf(tw, gi) };
     }
     if (!Number.isNaN(st.pendingX[p])) return { kind: "held", lp, x: st.pendingX[p] };
     return { kind: "free", lp };

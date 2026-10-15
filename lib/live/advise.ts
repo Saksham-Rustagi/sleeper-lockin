@@ -8,7 +8,9 @@ import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS, simCutoff } from "./teamsim";
-import { decisionPolicy, simPolicy, planHooks, replayHooks } from "./engine";
+import { decisionPolicy, simPolicy, planHooks, replayHooks, winActive, WIN_OPTS } from "./engine";
+import { liveOppSource } from "./opponent";
+import { betaAt } from "../engine/p11";
 
 // more than ~5 days out, include the date ("Tue, Oct 20, 9:30 PM") so it isn't confused with this week's Tuesday
 const START_SIMS = 200;
@@ -120,6 +122,9 @@ export function lockMoves(slotNames: string[], slots: number[], pmask: number[],
 
 function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
   const T = ctx.me; const out: Decision[] = []; const r = E.rng(seed);
+  // objective "win" (p10 / p10b): options scored by points + beta * P(beat the opponent simulated as a human)
+  const D = winActive() ? liveOppSource(ctx.opp, ctx.asOf, seed ^ 0x5f3759df)?.dist(ctx.asOf) ?? null : null;
+  const beta = D ? betaAt(T.tw, ctx.asOf, WIN_OPTS) : 0;
   for (let p = 0; p < T.pids.length; p++) {
     if (Number.isNaN(T.st.pendingX[p]) || T.st.isLocked[p]) continue;
     const x = T.st.pendingX[p];
@@ -137,7 +142,7 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
       if (dup >= 0) alts[dup].slot = hereIdx; else alts.push({ action: "LOCK", slot: hereIdx });
     }
     if (!next) alts.splice(0, 2, { action: "HOLD", slot: null }); // final game: holding == auto-count
-    const pts = new Float64Array(alts.length); const win = new Float64Array(alts.length);
+    const pts = new Float64Array(alts.length); const win = new Float64Array(alts.length); const fw = new Float64Array(alts.length);
     for (let k = 0; k < K; k++) {
       const scen = E.sampleScenario(T.tw, T.st, ctx.asOf, r, T.real);
       const oppTot = ctx.opp ? finishWeek(ctx.opp, E.cloneState(ctx.opp.st), E.sampleScenario(ctx.opp.tw, ctx.opp.st, ctx.asOf, r, ctx.opp.real), ctx.opp.evIdx) : 0;
@@ -146,16 +151,18 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
         if (a.action === "LOCK") E.doLock(s2, p, a.slot!);
         else if (a.action === "BENCH") s2.pendingX[p] = NaN;
         const tot = finishWeek(T, s2, scen, T.evIdx);
-        pts[ai] += tot; win[ai] += tot > oppTot ? 1 : tot === oppTot ? 0.5 : 0;
+        pts[ai] += tot; win[ai] += tot > oppTot ? 1 : tot === oppTot ? 0.5 : 0; if (D) fw[ai] += D.F(tot);
       });
     }
-    const options = alts.map((a, ai) => ({ action: a.action, slot: a.slot === null ? null : ctx.slotNames[a.slot], expPoints: pts[ai] / K, winProb: ctx.opp ? win[ai] / K : null }));
+    const options = alts.map((a, ai) => ({ action: a.action, slot: a.slot === null ? null : ctx.slotNames[a.slot], expPoints: pts[ai] / K, winProb: D ? fw[ai] / K : ctx.opp ? win[ai] / K : null }));
+    // (playing for the win: compare points + beta * win probability; with beta = 0 this is the points rule below)
+    const u = (i: number) => options[i].expPoints + (D ? beta * (options[i].winProb ?? 0) : 0);
     // choose by expected points (backtest: points objective wins more head-to-heads than win-prob at this sample size);
     // break near-ties (< 0.5 pts) by win probability.
     let best = 0;
     options.forEach((o, i) => {
       const b = options[best];
-      if (o.expPoints > b.expPoints + 0.5 || (Math.abs(o.expPoints - b.expPoints) <= 0.5 && (o.winProb ?? 0) > (b.winProb ?? 0))) best = i;
+      if (u(i) > u(best) + 0.5 || (Math.abs(u(i) - u(best)) <= 0.5 && (o.winProb ?? 0) > (b.winProb ?? 0))) best = i;
     });
     // a LOCK in his current slot wins near-ties against a LOCK elsewhere (no shuffling in Sleeper)
     if (alts[best].action === "LOCK" && hereIdx >= 0 && alts[best].slot !== hereIdx) {
@@ -189,7 +196,7 @@ async function plan(ctx: WeekContext, hours: number): Promise<TipPlan[]> {
   let st = E.cloneState(T.st); let ev = T.evIdx; let first = true;
   // who starts at each tip-off: decided by simulation (rule's lineup vs small changes, 200 continuations each).
   // Backtest 2025-26: +4.3 ± 2.0 pts/week over lock-only simulation.
-  const startHooks = planHooks(T.tw, T.events, START_SIMS, 4242 + ctx.week, T.real); const pol = decisionPolicy();
+  const startHooks = planHooks(T.tw, T.events, START_SIMS, 4242 + ctx.week, T.real, undefined, winActive() ? liveOppSource(ctx.opp, ctx.asOf, 4242 + ctx.week) : null); const pol = decisionPolicy();
   let tips = [...new Set(T.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + hours * 3600e3).map((g) => g.tip))].sort((a, b) => a - b);
   if (!tips.length) { // nothing soon (e.g. preseason / off days): plan the next game day instead
     const nextDay = T.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0];

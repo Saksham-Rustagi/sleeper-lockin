@@ -30,9 +30,11 @@ export interface IndexOpts {
   keep?: number;                    // extra weight (pts) for keeping a positive held score (default 0)
   fresh?: boolean;                  // every simulate() call starts from the week-start prices (independent simulations
                                     // started mid-week, e.g. the live app's projections); otherwise only at event 0
+  tilt?: number;                    // risk dial (Phase 5, lib/engine/p11.ts): game means shifted by tilt * sd^2 in the priced
+                                    // DPs (lagrange gameDist); a re-solve is forced when the current view has another tilt
 }
 // ---------------- prices ----------------
-interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number; id: number }
+interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number; id: number; tilt: number }
 interface Cache { week: View; slots: Map<string, { cur: View; day: number; ends: number }>; solves: number; solveMs: number; endTimes: number[]; memo: Map<string, View>; hits: number }
 const CACHE = new WeakMap<E.TeamWeek, Cache>();
 let VIEW_ID = 0;
@@ -50,8 +52,8 @@ function stateKey(st: E.State, t: number, iters: number, lr: number) {
 }
 const slotOf = (c: Cache, name: string) => { let x = c.slots.get(name); if (!x) { x = { cur: c.week, day: -1, ends: 0 }; c.slots.set(name, x); } return x; };
 const endedBy = (c: Cache, t: number) => { let lo = 0, hi = c.endTimes.length; while (lo < hi) { const m = (lo + hi) >> 1; if (c.endTimes[m] <= t) lo = m + 1; else hi = m; } return lo; };
-function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: number, from?: View): View {
-  const si = L.fromState(tw, st, t);
+function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: number, from?: View, tilt = 0): View {
+  const si = L.fromState(tw, st, t, tilt);
   let mu0: Float64Array | undefined;
   const P = L.prepare(si.inst);
   if (from) { // warm start: new buckets are unions of old ones, slots a subset
@@ -66,7 +68,7 @@ function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: nu
     }
   }
   const r = from ? L.minimizeBound(si.inst, { method: "adam", lr, iters, mu0 }) : L.tightBound(si.inst, iters);
-  return { Tb: L.tables(r.P, r.mu), si, t0: t, bound: r.bound, id: ++VIEW_ID };
+  return { Tb: L.tables(r.P, r.mu), si, t0: t, bound: r.bound, id: ++VIEW_ID, tilt };
 }
 const sameLocks = (v: View, st: E.State) => { for (let s = 0; s < st.lockedBy.length; s++) if ((v.si.instSlot[s] < 0) !== (st.lockedBy[s] >= 0)) return false; return true; };
 // prices for a decision at time t; top-level policies may re-solve, rollout bases (resolve "never") reuse them
@@ -78,17 +80,17 @@ function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
     const t1 = Date.now(); const week = solveView(tw, E.initState(tw), t0, o.weekIters ?? 100000, 0);
     c = { week, slots: new Map(), solves: 1, solveMs: Date.now() - t1, endTimes: tw.games.map((g) => g.end).sort((a, b) => a - b), memo: new Map(), hits: 0 }; CACHE.set(tw, c);
   }
-  const ps = slotOf(c, o.slot ?? "top"); const day = E.dayEnd(t); const ends = endedBy(c, t);
-  if (o.resolve === "tip" || (o.resolve === "day" && day !== ps.day) || (o.resolve === "info" && ends !== ps.ends)) {
+  const ps = slotOf(c, o.slot ?? "top"); const day = E.dayEnd(t); const ends = endedBy(c, t); const tilt = o.tilt ?? 0;
+  if (o.resolve === "tip" || (o.resolve === "day" && day !== ps.day) || (o.resolve === "info" && ends !== ps.ends) || (o.resolve !== "never" && ps.cur.tilt !== tilt)) {
     // (a view of this very moment is reused only if it was solved for the same locked slots: a price state seeded from
     // another simulation at the same time would map a free slot to none, and NaN prices would drop held scores)
-    if (ps.cur.t0 !== t || !sameLocks(ps.cur, st)) {
+    if (ps.cur.t0 !== t || !sameLocks(ps.cur, st) || ps.cur.tilt !== tilt) {
       // (re-solving only after new results, "info", the states hardly ever repeat: no memo)
-      const it = o.iters ?? 100, lr = o.lr ?? 0.03; const key = o.resolve === "info" ? "" : `${ps.cur.id}#${stateKey(st, t, it, lr)}`;
+      const it = o.iters ?? 100, lr = o.lr ?? 0.03; const key = o.resolve === "info" ? "" : `${ps.cur.id}#${stateKey(st, t, it, lr)}${tilt ? `#${tilt}` : ""}`;
       const hit = key ? c.memo.get(key) : undefined;
       if (hit) { c.memo.delete(key); c.memo.set(key, hit); ps.cur = hit; c.hits++; }
       else {
-        const t1 = Date.now(); const v = solveView(tw, st, t, it, lr, ps.cur); c.solves++; c.solveMs += Date.now() - t1;
+        const t1 = Date.now(); const v = solveView(tw, st, t, it, lr, ps.cur, tilt); c.solves++; c.solveMs += Date.now() - t1;
         if (key) { c.memo.set(key, v); if (c.memo.size > MEMO_MAX) c.memo.delete(c.memo.keys().next().value!); }
         ps.cur = v;
       }
@@ -101,6 +103,9 @@ function pricesAt(tw: E.TeamWeek, pol: E.Policy, st: E.State, t: number): View {
 export function resetPrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (c) { const ps = slotOf(c, slot); ps.cur = c.week; ps.day = -1; ps.ends = 0; } }
 // a rollout starts from the real decision's current prices
 export function seedPrices(tw: E.TeamWeek, to: string, from = "top") { const c = CACHE.get(tw); if (c) { const a = slotOf(c, from), b = slotOf(c, to); b.cur = a.cur; b.day = a.day; b.ends = a.ends; } }
+// a price state saved and restored (research: continue several policies from one mid-week state, research/p11run.ts)
+export function savePrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (!c) return null; const a = slotOf(c, slot); return { cur: a.cur, day: a.day, ends: a.ends }; }
+export function restorePrices(tw: E.TeamWeek, saved: ReturnType<typeof savePrices>, slot = "top") { const c = CACHE.get(tw); if (c && saved) { const a = slotOf(c, slot); a.cur = saved.cur; a.day = saved.day; a.ends = saved.ends; } }
 
 // ---------------- values from the priced DPs ----------------
 function playProb(tw: E.TeamWeek, p: number, gi: number, lp: number) {

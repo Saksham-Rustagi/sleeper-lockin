@@ -116,6 +116,17 @@ export function baseLockChoice(tw: TeamWeek, pol: Policy, st: State, p: number, 
 }
 
 // ---------------- RNG ----------------
+// the same generator with its state readable and settable (research: continue a run from a saved mid-week state)
+export function rngS(seed: number): (() => number) & { state: number } {
+  const f = (() => {
+    let a = f.state | 0; a = (a + 0x6d2b79f5) | 0; f.state = a;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }) as (() => number) & { state: number };
+  f.state = seed >>> 0;
+  return f;
+}
 export function rng(seed: number) {
   let a = seed >>> 0;
   return () => {

@@ -7,7 +7,8 @@ import os from "os";
 import path from "path";
 import * as E from "../lib/engine/core";
 import { POLICY, type LiveTeam } from "../lib/live/week";
-import { engineName, resetEngineCache, decisionPolicy, simPolicy, planHooks, replayHooks, engineTag, P8_POLICY } from "../lib/live/engine";
+import { engineName, resetEngineCache, decisionPolicy, simPolicy, planHooks, replayHooks, engineTag, P8_POLICY, objectiveName, winActive } from "../lib/live/engine";
+import { humanSnapshot, liveOppSource } from "../lib/live/opponent";
 import { fingerprint } from "../lib/live/cache";
 import { weekValues, lockWaitTotals } from "../lib/live/teamsim";
 
@@ -94,4 +95,41 @@ test("plan / replay hooks follow the engine", () => {
     assert.ok(withEngine(e, undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real))?.decideIndex, `${e} replay hooks`);
     assert.equal(withEngine(e, undefined, engineName), e);
   }
+});
+
+// objective "win" (Phase 5): config / env, only with the race engines, its own cache entries, the opponent's snapshot
+const withObjective = <T>(env: string | undefined, cfg: { engine?: string; objective?: string } | undefined, f: () => T): T => {
+  const old = process.env.LOCKIN_OBJECTIVE, oldE = process.env.LOCKIN_ENGINE; delete process.env.LOCKIN_ENGINE;
+  if (env === undefined) delete process.env.LOCKIN_OBJECTIVE; else process.env.LOCKIN_OBJECTIVE = env;
+  if (cfg === undefined) fs.rmSync(path.join(dir, "config.json"), { force: true }); else fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ leagueId: "x", rosterId: 8, ...cfg }));
+  resetEngineCache();
+  try { return f(); } finally {
+    if (old === undefined) delete process.env.LOCKIN_OBJECTIVE; else process.env.LOCKIN_OBJECTIVE = old;
+    if (oldE !== undefined) process.env.LOCKIN_ENGINE = oldE; fs.rmSync(path.join(dir, "config.json"), { force: true }); resetEngineCache();
+  }
+};
+test("objective: default points (fingerprints unchanged), 'win' only with p10 / p10b, own cache entries", () => {
+  assert.equal(withObjective(undefined, undefined, objectiveName), "points");
+  assert.equal(withObjective(undefined, { objective: "win" }, objectiveName), "win");
+  assert.equal(withObjective("points", { objective: "win" }, objectiveName), "points", "env wins");
+  assert.equal(withObjective("maybe", undefined, objectiveName), "points");
+  assert.equal(withObjective(undefined, { objective: "win" }, () => winActive()), false, "p7h can't play for the win");
+  assert.equal(withObjective(undefined, { objective: "win" }, () => engineTag()), undefined, "p7h + win: unchanged behaviour, unchanged fingerprints");
+  assert.equal(withObjective(undefined, { engine: "p10b", objective: "win" }, () => winActive()), true);
+  const fps = [withObjective(undefined, { engine: "p10b" }, () => fingerprint({ a: 1 })), withObjective(undefined, { engine: "p10b", objective: "win" }, () => fingerprint({ a: 1 }))];
+  assert.notEqual(fps[0], fps[1], "win has its own cache entries");
+  assert.equal(withObjective(undefined, { objective: "points" }, () => fingerprint({ a: 1 })), crypto.createHash("sha1").update(JSON.stringify({ a: 1 })).digest("hex"));
+});
+test("objective 'win': plan hooks play P11 against the opponent's snapshot; without an opponent, P10", () => {
+  const T = liveTeam(); const opp = liveTeam(); const asOf = T0 + 12 * H;
+  const hs = humanSnapshot(opp);
+  assert.equal(hs.occ[2], 0, "his held player sits in UTIL"); assert.equal(hs.held[0], 30);
+  const D = liveOppSource(opp, asOf, 1, 200)!.dist(asOf)!;
+  assert.ok(D.mean > 30 && Number.isFinite(D.sd), `his final > the 30 he holds (${D.mean})`);
+  const h = withObjective(undefined, { engine: "p10", objective: "win" }, () => planHooks(T.tw, T.events, 10, 1, T.real, undefined, liveOppSource(opp, asOf, 1, 200)));
+  assert.ok(h?.decideIndex && (h as any).stats?.win, "P11 hooks");
+  const h0 = withObjective(undefined, { engine: "p10", objective: "win" }, () => planHooks(T.tw, T.events, 10, 1, T.real));
+  assert.ok(h0?.decideIndex && !(h0 as any).stats?.win, "no opponent: P10");
+  const hp = withObjective(undefined, { engine: "p10" }, () => planHooks(T.tw, T.events, 10, 1, T.real, undefined, liveOppSource(opp, asOf, 1, 200)));
+  assert.ok(hp?.decideIndex && !(hp as any).stats?.win, "objective points: P10 even with an opponent");
 });
