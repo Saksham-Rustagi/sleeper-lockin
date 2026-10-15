@@ -39,10 +39,29 @@ vs P2LAH, and P8 as the rollout base inside the P7 search (P9). Check invariants
 At each tip-off / deadline jointly choose: for every held player hold / lock (which slot) / let go (holding INCLUDED as an
 option, not banned); who starts and where; only reachable rearrangements. Candidates generated from the DP prices; scored by
 rollouts with the best base rule; adaptive sampling (racing / successive halving with CRN) instead of fixed K.
+**Status (2026-10-14): done** - `lib/engine/p10.ts`; P10b (P8-played continuations) beats live P7H_LheldTie pooled over
+both seasons (+2.40 ± 1.39 pts/wk), 0 rule violations, 0 dominated actions; see REPORT "Engine v2 — Phase 3".
 
 ## Phase 4 - Pre-game planner
 Before tonight's first tip: deep search (nested rollouts allowed) producing a contingency table per decision (e.g. lock
 cut-offs conditional on teammates' results), so live decisions are lookups; budget 30 min or overnight.
+**Status (2026-10-15): prototype** - `research/pregame.ts` (season replay or live league): tonight's lineup by P10b,
+then lock / keep / free cut-offs per starter for the morning-after decision, with key-teammate conditions, from P8
+continuations within `BUDGET_S`. On 13 team-week-days (41 decisions) its choices are as good as real-time P10b's
+(regret 1.65 ± 2.50 vs 3.27 ± 3.00 pts in total); precision (cut-off SEs of a few points in 30 min on one core) is the
+limit. See REPORT "Engine v2 — Phase 4 prototype". Engine speed work (task C): REPORT "Engine speed".
+
+## Phase 5 - Play for the win
+P11 (`lib/engine/p11.ts`): P10's race with continuations scored by T + beta * F_opp(T). F_opp is the opponent's final
+total distribution, simulated once per decision moment as a human (`lib/engine/human.ts`, fitted to the 2025-26
+managers). beta = 1000 in the last 3 game days, with a risk dial for the continuations. Live: `objective: "win"` with
+engine p10 / p10b (default "points", unchanged).
+**Status (2026-10-15): done, gate met.**
+- Simulated weeks vs human-model opponents: +0.40 pp win probability on 674 fresh model weeks, +0.53 ± 0.31 pp on all
+  1,118.
+- Real 2025-26 vs the real opponents: 144-68-2 (refit opponent model: 145-68-1) vs P10's 142-70-2.
+- Points unchanged; 0 rule violations.
+See REPORT "Engine v2 — Phase 5".
 
 ## Gate
 Nothing replaces the live POLICY until it beats P7H (280.3) on the season backtest (paired, CI reported), shows no

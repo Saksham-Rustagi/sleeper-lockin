@@ -2,8 +2,9 @@
 // Draws are fixed per (player, scenario k, week): the numbers only move when something about THAT team changes
 // (a score, lock, lineup, injury tag or projection), and both tabs show identical totals and win probabilities.
 import * as E from "../engine/core";
-import { POLICY, type LiveTeam } from "./week";
+import { type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
+import { simPolicy } from "./engine";
 
 // Spread K scenarios over worker threads (scenario k is keyed by its index, so the result is identical however it's
 // split). Falls back to the current thread in the browser, in tests, or if the worker bundle is missing.
@@ -61,10 +62,10 @@ export function scenario(T: LiveTeam, k: number, salt: number, asOf: number) {
 }
 
 export function weekValues(T: LiveTeam, N: number, salt: number, asOf: number, k0 = 0): Float64Array {
-  const v = new Float64Array(N);
+  const v = new Float64Array(N); const pol = simPolicy();
   for (let k = 0; k < N; k++) {
     const sc = scenario(T, k0 + k, salt, asOf);
-    v[k] = E.simulate(T.tw, POLICY, T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
+    v[k] = E.simulate(T.tw, pol, T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
   }
   return v;
 }
@@ -83,7 +84,7 @@ export function teamFingerprint(T: LiveTeam) {
 }
 
 export async function teamSims(T: LiveTeam, week: number, asOf: number, K = TEAM_SIMS): Promise<Float64Array> {
-  const fp = fingerprint({ v: 3, K, week, team: teamFingerprint(T) });
+  const fp = fingerprint({ v: 3, K, week, team: teamFingerprint(T) }, "sim");
   const r = await cachedCompute(`team-${T.rosterId}-w${week}`, fp, async () => Array.from(await parallelWeekValues(T, K, week * 7919, asOf), (x) => Math.round(x * 100) / 100));
   return Float64Array.from(r.value);
 }
@@ -101,12 +102,25 @@ export function winProb(a: Float64Array, b: Float64Array) {
 // "lock" locks him, "wait" lets him go and plays on; everything else follows the app's strategy.
 // Locking adds exactly X to the rest of the week, so: cut-off = E[total | wait] - E[total | lock at 0].
 export function lockWaitTotals(T: LiveTeam, st0: E.State, ev0: number, p: number, g: number, X: number, mode: "lock" | "wait", N: number, salt: number, asOf: number, k0 = 0): Float64Array {
-  const out = new Float64Array(N);
+  const out = new Float64Array(N); const pol = simPolicy();
   for (let k = 0; k < N; k++) {
     const sc = scenario(T, k0 + k, salt, asOf); sc.actual[g] = X; sc.played[g] = 1;
     let first = true;
-    const hooks: E.Hooks = { decideLock: (_st, q, _t, _i, ev) => { if (q !== p || !first) return undefined as any; first = false; return mode === "lock" ? ev.lockSlot : null; } };
-    out[k] = E.simulate(T.tw, POLICY, T.events, sc.actual, sc.played, E.cloneState(st0), ev0, hooks).total;
+    const hooks: E.Hooks = {
+      decideLock: (_st, q, _t, _i, ev) => { if (q !== p || !first) return undefined as any; first = false; return mode === "lock" ? ev.lockSlot : null; },
+      // index policies decide held scores at tip-offs: at his first one, lock him (in the slot the index policy seats
+      // him in) or let him go
+      decideIndex: (_st, _t, _i, ctx) => {
+        if (!first) return undefined; const i = ctx.cands.findIndex((c) => c.p === p && c.held); if (i < 0) return undefined;
+        first = false;
+        if (mode === "wait") return ctx.solve(new Map([[i, -1]]))?.d;
+        const r = ctx.solve(new Map([[i, 1]])); if (!r) return undefined;
+        const d = r.d; const s = d.holds.get(p) ?? d.starts.get(p) ?? d.locks.get(p);
+        if (s === undefined) return undefined;
+        d.holds.delete(p); d.starts.delete(p); d.locks.set(p, s); return d;
+      },
+    };
+    out[k] = E.simulate(T.tw, pol, T.events, sc.actual, sc.played, E.cloneState(st0), ev0, hooks).total;
   }
   return out;
 }

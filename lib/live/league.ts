@@ -3,7 +3,7 @@
 import { buildWeek, resolveWeek, type LiveTeam } from "./week";
 import { sleeper } from "./sources";
 import * as E from "../engine/core";
-import { POLICY } from "./week";
+import { simPolicy } from "./engine";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamSims, summarize, winProb as wp, TEAM_SIMS, teamFingerprint } from "./teamsim";
 
@@ -25,7 +25,7 @@ function simulateTeam(T: LiveTeam, K: number, asOf: number, seed: number) {
   const r = E.rng(seed); const out = new Float64Array(K);
   for (let k = 0; k < K; k++) {
     const sc = E.sampleScenario(T.tw, T.st, asOf, r, T.real);
-    out[k] = E.simulate(T.tw, POLICY, T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
+    out[k] = E.simulate(T.tw, simPolicy(), T.events, sc.actual, sc.played, E.cloneState(T.st), T.evIdx).total;
   }
   return out;
 }
@@ -41,7 +41,7 @@ export async function leagueWeek(o: { leagueId: string; rosterId: number; week?:
   // recompute only if something that affects a projection changed (games, scores, locks, lineups, injuries, projections)
   const sims = new Map<number, Float64Array>();
   await Promise.all(teams.map(async (T) => sims.set(T.rosterId, await teamSims(T, week, asOf, K)))); // shared with the This week tab; per-team cache
-  const fp = fingerprint({ v: 4, K, week, teams: teams.map((t) => [t.rosterId, teamFingerprint(t), t.sleeperPoints]), mu: matchups.map((m) => [m.roster_id, m.matchup_id]) });
+  const fp = fingerprint({ v: 4, K, week, teams: teams.map((t) => [t.rosterId, teamFingerprint(t), t.sleeperPoints]), mu: matchups.map((m) => [m.roster_id, m.matchup_id]) }, "sim");
   const res = await cachedCompute(`league-${o.leagueId}-w${week}`, fp, (): LeagueWeek => {
     const view = new Map<number, LeagueTeam>();
     for (const T of teams) {

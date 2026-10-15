@@ -8,6 +8,8 @@
 //  - Unlocked starter at week end => his final game counts automatically (0 if DNP).
 //  - A slot can host several players in one day if their games don't overlap.
 
+import { indexGroup, beginPrices, endPrices, type IndexContext, type IndexDecision, type IndexOpts } from "./p8";
+
 export const SLOT_MASK: Record<string, number> = { PG: 1, SG: 2, G: 3, SF: 4, PF: 8, F: 12, C: 16, UTIL: 31 };
 const POS_BIT: Record<string, number> = { PG: 1, SG: 2, SF: 4, PF: 8, C: 16, G: 3, F: 12 };
 export function posMask(pos: string[]): number {
@@ -79,6 +81,8 @@ export interface Policy {
   holdYield?: boolean;
   // re-enable bugs fixed in engine-v2 phase 1 (to measure each fix): true = all of them
   legacyBugs?: boolean | LegacyBug[];
+  // P8: Lagrangian index policy (lib/engine/p8.ts) instead of the rule; ignores lockAware/holdYield/reserve
+  index?: IndexOpts;
 }
 // strand:  a lock could take the slot a held teammate needs right now (hidden forfeit, sometimes still counted)
 // negEnd:  a negative held final-game score counted at week end (and valued as mu) instead of benched to 0
@@ -112,6 +116,17 @@ export function baseLockChoice(tw: TeamWeek, pol: Policy, st: State, p: number, 
 }
 
 // ---------------- RNG ----------------
+// the same generator with its state readable and settable (research: continue a run from a saved mid-week state)
+export function rngS(seed: number): (() => number) & { state: number } {
+  const f = (() => {
+    let a = f.state | 0; a = (a + 0x6d2b79f5) | 0; f.state = a;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }) as (() => number) & { state: number };
+  f.state = seed >>> 0;
+  return f;
+}
 export function rng(seed: number) {
   let a = seed >>> 0;
   return () => {
@@ -134,10 +149,15 @@ export function normCdf(z: number) {
   const p = d * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
   return z > 0 ? 1 - p : p;
 }
-// E[max(X, v)] for X ~ N(mu, sd)
+// E[max(X, v)] for X ~ N(mu, sd). normCdf and normPdf inlined with one exp: exp(-z*z/2) and exp(-0.5*z*z) are the same
+// double (scaling by 1/2 is exact), so this returns exactly v + (mu - v) * normCdf(z) + sd * normPdf(z).
 export function emax(mu: number, sd: number, v: number) {
   const z = (mu - v) / sd;
-  return v + (mu - v) * normCdf(z) + sd * normPdf(z);
+  const e = Math.exp(-z * z / 2);
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989422804014327 * e;
+  const p = d * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  return v + (mu - v) * (z > 0 ? 1 - p : p) + sd * (e / 2.5066282746310002);
 }
 
 // ---------------- state ----------------
@@ -170,6 +190,18 @@ export function cloneState(s: State): State {
     isLocked: s.isLocked.slice(), pendingX: s.pendingX.slice(), inGame: s.inGame.slice(), lastPlayed: s.lastPlayed.slice(),
     started: s.started.slice(), lastSlot: s.lastSlot.slice(), locks: s.locks, lockMoves: s.lockMoves,
   };
+}
+// cloneState into an existing state of the same team-week (rollouts reuse one scratch state per hook)
+export function copyState(d: State, s: State): State {
+  d.lockedBy.set(s.lockedBy); d.lockedPts.set(s.lockedPts); d.pinned.set(s.pinned); d.pinnedUntil.set(s.pinnedUntil);
+  d.isLocked.set(s.isLocked); d.pendingX.set(s.pendingX); d.inGame.set(s.inGame); d.lastPlayed.set(s.lastPlayed);
+  d.started.set(s.started); d.lastSlot.set(s.lastSlot); d.locks = s.locks; d.lockMoves = s.lockMoves;
+  return d;
+}
+// a scratch state for rollouts from st (allocated on first use, then reused)
+export function scratchState(): (st: State) => State {
+  let sc: State | null = null;
+  return (st) => (sc && sc.lockedBy.length === st.lockedBy.length && sc.isLocked.length === st.isLocked.length && sc.started.length === st.started.length ? copyState(sc, st) : (sc = cloneState(st)));
 }
 
 // ---------------- events ----------------
@@ -204,9 +236,33 @@ function playProb(tw: TeamWeek, p: number, gi: number, lastPlayed: number) {
 // given whether he played his last game. Exact DP over the DNP chain: whether he plays game k is seen before game
 // k+1, so later play probabilities are conditional on it. His final game counts at week end unless negative (then he
 // is benched: rule 4). pol carries legacy flags ("stop": unconditional play marginals; "negEnd": final game = mu).
+// Memo of stopValue per team-week: (p, fromIdx, lastPlayed) -> value, for the default flags. It is valid while
+// everything stopValue reads is unchanged: checked by identity (games, byPlayer, dnp, pNext, nextGameIdx, resid); team-
+// weeks are built once and replaced, not edited in place (lib/live/week.ts, research/btcommon.ts).
+interface SvMemo { games: Game[]; byPlayer: number[][]; dnp: DnpModel; pNext: unknown; nextGameIdx: unknown; resid: unknown; off: Int32Array; v: Float64Array }
+const SV_MEMO = new WeakMap<TeamWeek, SvMemo>(); let SV_last: TeamWeek | null = null, SV_lastM: SvMemo | null = null;
+function svMemo(tw: TeamWeek): SvMemo {
+  let m = tw === SV_last ? SV_lastM : SV_MEMO.get(tw);
+  if (!m || m.games !== tw.games || m.byPlayer !== tw.byPlayer || m.dnp !== tw.dnp || m.pNext !== tw.pNext || m.nextGameIdx !== tw.nextGameIdx || m.resid !== tw.resid) {
+    const off = new Int32Array(tw.byPlayer.length + 1); for (let p = 0; p < tw.byPlayer.length; p++) off[p + 1] = off[p] + tw.byPlayer[p].length;
+    m = { games: tw.games, byPlayer: tw.byPlayer, dnp: tw.dnp, pNext: tw.pNext, nextGameIdx: tw.nextGameIdx, resid: tw.resid, off, v: new Float64Array(off[tw.byPlayer.length] * 2).fill(NaN) };
+    SV_MEMO.set(tw, m);
+  }
+  SV_last = tw; SV_lastM = m;
+  return m;
+}
 export function stopValue(tw: TeamWeek, p: number, fromIdx: number, lastPlayed: number, pol?: Policy): number {
   const gl = tw.byPlayer[p];
   if (fromIdx >= gl.length) return 0;
+  if (fromIdx >= 0 && !legacy(pol, "stop") && !legacy(pol, "negEnd")) {
+    const m = svMemo(tw); const i = (m.off[p] + fromIdx) * 2 + (lastPlayed ? 1 : 0);
+    const c = m.v[i]; if (c === c) return c;
+    return (m.v[i] = stopValueDP(tw, p, fromIdx, lastPlayed, pol));
+  }
+  return stopValueDP(tw, p, fromIdx, lastPlayed, pol);
+}
+function stopValueDP(tw: TeamWeek, p: number, fromIdx: number, lastPlayed: number, pol?: Policy): number {
+  const gl = tw.byPlayer[p];
   if (!legacy(pol, "stop")) {
     const negEnd = legacy(pol, "negEnd");
     let v1 = 0, v0 = 0; // value from game k+1 on, after playing / missing game k
@@ -281,32 +337,125 @@ export function playerValue(tw: TeamWeek, pol: Policy, st: State, p: number, t: 
 // Max-weight assignment of players (vertex weights) to slots. Vertex-weighted bipartite matching is a
 // transversal matroid => greedy by weight + augmenting paths is exact.
 const SLOT_ORDER_CACHE = new Map<string, number[]>();
+// fast path by array identity; the stored copy of the values guards against an array changed in place
+const SLOT_ORDER_BY_REF = new WeakMap<number[], { vals: number[]; o: number[] }>();
 export function slotOrder(slots: number[]): number[] {
+  const hit = SLOT_ORDER_BY_REF.get(slots);
+  if (hit && hit.vals.length === slots.length) {
+    let same = true; for (let i = 0; i < slots.length; i++) if (hit.vals[i] !== slots[i]) { same = false; break; }
+    if (same) return hit.o;
+  }
   const key = slots.join(",");
   let o = SLOT_ORDER_CACHE.get(key);
   if (!o) { o = slots.map((_, i) => i).sort((a, b) => popcount(slots[a]) - popcount(slots[b]) || a - b); SLOT_ORDER_CACHE.set(key, o); }
+  SLOT_ORDER_BY_REF.set(slots, { vals: slots.slice(), o });
   return o;
 }
 function popcount(x: number) { let c = 0; while (x) { c += x & 1; x >>= 1; } return c; }
+// Matching workspace shared by assignExact / assignTotal / allSeatable (single-threaded and never re-entered: the
+// augmenting search calls nothing else). Slot indices < 32 (open masks are 32-bit).
+const AX_match = new Int32Array(32), AX_vis = new Uint8Array(32);
+let AX_slots: number[] = [], AX_so: number[] = [], AX_open = 0, AX_pm: number[] = [];
+function axAug(p: number): boolean {
+  const so = AX_so, pmp = AX_pm[p];
+  for (let i = 0; i < so.length; i++) {
+    const s = so[i];
+    if (!((AX_open >> s) & 1) || AX_vis[s] || !(AX_slots[s] & pmp)) continue;
+    AX_vis[s] = 1;
+    if (AX_match[s] < 0 || axAug(AX_match[s])) { AX_match[s] = p; return true; }
+  }
+  return false;
+}
+let AX_order = new Int32Array(64);
+// Greedy by weight (players with w > 0, heaviest first, ties in the given order: a stable sort) + augmenting paths;
+// returns the total of the matched weights summed in that order.
+function axRun(slots: number[], openMask: number, players: number[], pm: number[], w: Float64Array | number[]): number {
+  if (AX_order.length < players.length) AX_order = new Int32Array(players.length * 2);
+  const order = AX_order; let n = 0;
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i]; const wp = w[p]; if (!(wp > 0)) continue;
+    let j = n++; while (j > 0 && w[order[j - 1]] < wp) { order[j] = order[j - 1]; j--; } // stable insertion (desc)
+    order[j] = p;
+  }
+  AX_slots = slots; AX_so = slotOrder(slots); AX_open = openMask; AX_pm = pm;
+  const nS = slots.length; AX_match.fill(-1, 0, nS);
+  let total = 0;
+  for (let i = 0; i < n; i++) { const p = order[i]; AX_vis.fill(0, 0, nS); if (axAug(p)) total += w[p]; }
+  return total;
+}
 export function assignExact(slots: number[], openMask: number, players: number[], pm: number[], w: Float64Array | number[]):
   { total: number; slotOf: Map<number, number> } {
-  const order = players.filter((p) => w[p] > 0).sort((a, b) => w[b] - w[a]);
-  const matchSlot = new Int32Array(slots.length).fill(-1);
-  const so = slotOrder(slots);
-  let total = 0;
-  const visited = new Uint8Array(slots.length);
-  const tryAug = (p: number): boolean => {
-    for (const s of so) {
-      if (!((openMask >> s) & 1) || visited[s] || !(slots[s] & pm[p])) continue;
-      visited[s] = 1;
-      if (matchSlot[s] < 0 || tryAug(matchSlot[s])) { matchSlot[s] = p; return true; }
-    }
-    return false;
-  };
-  for (const p of order) { visited.fill(0); if (tryAug(p)) total += w[p]; }
+  const total = axRun(slots, openMask, players, pm, w);
   const slotOf = new Map<number, number>();
-  matchSlot.forEach((p, s) => { if (p >= 0) slotOf.set(p, s); });
+  for (let s = 0; s < slots.length; s++) { const p = AX_match[s]; if (p >= 0) slotOf.set(p, s); }
   return { total, slotOf };
+}
+// Matchability by counting (Hall's theorem). Eligibility is by the 5 position bits, so a player set S is matchable into
+// the open slots iff for every bit set u: #{p in S : pmask[p] ⊆ u} <= #{open s : slots[s] & u} (any S' ⊆ S has
+// N(S') = N(union of its masks), and the players whose masks lie inside a union u are the tightest set for it). The
+// greedy above accepts p iff accepted ∪ {p} is matchable (Kuhn's augmenting search is complete), so counting accepts
+// exactly the same players and assignTotal returns exactly assignExact(...).total (same summation order).
+// hallTab(slots): per open mask o, the 32 counts #{s in o : slots[s] & u} (filled on first use); null if not applicable.
+interface HallTab { vals: number[]; cnt: Uint8Array; done: Uint8Array }
+const HALL_BY_REF = new WeakMap<number[], HallTab | null>();
+function hallTab(slots: number[]): HallTab | null {
+  let h = HALL_BY_REF.get(slots);
+  if (h === null) return h;
+  if (h !== undefined && h.vals.length === slots.length) {
+    let same = true; for (let i = 0; i < slots.length; i++) if (h.vals[i] !== slots[i]) { same = false; break; }
+    if (same) return h;
+  }
+  h = slots.length <= 12 && slots.every((m) => m >= 0 && m <= 31) ? { vals: slots.slice(), cnt: new Uint8Array((1 << slots.length) * 32), done: new Uint8Array(1 << slots.length) } : null;
+  HALL_BY_REF.set(slots, h);
+  return h;
+}
+function hallCounts(h: HallTab, slots: number[], open: number): number {
+  open &= (1 << slots.length) - 1;
+  const o = open * 32;
+  if (!h.done[open]) {
+    for (let u = 0; u < 32; u++) { let c = 0; for (let s = 0; s < slots.length; s++) if (((open >> s) & 1) && (slots[s] & u)) c++; h.cnt[o + u] = c; }
+    h.done[open] = 1;
+  }
+  return o;
+}
+const HALL_acc = new Int32Array(32);
+// try to add a player with position mask m (0..31) to the accepted set counted in HALL_acc
+function hallAdd(cnt: Uint8Array, o: number, m: number): boolean {
+  for (let u = m; u < 32; u = (u + 1) | m) if (HALL_acc[u] >= cnt[o + u]) return false; // all supersets u of m
+  for (let u = m; u < 32; u = (u + 1) | m) HALL_acc[u]++;
+  return true;
+}
+// assignExact(...).total without building the map
+export function assignTotal(slots: number[], openMask: number, players: number[], pm: number[], w: Float64Array | number[]): number {
+  const h = hallTab(slots);
+  if (!h) return axRun(slots, openMask, players, pm, w);
+  if (AX_order.length < players.length) AX_order = new Int32Array(players.length * 2);
+  const order = AX_order; let n = 0;
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i]; const wp = w[p]; if (!(wp > 0)) continue;
+    const m = pm[p]; if (!(m >= 0 && m <= 31)) return axRun(slots, openMask, players, pm, w);
+    let j = n++; while (j > 0 && w[order[j - 1]] < wp) { order[j] = order[j - 1]; j--; } // the same stable order as axRun
+    order[j] = p;
+  }
+  const o = hallCounts(h, slots, openMask); HALL_acc.fill(0);
+  const cap = h.cnt[o + 31]; // usable open slots: once all are taken nobody else can be accepted
+  let total = 0;
+  for (let i = 0; i < n && HALL_acc[31] < cap; i++) { const p = order[i]; if (hallAdd(h.cnt, o, pm[p])) total += w[p]; }
+  return total;
+}
+// Can all `players` be matched into the open slots at once? (= assignExact with unit weights has total players.length)
+export function allSeatable(slots: number[], openMask: number, players: number[], pm: number[]): boolean {
+  const h = hallTab(slots);
+  let ok = !!h; for (let i = 0; ok && i < players.length; i++) { const m = pm[players[i]]; ok = m >= 0 && m <= 31; }
+  if (ok) {
+    const o = hallCounts(h!, slots, openMask); HALL_acc.fill(0);
+    for (let i = 0; i < players.length; i++) if (!hallAdd(h!.cnt, o, pm[players[i]])) return false;
+    return true;
+  }
+  AX_slots = slots; AX_so = slotOrder(slots); AX_open = openMask; AX_pm = pm;
+  const nS = slots.length; AX_match.fill(-1, 0, nS);
+  for (let i = 0; i < players.length; i++) { AX_vis.fill(0, 0, nS); if (!axAug(players[i])) return false; } // a maximum matching: one failure = not all
+  return true;
 }
 // The app's original greedy: edges sorted by weight, first free eligible slot in Sleeper order.
 function assignAppGreedy(slots: number[], openMask: number, players: number[], pm: number[], w: Float64Array | number[], pen?: number[]):
@@ -322,8 +471,11 @@ function assignAppGreedy(slots: number[], openMask: number, players: number[], p
 function assign(pol: Policy, tw: TeamWeek, openMask: number, players: number[], w: Float64Array | number[], pen?: number[]) {
   return pol.matching === "exact" ? assignExact(tw.slots, openMask, players, tw.pmask, w) : assignAppGreedy(tw.slots, openMask, players, tw.pmask, w, pen);
 }
-export function openMaskOf(st: State) { let m = 0; st.lockedBy.forEach((p, s) => { if (p < 0) m |= 1 << s; }); return m; }
-export function unpinnedOpen(st: State) { let m = 0; st.lockedBy.forEach((p, s) => { if (p < 0 && st.pinned[s] < 0) m |= 1 << s; }); return m; }
+function assignTot(pol: Policy, tw: TeamWeek, openMask: number, players: number[], w: Float64Array | number[]) {
+  return pol.matching === "exact" ? assignTotal(tw.slots, openMask, players, tw.pmask, w) : assignAppGreedy(tw.slots, openMask, players, tw.pmask, w).total;
+}
+export function openMaskOf(st: State) { let m = 0; const l = st.lockedBy; for (let s = 0; s < l.length; s++) if (l[s] < 0) m |= 1 << s; return m; }
+export function unpinnedOpen(st: State) { let m = 0; const l = st.lockedBy, pn = st.pinned; for (let s = 0; s < l.length; s++) if (l[s] < 0 && pn[s] < 0) m |= 1 << s; return m; }
 
 // ---------------- decisions ----------------
 export interface LockEval { lockBest: number; lockSlot: number; cont: number }
@@ -335,10 +487,11 @@ export function sameTypeHere(tw: TeamWeek, st: State, p: number, s: number, lock
 
 // Can every held (unlocked) player other than `except` sit in the open slots `open` at once? (rule 4: a held score
 // needs a starting slot at every moment; benching him forfeits it)
+const HS_held: number[] = [];
 export function heldSeatable(tw: TeamWeek, st: State, open: number, except: number): boolean {
-  const held: number[] = []; const w = new Float64Array(tw.pmask.length);
-  for (let q = 0; q < tw.pmask.length; q++) if (q !== except && !st.isLocked[q] && !Number.isNaN(st.pendingX[q])) { held.push(q); w[q] = 1; }
-  return !held.length || assignExact(tw.slots, open, held, tw.pmask, w).total === held.length;
+  const held = HS_held; held.length = 0;
+  for (let q = 0; q < tw.pmask.length; q++) if (q !== except && !st.isLocked[q] && !Number.isNaN(st.pendingX[q])) held.push(q);
+  return !held.length || allSeatable(tw.slots, open, held, tw.pmask);
 }
 // Locking p into s is legal and strands no held teammate.
 export function lockFeasible(tw: TeamWeek, st: State, p: number, s: number): boolean {
@@ -351,30 +504,37 @@ function legalLock(tw: TeamWeek, pol: Policy, st: State, p: number, s: number | 
   return ev.lockSlot >= 0 && lockFeasible(tw, st, p, ev.lockSlot) ? ev.lockSlot : null;
 }
 
+// evalLock's workspace (evalLock never re-enters itself: playerValue / the assignments call no policy code)
+let EL_w = new Float64Array(32); const EL_others: number[] = [], EL_held: number[] = [];
 export function evalLock(tw: TeamWeek, pol: Policy, st: State, p: number, t: number): LockEval {
   const x = st.pendingX[p];
-  const nP = tw.pmask.length; const w = new Float64Array(nP); const others: number[] = [];
+  const nP = tw.pmask.length; if (EL_w.length < nP) EL_w = new Float64Array(nP * 2);
+  const w = EL_w; const others = EL_others; others.length = 0;
   for (let q = 0; q < nP; q++) if (!st.isLocked[q] && q !== p && (usable(tw, q, t) || !Number.isNaN(st.pendingX[q]) || st.inGame[q] >= 0)) { w[q] = playerValue(tw, pol, st, q, t); others.push(q); }
   const open = openMaskOf(st);
   w[p] = futureValue(tw, pol, st, p, t);
-  const cont = assign(pol, tw, open, [...others, p], w).total;
+  others.push(p); const cont = assignTot(pol, tw, open, others, w); others.pop();
   let lockBest = -Infinity, lockSlot = -1;
   const lockable = unpinnedOpen(st);
   const strandOk = legacy(pol, "strand");
-  const seen = new Set<number>();
+  // heldSeatable(tw, st, open, p) for this state: the held teammates listed once
+  const held = EL_held; held.length = 0;
+  if (!strandOk) for (let q = 0; q < nP; q++) if (q !== p && !st.isLocked[q] && !Number.isNaN(st.pendingX[q])) held.push(q);
+  const seatable = (open: number) => !held.length || allSeatable(tw.slots, open, held, tw.pmask);
+  let seen = 0; // slot types (eligibility masks < 32) already tried
   for (const s of slotOrder(tw.slots)) {
-    if (!((lockable >> s) & 1) || !(tw.slots[s] & tw.pmask[p]) || seen.has(tw.slots[s])) continue;
-    if (!strandOk && !heldSeatable(tw, st, lockable & ~(1 << s), p)) continue; // would strand a held teammate
-    seen.add(tw.slots[s]);
+    if (!((lockable >> s) & 1) || !(tw.slots[s] & tw.pmask[p]) || (seen & (1 << tw.slots[s]))) continue;
+    if (!strandOk && !seatable(lockable & ~(1 << s))) continue; // would strand a held teammate
+    seen |= 1 << tw.slots[s];
     const si = sameTypeHere(tw, st, p, s, lockable);
-    const v = x + assign(pol, tw, open & ~(1 << si), others, w).total;
+    const v = x + assignTot(pol, tw, open & ~(1 << si), others, w);
     if (v > lockBest + 1e-9) { lockBest = v; lockSlot = si; }
   }
   // Prefer locking him where he already sits when that's (practically) as good: no shuffling needed in Sleeper.
   const here = st.lastSlot ? st.lastSlot[p] : -1;
   if (pol.lockAware && here >= 0 && here !== lockSlot && ((lockable >> here) & 1) && (tw.slots[here] & tw.pmask[p]) &&
-    (strandOk || heldSeatable(tw, st, lockable & ~(1 << here), p))) {
-    const v = x + assign(pol, tw, open & ~(1 << here), others, w).total;
+    (strandOk || seatable(lockable & ~(1 << here)))) {
+    const v = x + assignTot(pol, tw, open & ~(1 << here), others, w);
     if (v >= lockBest - 0.25) { lockSlot = here; }
   }
   return { lockBest, lockSlot, cont };
@@ -387,6 +547,8 @@ export function doLock(st: State, p: number, s: number) {
 // ---------------- simulation ----------------
 export interface Hooks {
   decideLock?: (st: State, p: number, t: number, evIdx: number, ev: LockEval) => number | null;
+  // P8 (index policy): may return a different complete decision for this tip-off (see lib/engine/p8.ts)
+  decideIndex?: (st: State, t: number, evIdx: number, ctx: IndexContext) => IndexDecision | undefined;
   // start/sit at a tip-off: may return a different player->slot map for the players tipping now
   decideStarts?: (st: State, t: number, evIdx: number, tipping: number[], pending: number[], gameOf: Map<number, number>, slotOf: Map<number, number>, free: number) => Map<number, number> | undefined;
 }
@@ -394,6 +556,7 @@ export interface Hooks {
 export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float64Array, played: Uint8Array,
   st: State = initState(tw), fromEv = 0, hooks?: Hooks, toTime = Infinity): { total: number; st: State; evIdx: number } {
   const nP = tw.pmask.length; const eps = pol.eps ?? 0;
+  if (pol.index) beginPrices(tw, pol.index, st, fromEv); // week-start prices unless this run continues one (lib/engine/p8.ts)
   let i = fromEv;
   for (; i < events.length; i++) {
     const e = events[i];
@@ -417,6 +580,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
       }
     } else if (e.kind === 1) {
       const p = tw.games[e.g].p;
+      if (pol.index) continue; // P8: lock-or-let-go at a deadline is part of the tip-off decision
       if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p]) {
         const ev = evalLock(tw, pol, st, p, e.t - 1);
         let s: number | null = baseLockChoice(tw, pol, st, p, e.t - 1, ev);
@@ -424,6 +588,8 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
         s = legalLock(tw, pol, st, p, s, ev);
         if (s !== null && s >= 0) doLock(st, p, s); else st.pendingX[p] = NaN;
       }
+    } else if (pol.index) {
+      indexGroup(tw, pol, st, e, i, hooks);
     } else {
       startGroup(tw, pol, st, e, events, i, hooks);
     }
@@ -437,6 +603,7 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
     const a = assignExact(tw.slots, openMaskOf(st), open, tw.pmask, w);
     for (const p of a.slotOf.keys()) total += st.pendingX[p];
   }
+  if (pol.index) endPrices(tw, pol.index, st, i);
   return { total, st, evIdx: i };
 }
 
@@ -482,9 +649,10 @@ export function startGroup(tw: TeamWeek, pol: Policy, st: State, e: Ev, events: 
     // later games that will overlap with these (or same day if no chaining) compete for the same slots
     const horizon = pol.chain ? t + 2.5 * 3600e3 : dayEnd(t);
     const seen = new Set(cands);
-    for (const g of tw.games) {
+    for (let gi = 0; gi < tw.games.length; gi++) {
+      const g = tw.games[gi];
       if (g.tip <= t || g.tip >= horizon || st.isLocked[g.p] || seen.has(g.p) || !usable(tw, g.p, g.tip)) continue;
-      const k = tw.byPlayer[g.p].indexOf(tw.games.indexOf(g));
+      const k = tw.byPlayer[g.p].indexOf(gi);
       const withV = stopValue(tw, g.p, k, st.lastPlayed[g.p], pol);
       const without = skipValue(tw, g.p, k, st.lastPlayed[g.p], pol);
       w[g.p] = Math.max(1e-6, withV - without); cands.push(g.p); seen.add(g.p);
@@ -541,14 +709,18 @@ export function lockAwarePlacement(tw: TeamWeek, pol: Policy, st: State, slotOf:
   if (!starters.length) return;
   const used = new Set(slotOf.values());
   const pref = new Map<number, number>();
+  // evaluated on st itself with the starters' game state changed and restored afterwards (no clone per starter)
+  const inG = starters.map((q) => st.inGame[q]);
+  for (const q of starters) st.inGame[q] = -1;
   for (const p of starters) {
     const g = tw.games[gameOf.get(p)!];
-    const c = cloneState(st);
-    for (const q of starters) c.inGame[q] = -1;
-    c.pendingX[p] = g.mu + g.sd; // "if he has a good game, where would we lock him?"
-    const ev = evalLock(tw, pol, c, p, g.end);
+    const x0 = st.pendingX[p];
+    st.pendingX[p] = g.mu + g.sd; // "if he has a good game, where would we lock him?"
+    const ev = evalLock(tw, pol, st, p, g.end);
+    st.pendingX[p] = x0;
     if (ev.lockSlot >= 0) pref.set(p, tw.slots[ev.lockSlot]);
   }
+  starters.forEach((q, i) => { st.inGame[q] = inG[i]; });
   const owner = new Map<number, number>(); for (const [p, s] of slotOf) owner.set(s, p);
   for (let iter = 0; iter < 20; iter++) {
     let improved = false;
@@ -605,7 +777,7 @@ export function sampleScenario(tw: TeamWeek, st: State | null, t: number, r: () 
 export function rolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], obj: "points" | "win" | "softwin", K: number, margin: number,
   seed: number, realised: { actual: Float64Array; played: Uint8Array },
   opp?: { tw: TeamWeek; events: Ev[]; pol: Policy; realised: { actual: Float64Array; played: Uint8Array } }): Hooks {
-  const r = rng(seed);
+  const r = rng(seed); const scratch = scratchState();
   return {
     decideLock: (st, p, t, evIdx, ev) => {
       const gap = ev.lockBest - ev.cont;
@@ -629,7 +801,7 @@ export function rolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], obj: "poi
           oppTotal = simulate(opp.tw, opp.pol, opp.events, os.actual, os.played).total;
         }
         alts.forEach((s, ai) => {
-          const s2 = cloneState(st);
+          const s2 = scratch(st);
           if (s === null) s2.pendingX[p] = NaN; else doLock(s2, p, s);
           // continue from the next event with the base policy (no hooks)
           const res = simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1);
@@ -652,7 +824,7 @@ export function rolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], obj: "poi
 // can replace), each scored by K continuations of the rest of the week (common random numbers).
 export function startRolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], K: number, seed: number,
   realised: { actual: Float64Array; played: Uint8Array }, lockHooks?: Hooks): Hooks {
-  const r = rng(seed ^ 0x5bd1e995);
+  const r = rng(seed ^ 0x5bd1e995); const scratch = scratchState();
   return {
     decideLock: lockHooks?.decideLock,
     decideStarts: (st, t, evIdx, tipping, pending, gameOf, slotOf, free) => {
@@ -679,7 +851,7 @@ export function startRolloutHooks(tw: TeamWeek, base: Policy, events: Ev[], K: n
       const scores = new Float64Array(alts.length);
       for (let k = 0; k < K; k++) {
         const scen = sampleScenario(tw, st, t, r, realised);
-        alts.forEach((m, ai) => { const s2 = cloneState(st); applyStarts(tw, s2, finalLineup(tw, base, st, m, tipping, pending, gameOf, free), tipping, pending, gameOf); scores[ai] += simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total; });
+        alts.forEach((m, ai) => { const s2 = scratch(st); applyStarts(tw, s2, finalLineup(tw, base, st, m, tipping, pending, gameOf, free), tipping, pending, gameOf); scores[ai] += simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total; });
       }
       let bi = 0; for (let ai = 1; ai < alts.length; ai++) if (scores[ai] > scores[bi] + 0.5 * K) bi = ai; // change the rule's lineup only for a clear (>0.5 pt) gain
       return bi === 0 ? undefined : alts[bi];

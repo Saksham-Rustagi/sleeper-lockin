@@ -6,7 +6,10 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
-import { advise, type Advice } from "../lib/live/advise";
+import { advise, replay, type Advice } from "../lib/live/advise";
+import { engineName, replayIsSlow } from "../lib/live/engine";
+import { sleeper } from "../lib/live/sources";
+import { resolveWeek } from "../lib/live/week";
 import { collect, logAdvice } from "../lib/live/collector";
 import { waiverAdvice } from "../lib/live/waivers";
 import { irAdvice, type IrAction } from "../lib/live/ir";
@@ -75,6 +78,22 @@ export function messages(a: Advice, now: number): Msg[] {
   return out;
 }
 
+// The race engines (p10b) replay a finished week in ~3-5 min (p7h: seconds): precompute last week's replay once, in
+// quiet hours, so the Replay tab answers from the shared disk cache. One attempt per week (marker file), so a replay
+// that hit the watchdog is not retried every run.
+async function warmReplay(cfg: { leagueId: string; rosterId: number }) {
+  if (!replayIsSlow()) return;
+  try {
+    const league = await sleeper.league(cfg.leagueId);
+    const week = (await resolveWeek(league.season, Date.now())) - 1; if (week < 1) return;
+    const mark = path.join(DIR, `replay-warm-${cfg.leagueId}-${cfg.rosterId}-${week}-${engineName()}`);
+    if (fs.existsSync(mark)) return;
+    if (!process.env.DRY_RUN) fs.writeFileSync(mark, new Date().toISOString());
+    const t0 = Date.now(); await replay({ leagueId: cfg.leagueId, rosterId: cfg.rosterId, week });
+    log(`replay of week ${week} ready (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  } catch (e: any) { log("replay warm ERROR", e?.message || e); }
+}
+
 async function main() {
   fs.mkdirSync(DIR, { recursive: true });
   if (process.env.LOCKIN_TEST) { remind("✅ Sleeper Lock-In reminders are working", "You can delete this test reminder."); return; }
@@ -89,8 +108,9 @@ async function main() {
     } catch (e: any) { log("collector ERROR", e?.message || e); }
   }
   const h = etHour(now);
-  if (!process.env.FORCE && h >= 3 && h < 11) { log("quiet hours"); return; }
+  if (!process.env.FORCE && h >= 3 && h < 11) { await warmReplay(cfg); log("quiet hours"); return; }
   const a = await advise({ leagueId: cfg.leagueId, rosterId: cfg.rosterId, K: Number(process.env.K || 250) });
+  log(`engine ${engineName()}: advice ${a.cached ? "cached" : "computed"} in ${((Date.now() - now) / 1000).toFixed(0)} s since start`);
   if (!process.env.DRY_RUN) logAdvice(DATA, a.season, a);
   const sent: Record<string, number> = fs.existsSync(SENT) ? JSON.parse(fs.readFileSync(SENT, "utf8")) : {};
   const msgs = messages(a, now);

@@ -22,16 +22,18 @@ row.relaxedReward = b.at.reward; // expected points the relaxed (priced) players
 
 const sc = PL.scenarios(tw, N, seed * 13 + 7);
 const runP2 = (name: string) => { const ru = PL.runner(name, tw, seed, real); return sc.map((s) => E.simulate(tw, ru.pol, ru.events, s.actual, s.played).total); };
-row.P2LA = runP2("P2LA"); row.P2LAH = runP2("P2LAH");
+// env GAPPOLS: policies on all N scenarios (default P2LA,P2LAH); GAP7: the expensive policy on the first N7 (P7H)
+for (const pn of (process.env.GAPPOLS || "P2LA,P2LAH").split(",")) row[pn] = runP2(pn);
+const P7 = process.env.GAP7 || "P7H"; row.P7name = P7;
 row.HS = sc.map((s) => L.hindsightValue(tw.slots, tw.pmask, tw.byPlayer, s.actual, s.played, E.assignExact));
 const rep = newReport(); row.P7H = [];
 for (let k = 0; k < N7; k++) {
-  const s = sc[k]; const ru = PL.runner("P7H", tw, seed + 7919 * (k + 1), s);
+  const s = sc[k]; const ru = PL.runner(P7, tw, seed + 7919 * (k + 1), s);
   const r = runChecked(tw, ru.pol, ru.events, s.actual, s.played, ru.hooks, { label: `w${week} r${rid} P7H sim${k}`, maxEx: 2 });
   row.P7H.push(r.total); mergeReport(rep, r.rep, 6);
 }
 row.P7H_rep = rep; row.ms = Date.now() - t0;
 const r1 = (a: number[]) => a.map((x) => Math.round(x * 10) / 10);
-row.P2LA = r1(row.P2LA); row.P2LAH = r1(row.P2LAH); row.HS = r1(row.HS);
+for (const pn of (process.env.GAPPOLS || "P2LA,P2LAH").split(",")) row[pn] = r1(row[pn]); row.HS = r1(row.HS);
 fs.writeFileSync(out, JSON.stringify(row));
-process.stderr.write(`w${week} r${rid} bound ${b.bound.toFixed(1)} P2LAH ${(row.P2LAH.reduce((a: number, x: number) => a + x, 0) / N).toFixed(1)} ${row.ms}ms\n`);
+process.stderr.write(`w${week} r${rid} bound ${b.bound.toFixed(1)} ${row.ms}ms\n`);

@@ -413,21 +413,64 @@ For each team-week, under the walk-forward model fitted on earlier weeks (as in 
 - **E[P2LA], E[P2LAH], E[perfect hindsight]:** 2000 model scenarios.
 - **E[P7H]:** the first 20 of those scenarios (common random numbers), each also run through the invariant checker. E[P7H] is estimated as E_2000[P2LAH] + mean_20(P7H − P2LAH), a control variate with the CI reported.
 
-> **PLACEHOLDER: gap tables pending.** The gap run (`node research/runtasks.mjs research/dist/gap.cjs gap "" N7=20`) is in
-> progress. When it finishes this placeholder gets:
-> - the per-policy E[value] vs bound table, gap distribution and worst team-weeks (`python3 ../summ_phase1.py` in `research/out`);
-> - the P7H column of the invariant table (P7H on 20 model scenarios per team-week);
-> - the P7H monotonicity check on the 24 worst P2LAH drop cases (`research/out/mono7_tasks.txt`, run in `mono7` mode after the gap run).
->
-> First data point (smoke test, w7 r3):
->
-> | quantity | value |
-> |---|---|
-> | Lagrangian bound | 320.5 |
-> | E[hindsight] | 344.4 |
-> | E[P7H] (12 scenarios) | ≈ 293 |
-> | E[P2LAH] | 287.6 |
-> | no-slot-limit relaxation | 455.6 |
+**Results on the fixed engine** (`research/out/gap2_*`, all 230 team-weeks; policies with all Phase-1 fixes including
+B4 heldTie). A legacy-engine sample (52 team-weeks) is in "Phase 1 fixes: season results" below.
+
+| quantity (model expectation, mean per team-week) | value | gap to bound |
+|---|---|---|
+| no-slot-limit relaxation (μ = 0) | 439.4 | |
+| E[perfect hindsight] (upper bound) | 320.1 | |
+| **Lagrangian bound** (upper bound) | **301.4** | 0 |
+| E[P7H] (20 sc./wk, CRN control variate) | 289.7 ± 0.5 | **11.7 ± 0.5** (3.9%) |
+| E[P2LAH] (2000 sc./wk) | 283.2 ± 0.1 | 18.2 (6.0%) |
+| E[P2LA] (2000 sc./wk) | 282.3 | 19.1 |
+
+**Gap distribution per team-week:**
+- bound − E[P2LAH]: p10 14.5, p50 18.3, p90 22.1, max 28.1.
+- bound − E[P7H]: p10 6.7, p50 12.2, p90 16.4, max 22.5.
+
+**Sanity:**
+- bound < E[P2LAH] − 3 SE in **0** team-weeks;
+- bound > E[hindsight] in **0** (so on real weeks the Lagrangian is the tighter of the two upper bounds by 18.7 pts);
+- bound below the noisy E[P7H] estimate in 0.
+
+**Model vs real outcomes.**
+- Under the model, P7H − P2LAH is +6.45 ± 0.47. On the real outcomes it is +8.30 (legacy engine) and +5.68 (fixed engine).
+- Model expectations are ~10 pts above the real-outcome backtest (P2LAH 283.2 vs 276.8). The walk-forward model is optimistic, which is a projection-calibration question, not a policy one.
+
+| weeks | team-weeks | bound | E[hindsight] | E[P7H] | E[P2LAH] | gap P7H | gap P2LAH |
+|---|---|---|---|---|---|---|---|
+| 1–6 | 60 | 304.6 | 323.5 | 292.9 | 287.3 | 11.6 | 17.3 |
+| 7–12 | 60 | 303.7 | 322.2 | 292.1 | 286.0 | 11.6 | 17.7 |
+| 13–18 | 60 | 294.8 | 313.7 | 283.7 | 277.2 | 11.1 | 17.6 |
+| 19–23 | 50 | 302.9 | 321.0 | 290.1 | 282.3 | 12.9 | 20.6 |
+
+Worst team-weeks by gap to P2LAH (E[P7H] with its own 95% CI; per-week P7H estimates are noisy):
+
+| team-week | bound | E[hindsight] | E[P2LAH] | E[P7H] | gap P2LAH | gap P7H |
+|---|---|---|---|---|---|---|
+| w21 r5 | 303.4 | 314.9 | 275.3 | 289.2 ± 9.1 | 28.1 | 14.3 |
+| w21 r4 | 300.4 | 312.8 | 272.7 | 289.6 ± 7.8 | 27.7 | 10.8 |
+| w21 r9 | 336.9 | 349.3 | 310.3 | 319.6 ± 7.5 | 26.5 | 17.3 |
+| w22 r9 | 323.5 | 345.3 | 298.5 | 310.2 ± 9.1 | 25.1 | 13.3 |
+| w19 r4 | 289.3 | 302.5 | 264.6 | 275.8 ± 5.3 | 24.7 | 13.5 |
+| w23 r4 | 295.6 | 313.7 | 271.5 | 286.9 ± 7.9 | 24.1 | 8.6 |
+| w21 r1 | 288.3 | 301.1 | 264.6 | 270.7 ± 8.0 | 23.7 | 17.5 |
+
+Smallest gaps (P2LAH): w17 r7 (bound 265.7, E[P2LAH] 256.3), w8 r9 (272.1 / 262.6).
+
+**Interpretation.**
+- The live rule-plus-simulation policy (P7H) is within **11.7 pts (3.9%)** of an upper bound on the best possible expected week under the model. The rule alone (P2LAH) is within 18.2 (6.0%).
+- The true optimum lies somewhere in between: the bound is a fluid relaxation, and on tiny weeks it exceeds the optimum by ~1.7% on average (≈ 5 pts at this scale).
+- So the realistic remaining headroom for better algorithms is roughly **5–10 pts/wk** over P7H. That is worth Phase 2 (a better base rule closing part of the 18-pt gap that rollouts can then build on), but not unlimited.
+
+**P7H invariant checks on the 4,600 model weeks of this run:**
+- 0 rule violations;
+- S_forfeit_unforced 159 (0.03/wk, the reserved-slot re-seat gap noted below);
+- S_idle_bench_exante 14;
+- S_lock_wider 0.54/wk.
+
+The P7H monotonicity subset was not run: the fixes changed the engine, and Phase 2 re-tests monotonicity on the new base rule.
 
 ### Reproduce
 ```
@@ -553,4 +596,1452 @@ Fixed P7H is about 20% slower per week: the exact valuation calls `stopValue` tw
   - bound − E[P2LAH]: mean 19.5 (p10 15.3, p50 19.7, p90 23.2, max 24.6).
   - bound − E[P7H]: mean 12.8 (p10 7.3, p50 12.5, p90 18.9, max 22.2).
   - Sanity: bound < E[P2LAH] in 0 team-weeks; bound > E[hindsight] in 0.
-- **Fixed engine, full season:** running detached into `research/out/gap2_*` (20 P7H scenarios per team-week, ~2.5–3 h). Section 3's tables will be filled from it with `python3 ../summ_phase1.py inv2 gap2` (run from `research/out`).
+- **Fixed engine, full season:** see section 3 (`research/out/gap2_*`).
+
+## Engine v2 — Phase 2: Lagrangian index policy (P8) and rollouts on it (P9)
+
+### Design (`lib/engine/p8.ts`; tests `tests/p8.test.ts`)
+**Prices.**
+- Slot prices μ (points per slot and time bucket) are the minimiser of the Phase-1 Lagrangian bound for the team-week.
+- `lagrange.ts` can now build the relaxed problem from any engine state (`fromState`): held scores, in-game players pinned to their slot, locked slots removed (their points a constant), the DNP chain carried over. This gives the relaxed rest of the week at time t; the bound proof of Phase 1 applies unchanged.
+- **Week start:** `tightBound`, 2 × 100k Adam iterations, ~5 s per team-week.
+- **Decision times:** a warm-started re-solve. New buckets are unions of old ones, so the old prices carry over exactly.
+
+**Decision at each tip-off.** One exact max-weight assignment over the free slots (bitmask DP, at most 9 slots; checked against brute force). The weights are each player's priced DP advantage:
+
+| candidate | slot-using actions (value) | baseline |
+|---|---|---|
+| player tipping off | start in s: his DP value of starting, net of the price of s for the length of his game | bench (his DP value of skipping tonight) |
+| held score whose own game tips now (his deadline) | lock in s: x minus the price of s to week end; or start the new game in s | let go and bench |
+| other held score | hold: slot-independent, his best hold value (held players can be rearranged freely); or lock in s, only with a real priced advantage | let go (his DP value from his next game on) |
+
+- Deadline lock-or-let-go and tonight's starts are therefore **one joint decision**.
+- **"Keep holding and sit tonight's player"** happens whenever the prices say so: there is no blanket holdYield or reserve rule, and later tip-offs are reserved through the prices.
+- **A held score with a non-positive advantage** still keeps a free slot nobody else values (a tiny weight; staying put breaks ties).
+- **Idle-slot fill:** after the assignment, leftover tipping players are started in free slots that no later-tipping player could use during their game. At equilibrium prices competing candidates are near indifferent, and "advantage > 0" alone left slots idle.
+
+**Rules by construction.**
+- Every kept held score and every lock is seated by the assignment, so a lock can't strand a teammate.
+- The rearrangement must be reachable by legal moves (rule 9): `reachable()` runs the checker's BFS (`lib/engine/moves.ts`) from where held players sit.
+- If unreachable, P8 uses an equivalent reachable seating; if none exists, it re-decides with held players staying put.
+
+**P9.** P8 decisions, plus rollouts at every tip-off over the index decision and up to 4 alternatives within 10 index points:
+- seat or unseat each candidate in turn;
+- swap lock ↔ play/hold for held scores.
+
+Each is scored by K continuations of the week (common random numbers). A change needs a > 0.5 pt gain.
+- **P9:** continuations played by P8f, K = 200.
+- **P9b:** continuations played by P8 itself (prices re-solved inside the rollout), K = 50.
+
+Rollouts run on their own price state, seeded from the real decision's prices.
+
+### Tuning (model scenarios, common random numbers)
+Design choices were tested under the model on 46 team-weeks (2 teams per week) × 20–40 paired scenarios, with the real outcomes of those team-weeks alongside (`research/p8exp.ts`, `research/summ_exp.py`). Gains are vs P2LAH_LheldTie (model E 281.8–282.1).
+
+| variant | model gain (95% CI) | ms per simulated week | note |
+|---|---|---|---|
+| week-start prices only (P8s), no idle fill | −5.23 ± 1.90 | 1.2 | stale prices: e.g. a week-end slot "costs" ~20 pts even when half the slots are empty, so good final games are sat |
+| week-start prices + idle fill | −2.17 ± 1.62 | 1.0 | |
+| re-solve daily (3000 iters) | +5.87 ± 1.26 | 324 | |
+| **re-solve every tip-off (3000 iters)** | **+9.38 ± 1.06** | 1501 | |
+| re-solve every tip-off, 100 iters | +9.13 ± 1.42 | 43 | 100 warm-started iterations suffice |
+| re-solve every tip-off, 30 / 10 iters | +7.09 / +4.30 | 27 / 10 | |
+| re-solve only after new results (`info`), 100 / 30 / 10 iters | +7.33 / +5.69 / +3.43 | 19 / 7.4 / 3.8 | our own starts move the prices too |
+| fill idle slots with any leftover starter ("all") | −2 vs "idle" | | reservation through prices matters |
+| keep bonus for held scores 0.03 / 0.1 / 0.3 / 1 pt | −1.0 / −1.6 / −3.7 / −8.2 vs none | | sticky held scores block later starters |
+| **final P8**: slot-independent hold weight, keep 0, every tip-off, 100 iters | **+9.66 ± 1.36** | 43 | |
+| **final P8f**: same, after new results only, 30 iters | **+7.07 ± 1.57** | 7.5 (2.6× P2LAH) | |
+
+**Cost.**
+- P2LAH costs 2.3–3 ms per simulated week (measured while 12 jobs ran).
+- P8 costs ~40 ms per simulated week (≈ 15×), dominated by ~30 re-solves × 100 iterations × 10–40 µs.
+- P8f stays within the requested 2–3× (7.5 ms).
+- The week-start price solve adds ~5 s per team-week (once).
+- For the live app, P8 is cheap: about 1 s for a whole week's decisions.
+
+### Season backtest (real 2025-26 outcomes, 230 team-weeks, paired, same seeds; `research/summ_season.py s8,s9 ...`)
+Baselines are the live policy and its rule, `P7H_LheldTie` and `P2LAH_LheldTie`. They reproduce the Phase-1 numbers exactly.
+
+| policy | pts/wk | vs | paired diff (95% CI) | weeks 1–11 | weeks 12–23 | better/worse weeks | win% (baseline) |
+|---|---|---|---|---|---|---|---|
+| **P8** (rule, no rollouts) | **284.4** | P2LAH_LheldTie 277.3 | **+7.08 ± 3.07** | +8.58 ± 4.26 | +5.71 ± 4.40 | 143/82 | 66.8% (63.6%) |
+| P8f (fast rule) | 282.3 | P2LAH_LheldTie 277.3 | +4.95 ± 3.00 | +5.85 ± 4.14 | +4.12 ± 4.32 | 136/90 | 64.7% (63.6%) |
+| P8s (week-start prices only) | 272.6 | P2LAH_LheldTie 277.3 | −4.66 ± 3.55 | −2.60 | −6.55 | 105/124 | 60.5% |
+| P8 | 284.4 | **P7H_LheldTie 284.4 (live)** | −0.02 ± 2.40 | +0.15 ± 3.40 | −0.18 ± 3.40 | 114/103 | 66.8% (67.8%) |
+| **P9** (P8 + rollouts, P8f continuations, K = 200) | **284.9** | P7H_LheldTie 284.4 | +0.50 ± 2.23 | −0.72 ± 3.06 | +1.62 ± 3.21 | 107/106 | 65.4% (67.8%) |
+| P9b (P8 + rollouts, P8 continuations, K = 50) | 284.5 | P7H_LheldTie 284.4 | +0.11 ± 2.30 | −0.53 ± 3.35 | +0.70 ± 3.16 | 114/98 | 67.5% (67.8%) |
+| P9 | 284.9 | P8 284.4 | +0.53 ± 1.43 | −0.87 ± 1.88 | +1.81 ± 2.11 | 63/66 | |
+| P9b | 284.5 | P8 284.4 | +0.13 ± 2.03 | −0.68 ± 2.39 | +0.88 ± 3.21 | 90/94 | |
+| (P7H_LheldTie vs its rule P2LAH_LheldTie) | 284.4 | 277.3 | +7.10 ± 2.31 | +8.43 | +5.89 | 145/74 | |
+
+(The tuning pass before the final P8 scored P8 283.5 and P9 283.3 on the same season, `s8`. The final P8 changes, slot-independent holds and the reachability guard, were chosen on model scenarios, not on these outcomes.)
+
+### Rules and sanity (full-season checker, `inv4`; P7H / P2LAH from `inv2`)
+| check | P8 real | P9 real | P9b real | P8 model (11,500 wk) | live P7H real | P2LAH real |
+|---|---|---|---|---|---|---|
+| **L_* rule violations** | **0** | **0** | **0** | **0** | 0 | 0 |
+| S_forfeit_unforced (held score > 0 let go though it could stay) | 0 | 0.16/wk | 0.53/wk | 0 | 0.04/wk | 0 |
+| S_idle_bench_exante | 0 | 1 | 29 | 0 | 1 | 0 |
+| S_lock_wider (lock into a wider slot than needed) | 0.06/wk | 0.08/wk | 0.07/wk | 0.08/wk | 0.47/wk | 0.61/wk |
+| F_yield_reserved (premature let-go for a later player) | 0 | 0 | 0 | 0 | 13.0/wk | 10.9/wk |
+| F_deadline_benched (let go at own tip-off, then sat) | 0.60/wk | 0.64/wk | 0.72/wk | 0.58/wk | 0.30/wk | 0.20/wk |
+| F_deadline_replaced (let go at own tip-off for the new game) | 3.23/wk | 3.24/wk | 3.61/wk | 3.12/wk | 1.62/wk | 1.21/wk |
+| I_lock_final_game (locks of a final-game score) | 0 | 0 | 0 | 0 | 2.00/wk | 1.49/wk |
+| I_start_override (rollouts changed the decision) | — | 1.71/wk | 4.26/wk | — | 1.68/wk | — |
+
+- P8 obeys every rule, including reachability, on 230 real and 11,500 simulated weeks. That includes 2 unreachable rearrangements found by the checker during tuning, now handled by `reachable()`.
+- It makes no dominated choices (no unforced let-go, no idle benching), never yields prematurely and never locks a final-game score early.
+- P8 plays differently from the rule: about twice as many held scores are given up at their own tip-off (deadline), 3.2/wk vs 1.6/wk for P7H.
+- The rollouts reintroduce dominated actions: P9b, with only K = 50, picks 0.53 unforced let-gos and 0.13 idle benchings per week.
+
+### Monotonicity (an extra player never hurts)
+Measured on the 46 cases where the old rules failed worst (top 24 drop gains of the legacy rule from `inv`, top 24 of the fixed rule from `inv2`): 300 paired scenarios each, `research/invariants.ts` mode `monoP`.
+
+| dropping the player (46 cases) | P2LAH_LheldTie | P8 |
+|---|---|---|
+| raises E[total] by > 3 SE | 13 / 46 | **1 / 46** |
+| raises E[total] at all | 37 / 46 | 15 / 46 |
+| mean change in E[total] | +1.08 | **−0.24** |
+| worst case | +3.33 (w8 r8 Vince Williams) | +2.50 ± 1.57 (w12 r10 Cameron Johnson) |
+
+P8 removes almost all of the "an extra player hurts" effect: its decisions are joint (deadline and start in one assignment), and held scores no longer yield to any reserved player.
+
+### How much of the gap closes (model, `gap3` / `gap4` / `gap5`; `research/summ_gap8.py`)
+**All 230 team-weeks**, the same 2000 model scenarios per team-week as the Phase-1 gap study (P7H on the first 20):
+
+| quantity (model, mean per team-week) | value | gap to bound |
+|---|---|---|
+| E[perfect hindsight] | 320.1 | |
+| **Lagrangian bound** | **301.4** | 0 |
+| **E[P8]** | **291.8** | **9.6** (p10 7.4, p50 9.6, p90 12.4, max 15.6) |
+| E[P8f] | 289.6 | 11.9 |
+| E[P7H] (Phase-1 fixes incl. heldTie) | 289.7 | 11.7 |
+| E[P2LAH] (Phase-1 fixes) | 283.2 | 18.2 |
+
+- P8 − P2LAH: +8.53 ± 0.06 (2000 paired scenarios).
+- P8 − P7H: +2.40 ± 0.47 (20 paired scenarios).
+- P8, the rule alone, closes **47%** of the rule's 18.2-pt gap to the bound; P7H closes 35%. P8's gap is smaller in every season block (weeks 1–6 / 7–12 / 13–18 / 19–23: 8.9 / 9.6 / 10.0 / 10.3 vs P7H 11.6 / 11.6 / 11.1 / 12.9).
+- Sanity: the bound is never below E[P8].
+
+**Against the live policy itself** (46 team-weeks × the first 10 scenarios, all paired; bound 300.4):
+
+| policy | model E | gap to bound | vs live P7H_LheldTie (95% CI) |
+|---|---|---|---|
+| **P8** | **289.2** | **11.3** | **+2.11 ± 1.34** |
+| P9 (P8 + rollouts) | 288.4 | 12.0 | +1.38 ± 1.35 |
+| live P7H_LheldTie | 287.0 | 13.4 | 0 |
+| P2LAH_LheldTie | 281.3 | 19.2 | −5.79 ± 1.36 |
+
+P9 − P8 under the model: −0.73 ± 0.94.
+
+### Why P9 does not beat the live algorithm on the season
+1. **P8 itself is about 2 pts better than live under the model**, but one real season can't resolve 2 pts. The paired real-season CI vs P7H_LheldTie is ±2.4, and the real outcome is a tie: 284.39 vs 284.41. Under the model, the difference is +2.11 ± 1.34 on paired scenarios, and +2.4 ± 0.5 over the larger set against fixed P7H. Model expectations also run ~7 pts above real outcomes (P2LAH 283.2 vs 277.3), so part of P8's model edge may come from trusting the model's price of future contention more than the real season rewards.
+2. **The rollouts make P8 slightly worse, not better** (−0.73 ± 0.94 under the model; +0.53 ± 1.43 on the season).
+   - A one-step rollout is guaranteed to improve only on the policy that plays the continuations. P9's continuations are played by P8f (cheaper, about 2 pts weaker), so they judge P8's decisions with a weaker yardstick.
+   - P9b plays them with P8 itself, but can afford only K = 50. With 4–5 alternatives per decision the best-scoring one is often best by noise (winner's curse).
+   - Evidence: P9b changes 4.3 decisions/wk, and 0.53/wk of the changes are dominated let-gos plus 0.13/wk idle benchings. P8 alone makes none of either.
+3. **P8 and live play very differently** for the same total on real outcomes (`research/decstats.ts`, `research/summ_dec.py`, per week):
+
+| decision | P2LAH_LheldTie | live P7H_LheldTie | P8 |
+|---|---|---|---|
+| games started | 31.3 | 35.9 | 39.7 |
+| starts that were DNPs | 6.2 | 7.4 | 8.6 |
+| locks | 8.3 | 8.1 | 5.6 |
+| locks before the player's own deadline | 6.3 | 5.5 | 0 |
+| locks of a final-game score | 1.5 | 2.1 | 0 |
+| points from locks | 264.2 | 268.7 | 201.3 |
+| held scores counted at week end | 0.6 | 0.8 | 3.1 |
+| points from week-end holds | 13.1 | 15.7 | 83.1 |
+| held scores let go at their own tip-off | 1.4 | 1.8 | 3.8 |
+| tipping players sat (their points) | 23.4 (231) | 20.7 (190) | 17.9 (155) |
+| week total | 277.3 | 284.4 | 284.4 |
+
+- P8 keeps options open: no early locks, final games held to week end, more games started.
+- It gives back held scores at deadlines twice as often, about 3.5 pts/wk let go at deadlines, then sat (F_deadline_benched 0.60/wk vs 0.30).
+- These are exactly the decisions whose value depends on how accurate the model's future-contention prices are. On the real season the extra starts and the extra let-gos roughly cancel.
+
+### Cost (single process; `research/scratch/simcost.ts`, 20 team-weeks × 50 model weeks)
+| policy | ms per simulated week | vs P2LAH | per decision (≈ 30 tip-offs/week) | real week, top level |
+|---|---|---|---|---|
+| P2LAH_LheldTie | 1.19 | 1× | 0.04 ms | 0.01 s |
+| P8s (week-start prices) | 0.61 | 0.5× | | |
+| P8f | 7.8 | 6.6× | 0.26 ms | |
+| P8 | 42 | 35× | 1.4 ms (≈ 1 re-solve of 100 iterations) | 0.05 s |
+| live P7H_LheldTie | | | ≈ 0.4 s | 12.9 s |
+| P9 / P9b | | | ≈ 2.2 s / 2.7 s | 67 s / 82 s |
+
+- Under the 12-way parallel load of the tuning runs, the ratios were lower (P8f 2.6×, P8 15×).
+- P8 and P8f also need the week-start price solve: ≈ 5.3 s once per team-week (per roster), cached for the week.
+
+### Recommendation
+**Do not replace the live P7H with P8 or P9 yet: the gate (beat 284.4 on the season) is not met.**
+- P8 ties live on real outcomes (284.4 vs 284.4, −0.02 ± 2.40) and P9 is +0.50 ± 2.23.
+- There are no rule violations, no dominated actions and far fewer monotonicity failures, so nothing blocks shipping on correctness.
+
+P8 is nevertheless the strongest result of the phase:
+- it is the best policy under the model (+2.1 ± 1.3 vs live on paired scenarios; 47% of the rule's gap to the optimum closed);
+- it matches live P7H on real outcomes at 1/250 of the compute;
+- it obeys every rule;
+- it nearly fixes monotonicity (1/46 vs 13/46 failures).
+
+Suggested next steps:
+- **Keep P8 in the engine** (`Policy.index`), and consider it as a cheap fallback when P7H's simulations can't run.
+- **Validate on more data.** A second season, or the 2024-25 season, would show whether P8's +2 model edge holds up on real outcomes.
+- **Better rollouts on P8.** If rollouts are kept, they must be played by P8 itself, with enough rollouts per alternative and fewer, better alternatives (Phase 3's racing / successive halving), not a weaker base.
+
+**P8 inside Waivers / Matchups / projections: not as is.**
+- These views simulate the rest of the week 20,000 times per team (projections, matchups), 2,000 per roster variant (Waivers) and 6,000 per lock cut-off.
+  - With P8 (42 ms per simulated week), a team projection goes from ~24 s to ~14 min, and every roster variant on the Waivers page needs its own ~5 s price solve.
+  - P8f (7.8 ms) is the only candidate: ~2.6 min per 20k-sim projection plus the price solve, i.e. it would need 5× fewer simulations or worker-thread budget.
+- What makes it attractive for Waivers specifically is monotonicity: P8's "an extra player never hurts" behaviour removes most spurious "drop X gains points" effects (1/46 vs 13/46 on the worst cases).
+- Recommended experiment: P8f-based Waivers with N = 400 simulations and the cached price solve, compared against the current P2LAH-based Waivers values.
+
+### Reproduce
+```
+npx esbuild research/p8exp.ts --bundle --platform=node --format=cjs --outfile=research/dist/p8exp.cjs --log-level=error   # (+ invariants, gap, decstats)
+node research/runtasks.mjs research/dist/p8exp.cjs s9 "" 'POLS=P8;P8f;P9;P9b' NSC=0                     # season (real outcomes)
+node research/runtasks.mjs research/dist/invariants.cjs inv4 main POLS_REAL=P8,P9,P9b SIMPOL=P8 NSIM=50 NMONO=2
+node research/runtasks.mjs research/dist/invariants.cjs monoP monoP TASKS=<research/out/monoP_tasks.txt> MONOPOLS=P2LAH_LheldTie,P8 NMONO=300
+node research/runtasks.mjs research/dist/gap.cjs gap3 "" GAPPOLS=P8,P8f N=2000 N7=0
+node research/runtasks.mjs research/dist/gap.cjs gap4 "" TASKS=<46 team-weeks> GAPPOLS=P8 N=10 N7=10 GAP7=P9
+node research/runtasks.mjs research/dist/gap.cjs gap5 "" TASKS=<same> GAPPOLS=P2LAH_LheldTie N=10 N7=10 GAP7=P7H_LheldTie
+cd research/out && python3 ../summ_season.py s8,s9 P8:P2LAH_LheldTie,... && python3 ../summ_inv.py inv4:P8,... && python3 ../summ_gap8.py && python3 ../summ_dec.py
+```
+Long runs: `node research/launch_detached.mjs <log> <script> ...` (survives the caller).
+
+## Live policy recommendation (overnight 2026-10-14)
+The candidates as live engines (`LOCKIN_ENGINE` / `"engine"` in `~/.sleeper-lockin/config.json`, see below):
+- **P7H_LheldTie** (= `p7h`, live now): the rule plus start and lock simulations.
+- **P8** (= `p8`): the index policy.
+- **P8f**: P8's fast variant; it is what `p8`/`p9` use inside the app's mass simulations.
+- **P9 / P9b** (= `p9` uses P9): P8 plus rollouts.
+
+| | P7H_LheldTie (live) | P8 | P8f | P9 | P9b |
+|---|---|---|---|---|---|
+| **real season** (230 team-weeks, pts/wk) | **284.4** | **284.4** (−0.02 ± 2.40 vs live) | 282.3 | **284.9** (+0.50 ± 2.23) | 284.5 (+0.11 ± 2.30) |
+| win% vs real opponents | **67.8%** | 66.8% | 64.7% | 65.4% | 67.5% |
+| model, paired vs live (46 tw × 10 sc.) | 0 | **+2.11 ± 1.34** | (≈ −0.1)¹ | +1.38 ± 1.35 | n/a |
+| model gap to the Lagrangian bound | 13.4 (subset) / 11.7² | **11.3 / 9.6** | 11.9 | 12.0 (subset) | n/a |
+| rule violations (checker, season) | 0 | 0 | 0³ | 0 | 0 |
+| dominated actions per week (unforced let-go + ex-ante idle bench) | 0.04 | **0** | 0³ | 0.16 | 0.66 |
+| monotonicity failures (46 worst cases, > 3 SE) | 13/46⁴ | **1/46** | n/a | n/a | n/a |
+| decision compute per real week | 12.9 s | **0.05 s** | 0.02 s | 67 s | 82 s |
+
+Notes:
+1. P8f's model E is 289.6 vs P7H 289.7 (all fixes) on the full 230-team-week study.
+2. The second figure is P7H with all Phase-1 fixes (gap2), on the full study.
+3. P8f was measured on model scenarios only (it is P8 with a cheaper price schedule).
+4. Measured for the rule P2LAH_LheldTie that P7H uses for its continuations.
+
+**Live app cost per view** (current league data, league 1344387394811490304, roster 8, week 1 of 2026-27 with 53 of the week's games still to play; 12 worker threads as in the app; one fresh process per measurement, `research/livecost.ts`, `research/livecost_run.mjs`):
+
+| view | p7h (live) | p8 | p9 |
+|---|---|---|---|
+| projection (teamSims, 20k simulated weeks) | 2.2 s | 11.6 s (5.2x) | 11.6 s (5.2x) |
+| advise (decisions + plan + cut-offs + both teams) | 25.0 s | 164.5 s (6.6x) | 165.7 s (6.6x) |
+| Waivers (13 roster variants x 2 weeks x 2000) | 177.2 s | 1186.2 s (6.7x) | 1186.2 s (6.7x) same as p8 |
+| League (10 teams x 20k) | 151.3 s | 782.0 s (5.2x) | 782.0 s (5.2x) same as p8 |
+| IR check | 17.8 s | 395.6 s (22.3x) | 395.6 s (22.3x) same as p8 |
+
+- p9 differs from p8 only in the plan's start decisions (index rollouts), so its projection, Waivers, League and IR runs are identical to p8's (measured for the projection and advise; the other three are the same computation).
+- The P8 family's extra cost comes from two places:
+  - ~6.6× per simulated week (P8f re-solves prices after each result);
+  - the week-start price solve (~5 s) for every new roster variant and worker task. That is why IR, which simulates many small roster variants on one thread, is 22× slower.
+- On this week (week 1, nothing played yet), the projected total is 281.8 under p8/p9 vs 276.8 under p7h: the simulated rest of the week is played better (model view). Win probability 51.2% vs 52.3%: the opponent's simulated week also uses the engine.
+
+
+**Recommendation: keep `p7h` (the current live algorithm) as the default engine.**
+- No candidate beats it on the real season beyond noise: P9 +0.5 ± 2.2, P8 −0.0 ± 2.4. The gate (beat 284.4) is not met.
+- With the P8 family inside the app's mass simulations, every simulation-heavy view becomes several times slower (table above).
+- P9's rollouts add no value over P8 and introduce dominated actions.
+
+**If an alternative is tried, it should be `p8`.** It is equal on real outcomes, better under the model (+2.1 ± 1.3), obeys every rule with no dominated choices, and largely fixes "an extra player hurts" (which also makes Waivers values more sensible). Its cost is in the projection/Waivers/league views, not in the decisions themselves (0.05 s per week).
+- A cheaper hybrid deserves a test: P8 for the decisions (plan, cut-offs, lock calls), with the current fast rule kept for projections and Waivers.
+- The switch is per process and safe to flip back: caches are keyed by engine, and `p7h` keeps byte-identical fingerprints.
+
+### Configurable engine (`lib/live/engine.ts`)
+- **Choice:** `LOCKIN_ENGINE=p7h|p8|p9` (env wins), else `"engine"` in `~/.sleeper-lockin/config.json` (directory overridable with `LOCKIN_CONFIG_DIR`), else `p7h`. The config is re-read every 30 s; unknown values fall back to `p7h` with a warning.
+- **Decisions** (`decisionPolicy`): `p7h` uses `POLICY`; `p8`/`p9` use P8 (prices re-solved at every tip-off). This covers the plan's tip-offs and replay.
+- **Plan / replay hooks:**
+  - `p7h`: unchanged (start-sit simulations / lock simulations);
+  - `p8`: none;
+  - `p9`: index rollouts played by P8f.
+- **Mass simulations** (`simPolicy`): `p7h` uses `POLICY`; `p8`/`p9` use P8f with fresh week-start prices per simulation. This covers decision rollouts (lock/hold/bench options), projections (`teamSims`/`weekValues`, also in the worker threads), lock cut-off simulations (`lockWaitTotals` forces lock or let-go through the index policy's decision hook), Waivers, league and IR.
+- **Unchanged for every engine:** the quick lock cut-off seed (`lockThreshold`) still comes from the rule's `evalLock`. For `p8`/`p9` it only seeds the simulated cut-off of the first tip-off and approximates the later ones.
+- **Caches:** `fingerprint()` adds the engine for non-default engines only. Default fingerprints are byte-identical, so the default behaviour and its caches are unchanged.
+- **Tests:** `tests/engine_select.test.ts` (selection, default unchanged, simulations and cut-offs on p8/p9, hooks).
+
+## Second season validation (2024-25)
+Every policy choice so far was made on one real season (2025-26, 230 team-weeks, paired CIs about ±2.4). This section
+re-runs the comparison on independent data: the 2024-25 NBA regular season, with synthetic leagues because our league
+did not exist then.
+
+### Data (`research/fetch_season2024.py`, `research/build_season2024.py` → `research/data/season2024.json`)
+**Sources** (same endpoints as the 2025-26 fetchers):
+- Sleeper per-game stats and projections for weeks 1–23 (22 Oct 2024 – 30 Mar 2025, the same 23-week window as 2025-26).
+- Stats for weeks 24–25, used only to know whether an injured player ever came back.
+- Sleeper season totals for 2022-23 and 2023-24 (draft values).
+- ESPN tip-off times for all 152 game days (0 missing).
+- Downloads were sequential, 0.6 s apart, with retries, and are cached in `research/data/raw2024/` (not committed).
+
+**Same game construction as `build_dataset.py`:**
+- Every rostered player gets one game per scheduled game of his team, with the team taken from his own rows, else his nearest row in time.
+- DNP games without any Sleeper row are therefore included as played = false.
+- Scoring and slots are copied from our league.
+- Positions come from Sleeper's current player data (the same approximation as 2025-26).
+
+**No look-ahead in projections.**
+- Sleeper's `last_modified` is after tip-off for 100% of projection rows in **both** seasons, so the timestamp can't prove the projections are pre-game. The statistics can:
+
+| per-game data, rostered players | 2025-26 (real league) | 2024-25 (synthetic leagues) |
+|---|---|---|
+| team-weeks / players per roster | 230 / 20.6 | 690 / 19.0 |
+| games per team-week | 67.2 | 62.0 |
+| DNP share | 25.7% | 24.9% |
+| mean fantasy points when played | 19.7 | 20.1 |
+| projection present: played / DNP | 99.3% / 1.6% | 99.0% / 2.2% |
+| corr(projection, actual) | 0.502 | 0.545 |
+| mean projection vs actual (played) | 22.8 vs 19.8 | 23.2 vs 20.3 |
+
+- In 2024-25, corr(projection, actual) is 0.550 on the same games where corr(mean of the player's last 10 games, actual) is 0.503. A projection updated after the game would correlate close to 1, so these are pre-game forecasts. Only 10 of 11,485 projections equal the actual score.
+- **Projection presence leaks sit-outs** in 2024-25 exactly as in 2025-26: present for 99% of played games and 2% of DNPs. It is handled the same way: `btcommon` never uses presence, only the value, with its own pre-game fallback when there is none. The walk-forward model (projection correction, spread, DNP chain) is fitted on earlier 2024-25 weeks only.
+
+**Synthetic leagues.** Three 10-team leagues: rids 1–10 = A, 11–20 = B, 21–30 = C.
+- Each league is a 19-round snake draft, so every roster has 19 players.
+- **Preseason value** uses prior seasons only: fantasy points per game under our scoring, with 2023-24 games weighted 2 and 2022-23 games weighted 1, shrunk toward 15 FP/G by 8 pseudo-games.
+  - Rookies have no value and are never drafted.
+  - The pool is every player with at least one 2024-25 Sleeper row.
+  - Sleeper's 2024 season projections were not used: they were edited during the season (`last_modified` up to 2026).
+- **Draft variation:** each league has its own random draft order, and each team ranks players by value × exp(N(0, 0.10)).
+- **Positional balance:** every roster must cover PG, PG, SG, SG, SF, SF, PF, PF, C, C (bipartite matching on eligibility). A team takes its best-ranked player unless the remaining picks are needed to complete that cover. At most 4 C-only players per team.
+- **Lost-for-season replacement** (the only roster change in season), applied at the start of week w ≥ 3. A player is replaced if:
+  - (a) his team played in weeks w−2 and w−1 and he played none of those games, **and**
+  - (b) he plays no further 2024-25 regular-season game (weeks w–25). This uses hindsight, as a stand-in for the season-ending news a manager would act on.
+
+  He is replaced by the league's best free agent who shares a position with him: the highest mean of his last ≤ 10 games before week w, among players with ≥ 3 games in weeks w−2..w−1.
+  - 65 replacements in total, 23 distinct players, e.g. week 3: Saddiq Bey, Bojan Bogdanović, Christian Wood; Wembanyama and Embiid in weeks 20–21; Maxey, Paul George and Kyrie Irving late.
+  - Players who came back, even in April (Brunson, Lively), are kept.
+- **Matchups:** round robin within each league. There are no human scores.
+- The first rounds look like 2024 drafts: Jokić, Embiid, Dončić, Giannis, LeBron, Davis, SGA, Sabonis, Tatum, Wembanyama, Durant. Embiid goes #1–2 on prior-season value and then plays 19 games, which is realistic preseason information.
+
+**Caveat: the three leagues share most players.** 178 of the 203 players rostered in week 1 are on a team in all three leagues.
+- Team-weeks within a week are therefore correlated: the same games appear on three rosters.
+- Besides the naive paired CI, every result below has a **week-clustered** CI: average the week's 30 team-week differences, then take the CI over the 23 weekly means.
+- On 2025-26, with disjoint rosters, the two CIs are nearly equal (P8 − P7H: ±2.41 naive, ±2.30 clustered). The clustered one is the honest CI here.
+
+### Season backtest (690 team-weeks, real 2024-25 outcomes, paired, same seeds; `research/summ_s24.py`)
+Same code and settings as the 2025-26 Phase-2 season runs (`research/p8exp.ts`, NSC = 0, K = KS = 200).
+- Win% has no human opponent here. It is the share of team-weeks in which the policy beats the opponent's score under the live bot (P7H_LheldTie) in the same runs.
+
+| policy | pts/wk | vs | paired diff | 95% CI naive | **95% CI week-clustered** | league A / B / C | weeks 1–11 / 12–23 | better/worse | win% vs live-bot opp. (baseline) |
+|---|---|---|---|---|---|---|---|---|---|
+| P7H_LheldTie (live) | 283.2 | P2LAH_LheldTie 276.7 | +6.52 | ± 1.41 | **± 1.99** | +6.7 / +6.0 / +6.9 | +4.67 / +8.21 | 401/224 | 50.0% (47.2%) |
+| P8 | 284.2 | P2LAH_LheldTie 276.7 | +7.49 | ± 1.82 | **± 2.59** | +8.9 / +6.9 / +6.7 | +4.88 / +9.90 | 430/243 | 50.3% (47.2%) |
+| P8f | 282.4 | P2LAH_LheldTie 276.7 | +5.66 | ± 1.82 | ± 2.64 | +5.9 / +5.9 / +5.2 | +3.04 / +8.07 | 392/282 | 48.7% (47.2%) |
+| **P8** | 284.2 | **P7H_LheldTie 283.2** | **+0.98** | ± 1.40 | **± 2.12** | +2.2 / +0.9 / −0.2 | +0.20 / +1.68 | 331/299 | 50.3% (50.0%) |
+| **P9** | **285.1** | **P7H_LheldTie 283.2** | **+1.92** | ± 1.34 | **± 2.38** | +2.8 / +2.2 / +0.8 | +0.62 / +3.12 | 341/287 | 52.0% (50.0%) |
+| P8f | 282.4 | P7H_LheldTie 283.2 | −0.86 | ± 1.45 | ± 1.85 | −0.8 / −0.1 / −1.7 | −1.63 / −0.15 | 312/326 | 48.7% (50.0%) |
+| P9 | 285.1 | P8 284.2 | +0.95 | ± 0.93 | ± 1.03 | +0.6 / +1.2 / +1.0 | +0.42 / +1.44 | 218/177 | |
+| P8 | 284.2 | P8f 282.4 | +1.83 | ± 1.11 | ± 1.07 | +3.0 / +1.0 / +1.5 | +1.83 / +1.83 | 258/201 | |
+| P9b (P8 + rollouts played by P8, K = 50) | 283.6 | P7H_LheldTie 283.2 | +0.39 | ± 1.42 | ± 2.37 | +1.7 / +0.4 / −0.9 | −1.24 / +1.89 | 327/319 | 51.4% (50.0%) |
+| P9b | 283.6 | P8 284.2 | −0.58 | ± 1.22 | ± 1.59 | −0.5 / −0.5 / −0.7 | −1.44 / +0.21 | 242/264 | |
+| P9b | 283.6 | P9 285.1 | **−1.53** | ± 1.09 | **± 1.14** | −1.1 / −1.8 / −1.7 | −1.86 / −1.23 | 222/273 | |
+
+### Do the 2025-26 conclusions replicate? (`research/summ_pool.py`; week-clustered 95% CIs; pooled = inverse-variance mean of the two seasons)
+| comparison | 2025-26 (real league, 230) | 2024-25 (synthetic, 690) | pooled | replicates? |
+|---|---|---|---|---|
+| live P7H_LheldTie − rule P2LAH_LheldTie (simulations' value) | +7.10 ± 3.02 | +6.52 ± 1.99 | **+6.70 ± 1.66** | **yes** |
+| P8 − P2LAH_LheldTie (index rule vs old rule) | +7.08 ± 3.49 | +7.49 ± 2.59 | **+7.35 ± 2.08** | **yes** |
+| P8f − P2LAH_LheldTie | +4.95 ± 3.71 | +5.66 ± 2.64 | +5.42 ± 2.15 | yes |
+| P8 − P8f (price re-solve every tip-off is worth it) | +2.13 ± 2.21 | +1.83 ± 1.07 | **+1.89 ± 0.97** | **yes** |
+| **P8 − live P7H_LheldTie** | −0.02 ± 2.30 | +0.98 ± 2.12 | **+0.52 ± 1.56** | yes: a tie again (model predicted +2.1 ± 1.3) |
+| **P9 − live P7H_LheldTie** | +0.50 ± 2.23 | +1.92 ± 2.38 | **+1.17 ± 1.63** | yes: not significant, leaning P9 |
+| P9b − live P7H_LheldTie | +0.11 ± 2.42 | +0.39 ± 2.37 | +0.25 ± 1.69 | yes: a tie |
+| P9b − P8 | +0.13 ± 1.74 | −0.58 ± 1.59 | −0.26 ± 1.18 | yes: no gain from rollouts played by P8 at K = 50 |
+| P8f − live P7H_LheldTie | −2.15 ± 2.24 | −0.86 ± 1.85 | −1.38 ± 1.43 | yes (P8f is not a live candidate) |
+| P9 − P8 (do rollouts help P8?) | +0.53 ± 1.61 | +0.95 ± 1.03 | **+0.83 ± 0.87** | weakly: positive in both seasons and all 3 leagues, CI just includes 0 |
+
+### Rules and sanity (checker on 2024-25, `inv24`: P8 and P9 on the 690 real team-weeks, P8 on 20 model scenarios each)
+- The checker's totals equal the backtest totals in **1,380 / 1,380** runs.
+- The checker's own legal recount equals the engine total everywhere.
+
+| check | P8 real (690 wk) | P9 real (690 wk) | P8 model (13,800 wk) | P8 real 2025-26 | P9 real 2025-26 |
+|---|---|---|---|---|---|
+| **L_* rule violations** | **0** | **0** | **0** | 0 | 0 |
+| S_forfeit_unforced (held score > 0 let go though it could stay) | **0** | 0.17/wk (3.6 pts/wk) | 0 | 0 | 0.16/wk |
+| S_idle_bench_exante | **0** | 11 (0.02/wk) | 0 | 0 | 1 |
+| S_lock_wider | 0.07/wk | 0.09/wk | 0.08/wk | 0.06/wk | 0.08/wk |
+| F_deadline_benched (let go at own tip-off, then sat) | 0.57/wk | 0.65/wk | 0.59/wk | 0.60/wk | 0.64/wk |
+| F_deadline_replaced | 3.76/wk | 3.82/wk | 3.74/wk | 3.23/wk | 3.24/wk |
+| F_yield_idle | 0 | 0.19/wk | 0 | 0 | 0.20/wk |
+| I_start_override (rollouts changed the index decision) | — | 1.70/wk | — | — | 1.71/wk |
+
+The rule and sanity profile replicates almost to the decimal:
+- P8 obeys every rule and makes no dominated choice.
+- P9's rollouts bring back about 0.17 unforced let-gos per week, the same as on 2025-26.
+
+### Reading
+- **The big effects replicate.** Simulation on top of the rule (+6.5 vs +7.1) and the index rule over the old rule (+7.5 vs +7.1) are the same size on a second season, with different rosters and a different year.
+- **P8 vs live is a tie in both seasons.** It leans the other way this time: −0.02 on 2025-26, +0.98 ± 2.12 on 2024-25, pooled +0.52 ± 1.56.
+  - The model's +2.1 edge for P8 is still not confirmed on real outcomes, but it is no longer contradicted either. The pooled CI includes +2.
+- **P9 has the best point estimate in both seasons** (+0.50, +1.92; pooled +1.17 ± 1.63 vs live; +0.83 ± 0.87 vs P8).
+  - This is more favourable to the rollouts than the Phase-2 model result (P9 − P8 −0.73 ± 0.94).
+  - None of these differences is significant, and P9 still makes ~0.17 dominated let-gos per week.
+- **P9b (rollouts played by P8 itself, K = 50) is worse than P9 (played by P8f, K = 200).** It loses by −1.53 ± 1.14 on 2024-25, in all 3 leagues and both halves, and ties live and P8 in both seasons.
+  - The number of rollouts matters more than the strength of the policy that plays them. At K = 50 the best-looking alternative is often best by noise, which supports the Phase-2 winner's-curse reading.
+  - Phase 3's adaptive sampling (racing with common random numbers) is the way to afford P8-played rollouts.
+- **The gate is still not met.** No candidate beats the live P7H_LheldTie with a CI excluding 0 on either season or pooled.
+- **The live recommendation stands:** keep `p7h`; `p8` is the low-cost equal alternative.
+  - The case for P9 is somewhat stronger than after one season. Removing its dominated let-gos (rollouts that may not choose a dominated action) would be a cheap next step before testing it again.
+- **The synthetic-league design limits what this season can say.**
+  - Rosters are drafted, not managed: no waivers or streaming, no IR stash, no human tendencies.
+  - The three leagues share most players.
+  - The point totals are on the same scale as 2025-26 (P2LAH_LheldTie 276.7 vs 277.3; live 283.2 vs 284.4), which suggests the test is comparable.
+
+### Reproduce
+```
+python3 -I research/fetch_season2024.py && python3 -I research/build_season2024.py      # data (~5 min of polite downloads)
+npx esbuild research/p8exp.ts --bundle --platform=node --format=cjs --outfile=research/dist/p8exp.cjs --log-level=error   # (+ invariants)
+node research/runtasks.mjs research/dist/p8exp.cjs s24 "" SEASON=research/data/season2024.json 'POLS=P2LAH_LheldTie;P7H_LheldTie;P8;P8f;P9' NSC=0 PAR=14   # 64 min
+node research/runtasks.mjs research/dist/p8exp.cjs s24b "" SEASON=research/data/season2024.json POLS=P9b NSC=0 PAR=14   # 61 min
+node research/runtasks.mjs research/dist/invariants.cjs inv24 main SEASON=research/data/season2024.json POLS_REAL=P8,P9 SIMPOL=P8 NSIM=20 NMONO=2 PAR=14   # 55 min
+cd research/out && python3 ../summ_s24.py s24,s24b P8:P7H_LheldTie,... && python3 ../summ_pool.py s8,s9 s24,s24b P8:P7H_LheldTie,... && python3 ../summ_inv.py inv24:P8,inv24:P9,inv24:P8:sim
+```
+
+## Engine v2 — Phase 3: one complete decision per tip-off (P10)
+
+### Design (`lib/engine/p10.ts`; tests `tests/p10.test.ts`)
+**One decision per moment.** P8 already decides everything at a tip-off in one assignment: tonight's starts and their
+slots, and for every held score keep (hold) / lock (which slot) / let go, including the lock-or-play-or-let-go of a held
+player whose own game tips now. Deadlines coincide with tip-offs, and a lock that is not forced can always wait until
+the next tip-off, so these moments are the only ones that matter. P10 searches over **complete joint decisions** at each
+of them. There is no separate lock rollout and no separate start/sit search. Holding is one of the evaluated actions,
+not a fallback.
+
+**Candidates** (`candidates`). Each comes from the P8 context, i.e. every candidate player's priced advantage for every
+action (`Cand.wa`: start / lock / hold per slot, before P8's filters). Each candidate is re-solved as one exact
+assignment, so the rest of the lineup adapts:
+- P8's own decision (the incumbent);
+- seat or unseat each player. Unseating a held score means letting it go; seating a let-go score means holding it and
+  sitting someone else;
+- every other action of each held score: hold ↔ lock, and at his deadline lock ↔ play the new game;
+- lock in each other eligible slot type;
+- local swaps: a seated player gives up his place to an unseated one who is eligible for his slot.
+
+Then:
+- **Margin and repair.** Alternatives more than 15 priced points below the incumbent are dropped. Each remaining one is
+  **repaired** against weakly dominated actions:
+  - a held score let go while an eligible slot stays free is kept (holding is never worse than letting go now: he can
+    be let go at the next tip-off);
+  - a tipping player sat while an eligible slot stays idle for his whole game (no later tip-off can use it) is started.
+- **Reachability and legality.** Each candidate is made **reachable** by legal Sleeper moves (`reachable`, rule 9) and
+  checked by `decisionProblem`:
+  - starts only for tonight's players;
+  - locks and holds only for held scores, and no holding through one's own tip-off;
+  - free, eligible slots, each used once;
+  - the held players' rearrangement reachable from where they sit (BFS of `moves.ts`).
+- **Selection.** Candidates are de-duplicated, and the best 8 by priced score are raced.
+
+**Racing** (`race`, common random numbers, adaptive):
+- **Rounds:** 16 scenarios per round. Every surviving candidate is scored on the same scenarios by playing the rest of
+  the week with the base policy.
+- **Elimination:** from 32 scenarios on, a challenger is dropped when mean(it − leader) + 2 se < 0. The incumbent is
+  never dropped.
+- **Stopping:** the race stops when
+  - no remaining challenger can still beat the incumbent by 0.5 pt (mean + 2 se < 0.5), or
+  - a single challenger is left and is significantly better, or
+  - 256 scenarios are reached.
+- **Switching:** P8's decision is replaced only by a challenger that beats it by > 0.5 pt **and** > 2 se. This guards
+  against the winner's curse that hurt P9b at fixed K = 50.
+- **Base for the continuations:**
+  - **P10:** P8f (prices re-solved after new results, 30 iterations).
+  - **P10b:** P8 (prices re-solved at every tip-off, 100 iterations).
+  - Both run on their own price state, seeded from the real decision's prices.
+- **Choice of base:** it was decided by measurement, with this rule fixed before the results: P10b if it beats P10 by
+  ≥ 0.5 pts/wk on the 2025-26 real season, else the 4–5× cheaper P10.
+- **Parameters:** chosen before the season runs from a 4-team-week cost check (`p10cost`). At minGain 0.25 half the
+  races ran to kMax on practical ties, so minGain was raised to 0.5, the clear-gain threshold of P7H and P9.
+
+**Tests** (`tests/p10.test.ts`, 7 tests; `npm test` 55/55):
+- **racing:** picks a clearly better challenger, drops clearly worse ones early, keeps the incumbent on ties, and stops
+  at kMin when nobody can win;
+- **`decisionProblem`:** catches starts of non-tipping players, ineligible slots, a slot used twice, locked or in-game
+  slots, holds of non-held players, holding through one's own tip-off, and the unreachable 3-cycle (reachable once a
+  spare slot exists);
+- **repair:** keeps a let-go held score when a slot stays free, and starts a player sat into an idle slot;
+- **random weeks:** on 6 random 9-slot weeks, **every raced candidate** at every tip-off is legal and reachable; P10
+  passes the checker with 0 L_ violations, 0 unforced let-gos, 0 ex-ante idle benchings and 0 F_yield_idle, and the
+  recount equals the engine total;
+- **pathological cases of the old policies:**
+  - "keep holding a good score and sit tonight's weak player": hold, let go + start, and lock are all candidates, and
+    P10 holds;
+  - deadline lock-or-play together with tonight's starts, in one search;
+  - "let go at his own tip-off, then sat" never appears while his slot would stay idle.
+
+### Season backtest 2025-26 (real outcomes, 230 team-weeks, paired, same seeds; `research/p10run.ts`, prefix `s10`)
+Baselines are the Phase-2 runs (`s8`, `s9`) on the same team-weeks and seeds. Every policy is deterministic given the
+seed, and `p10run` reproduces the P8 totals exactly.
+
+Each run goes through the invariant checker. The week-clustered CI is `research/summ_s24.py … ../data/season.json`.
+Win% is against the real (human) opponent (`research/summ_season.py`).
+
+| policy | pts/wk | vs | paired diff | 95% CI naive | 95% CI week-clustered | weeks 1–11 / 12–23 | better/worse weeks | win% vs real opp. (baseline) |
+|---|---|---|---|---|---|---|---|---|
+| P10 (P8f continuations) | 285.4 | P8 284.4 | +0.98 | ± 1.40 | ± 1.07 | +0.82 / +1.13 | 81/59 | 66.8% (66.8%) |
+| **P10b** (P8 continuations) | **286.2** | P8 284.4 | **+1.83** | ± 1.40 | ± 1.70 | +0.98 / +2.62 | 70/41 | 68.2% (66.8%) |
+| P10b | 286.2 | P10 285.4 | +0.85 | ± 1.37 | ± 1.44 | +0.15 / +1.49 | 60/55 | |
+| P10 | 285.4 | P9 284.9 | +0.46 | ± 1.52 | ± 1.47 | +1.70 / −0.68 | 84/65 | 66.8% (65.4%) |
+| **P10b** | 286.2 | P9 284.9 | **+1.31** | **± 1.14** | **± 1.15** | +1.85 / +0.81 | 85/47 | 68.2% (65.4%) |
+| P10 | 285.4 | live P7H_LheldTie 284.4 | +0.96 | ± 2.22 | ± 1.84 | +0.98 / +0.95 | 113/93 | 66.8% (67.8%) |
+| **P10b** | 286.2 | live P7H_LheldTie 284.4 | **+1.81** | ± 2.21 | ± 1.79 | +1.13 / +2.44 | 115/95 | 68.2% (67.8%) |
+
+**Base chosen by the pre-set rule:** P10b − P10 = +0.85 ≥ 0.5, so **P10b** (continuations played by P8) is the Phase-3
+engine. P10, the cheap variant, was run and reported alongside it everywhere.
+
+### Season backtest 2024-25 (690 team-weeks, 3 synthetic leagues, real outcomes; prefixes `s24p10`, `s24p10b`; `research/summ_s24.py`)
+Win% is against the opponent's score under the live bot (P7H_LheldTie), as in the second-season section.
+
+| policy | pts/wk | vs | paired diff | 95% CI naive | **95% CI week-clustered** | league A / B / C | weeks 1–11 / 12–23 | better/worse | win% vs live-bot opp. (baseline) |
+|---|---|---|---|---|---|---|---|---|---|
+| **P10b** | **286.5** | P8 284.2 | **+2.33** | ± 0.81 | **± 0.65** | +1.2 / +3.4 / +2.4 | +1.94 / +2.68 | 225/137 | 53.1% (50.3%) |
+| P10b | 286.5 | P10 286.2 | +0.31 | ± 0.83 | ± 0.73 | −0.7 / +1.0 / +0.6 | +0.14 / +0.46 | 192/170 | 53.1% (51.0%) |
+| **P10b** | 286.5 | P9 285.1 | **+1.38** | ± 0.88 | **± 0.89** | +0.5 / +2.2 / +1.4 | +1.52 / +1.24 | 231/173 | 53.1% (52.0%) |
+| **P10b** | 286.5 | live P7H_LheldTie 283.2 | **+3.30** | ± 1.30 | **± 2.21** | +3.4 / +4.3 / +2.2 | +2.15 / +4.36 | 365/248 | 53.1% (50.0%) |
+| **P10** | 286.2 | P8 284.2 | **+2.02** | ± 0.93 | **± 0.80** | +1.9 / +2.4 / +1.8 | +1.80 / +2.22 | 242/176 | 51.0% (50.3%) |
+| P10 | 286.2 | P9 285.1 | +1.07 | ± 0.94 | ± 1.08 | +1.3 / +1.1 / +0.8 | +1.38 / +0.78 | 241/209 | 51.0% (52.0%) |
+| **P10** | 286.2 | live P7H_LheldTie 283.2 | **+2.99** | ± 1.26 | **± 1.94** | +4.1 / +3.3 / +1.6 | +2.00 / +3.90 | 359/251 | 51.0% (50.0%) |
+| P10 | 286.2 | P8f 282.4 | +3.85 | ± 1.11 | ± 1.08 | +4.9 / +3.4 / +3.3 | +3.63 / +4.05 | 321/199 | 51.0% (48.7%) |
+
+### Both seasons pooled (`research/summ_pool.py`; week-clustered 95% CIs, inverse-variance pooled)
+| comparison | 2025-26 (real league, 230) | 2024-25 (synthetic, 690) | pooled |
+|---|---|---|---|
+| **P10b − live P7H_LheldTie** | +1.81 ± 1.79 | +3.30 ± 2.21 | **+2.40 ± 1.39** |
+| **P10b − P8** | +1.83 ± 1.70 | +2.33 ± 0.65 | **+2.27 ± 0.60** |
+| **P10b − P9** | +1.31 ± 1.15 | +1.38 ± 0.89 | **+1.35 ± 0.70** |
+| P10b − P10 | +0.85 ± 1.44 | +0.31 ± 0.73 | +0.42 ± 0.65 |
+| **P10 − live P7H_LheldTie** | +0.96 ± 1.84 | +2.99 ± 1.94 | **+1.93 ± 1.34** |
+| **P10 − P8** | +0.98 ± 1.07 | +2.02 ± 0.80 | **+1.65 ± 0.64** |
+| P10 − P9 | +0.46 ± 1.47 | +1.07 ± 1.08 | +0.85 ± 0.87 |
+(For reference, Phase 2: P9 − P8 pooled +0.83 ± 0.87, P8 − live +0.52 ± 1.56.)
+
+### Model study (46 team-weeks × the Phase-2 scenarios; `gap10` / `gap10b`; `research/summ_gap10.py`)
+These are the same team-weeks and model scenarios (the `gap.ts` seeds) as the Phase-2 comparison against live: `gap4` has
+P8 and P9, `gap5` has P7H_LheldTie and P2LAH_LheldTie. The P8 totals of the new runs equal `gap4`'s, so the scenarios are
+identical. CIs are clustered by team-week.
+
+**10 scenarios per team-week** (P10b not included):
+
+| policy | model E | gap to the Lagrangian bound (300.4) | vs P8 | vs P9 | vs live P7H_LheldTie |
+|---|---|---|---|---|---|
+| **P10** | **289.8** | **10.6** | +0.69 ± 1.02 | **+1.42 ± 1.00** | **+2.80 ± 1.43** |
+| P8 | 289.2 | 11.3 | 0 | +0.73 ± 0.95 | +2.11 ± 1.35 |
+| P9 | 288.4 | 12.0 | −0.73 ± 0.95 | 0 | +1.38 ± 1.37 |
+| live P7H_LheldTie | 287.0 | 13.4 | −2.11 ± 1.35 | −1.38 ± 1.37 | 0 |
+| P2LAH_LheldTie | 281.3 | 19.2 | −7.90 ± 1.76 | −7.17 ± 1.62 | −5.79 ± 1.37 |
+
+**5 scenarios per team-week, with P10b** (the first 5 of the same 10 scenarios, so all policies are paired; 230 model
+weeks per policy):
+
+| policy | model E | gap to the Lagrangian bound (300.5) | vs P8 | vs P9 | vs live P7H_LheldTie |
+|---|---|---|---|---|---|
+| **P10b** | **292.1** | **8.4** | **+1.60 ± 1.41** | **+3.43 ± 1.52** | **+3.45 ± 2.13** |
+| P10 | 290.5 | 9.9 | +0.05 ± 1.38 | +1.88 ± 1.69 | +1.89 ± 1.97 |
+| P8 | 290.5 | 10.0 | 0 | +1.83 ± 1.46 | +1.85 ± 2.18 |
+| P9 | 288.6 | 11.8 | −1.83 ± 1.46 | 0 | +0.01 ± 2.07 |
+| live P7H_LheldTie | 288.6 | 11.8 | −1.85 ± 2.18 | −0.01 ± 2.07 | 0 |
+| P2LAH_LheldTie | 281.5 | 18.9 | −8.98 ± 2.28 | −7.15 ± 2.30 | −7.14 ± 2.05 |
+
+P10b − P10 on these 230 model weeks: **+1.55 ± 1.36**.
+
+- **Under the model**, P10b is the best policy so far: it closes 1.6 of P8's 10.0 remaining points to the bound (8.4
+  left), and its edge over P8, P9 and live is significant on 5 scenarios per team-week.
+- P10 is the best on the 10-scenario set (+0.69 vs P8). On the 5-scenario subset it ties P8 (+0.05). Either way its
+  rollouts do not make P8 worse, unlike P9 (−0.73 / −1.83 vs P8).
+- **P8 continuations matter.** P10b − P10 is +1.55 ± 1.36 under the model, which is significant. On the real seasons it
+  is +0.42 ± 0.65 pooled. This supports the base choice that the pre-set rule made on 2025-26.
+- **Checker on these model weeks:** 0 L_ violations, 0 unforced let-gos and 0 idle benchings, for both P10 (460 weeks)
+  and P10b (230 weeks). F_deadline_benched is 0.45 / 0.40 per week and S_lock_wider is 0.04 per week for both.
+
+### Rules and sanity (checker on every real team-week; model weeks from the gap runs)
+| check | P10b real 2025-26 (230) | P10b real 2024-25 (690) | P10 real 2025-26 (230) | P10 real 2024-25 (690) | P10 model (460 wk) | P8 real 2024-25 | P9 real 2024-25 |
+|---|---|---|---|---|---|---|---|
+| **L_* rule violations** (incl. unreachable rearrangements) | **0** | **0** | **0** | **0** | **0** | 0 | 0 |
+| recount ≠ engine total | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| S_forfeit_unforced (held score > 0 let go though it could stay) | **0** | **0** | **0** | **0** | **0** | 0 | 0.17/wk (3.6 pts/wk) |
+| S_idle_bench_exante | **0** | **0** | **0** | **0** | **0** | 0 | 0.02/wk |
+| F_yield_idle | 0 | 0 | 0 | 0 | 0 | 0 | 0.19/wk |
+| S_lock_wider | 0.05/wk | 0.06/wk | 0.06/wk | 0.08/wk | 0.04/wk | 0.07/wk | 0.09/wk |
+| F_deadline_benched (let go at own tip-off, then sat) | 0.54/wk | 0.54/wk | 0.53/wk | 0.53/wk | 0.45/wk | 0.57/wk | 0.65/wk |
+| F_deadline_replaced | 3.06/wk | 3.63/wk | 3.24/wk | 3.59/wk | 3.01/wk | 3.76/wk | 3.82/wk |
+| I_lock_final_game | 0.16/wk | 0.17/wk | 0.30/wk | 0.21/wk | | 0 | 0 |
+| I_start_override (race replaced P8's decision) | 2.30/wk | 2.28/wk | 3.22/wk | 3.17/wk | | — | 1.70/wk |
+
+- **Clean on every rule.** P10 / P10b obey every rule on all 920 real team-weeks per policy, with 0 unreachable
+  rearrangements. They make **no dominated choice**: no unforced let-go and no idle benching.
+  - This fixes P9's 0.17 unforced let-gos per week. The repair step and the significance-gated switch make sure the
+    rollouts never bring them back.
+- **Final-game locks.** I_lock_final_game (0.16–0.30/wk) is new compared to P8. A lock of a final-game score is worth the
+  same as holding it, except that it can no longer move or be given up.
+  - The race picks it when the continuation shows that a later tip-off would otherwise give that held score up to seat
+    someone (P8's own later choice).
+  - It is a legal commitment, not a violation.
+
+### What the race changes (per real week; `research/summ_p10.py`)
+| policy | season | tip-off decisions | raced (≥ 2 candidates) | candidates per race | scenarios per race: mean (p50, p90) | stopped before kMax | continuations per race | decisions changed (kind) |
+|---|---|---|---|---|---|---|---|---|
+| P10 | 2025-26 | 25.9 | 25.0 | 6.7 | 157 (176, 256) | 56% | 858 | 3.22 (lock 2.70, unseat 0.28, seat 0.20, play 0.03) |
+| P10b | 2025-26 | 26.0 | 25.2 | 6.8 | 166 (240, 256) | 51% | 916 | 2.30 (lock 1.82, unseat 0.31, seat 0.15) |
+| P10 | 2024-25 | 24.3 | 23.4 | 6.6 | 156 (176, 256) | 57% | 833 | 3.17 (lock 2.58, unseat 0.35, seat 0.21, play 0.02) |
+| P10b | 2024-25 | 24.5 | 23.6 | 6.7 | 166 (224, 256) | 52% | 895 | 2.28 (lock 1.84, unseat 0.29, seat 0.12) |
+
+- **Mostly earlier locks.** About 80% of the changes lock a held score that P8 would keep holding. P8 holds too long:
+  its prices value the option to wait more than the continuations do. The rest seat or unseat one player (hold-vs-start
+  trades, and let-go-to-free-a-slot).
+- **Why P8 continuations score better.** With P8 continuations (P10b) the race changes fewer decisions (2.3 vs 3.2 per
+  week) and gains more. A weaker base (P8f) makes more of P8's decisions look improvable than they are, which matches
+  the Phase-2 reading of P9.
+- **Racing saves about 35% of the work.** A fixed K = 256 for every candidate would cost 6.7 × 256 = 1,715 continuations
+  per race; racing uses 830–920.
+  - About half the races stop early, mostly because no challenger can still beat P8's decision by 0.5 pt.
+  - The other half run to kMax: their challengers are practically tied with the incumbent, so the switch rule then keeps
+    P8's decision.
+
+### Compute per decision (single process, measured while 14 jobs ran on 14 cores, so ~1.5–2× slower than an idle machine)
+| policy | ms per tip-off decision (raced ones) | decision time per real week | Phase-2 references (single process, idle) |
+|---|---|---|---|
+| P8 | ~1.4 | 0.05 s | |
+| P9 | | | ≈ 2.2 s per decision, 67 s per week |
+| **P10** | 2,710 (2,807) / 2,287 (2,376) [2025-26 / 2024-25] | 70 s / 56 s | live P7H_LheldTie ≈ 0.4 s per decision, 12.9 s per week |
+| **P10b** | 13,228 (13,629) / 11,745 (12,178) | 344 s / 287 s | |
+
+- **Decision cost.** P10 costs about the same as P9 per decision. P10b costs about 5×: 12–13 s per tip-off under load,
+  i.e. about 5–8 s on an idle machine.
+- **In the live app**, a real decision is one tip-off, which is affordable for either. The plan view replays all of the
+  week's remaining tip-offs, so with `p10b` it costs a few minutes per refresh (p9's advise view was 166 s).
+
+### Live engine option
+- **Selection:** `lib/live/engine.ts` now accepts `p10` and `p10b`, set by `LOCKIN_ENGINE` or `"engine"` in config.json.
+  - Decisions: P8 plus the P10 race in the plan and replay hooks; continuations by P8f or P8 on their own price state.
+  - Mass simulations: P8f, as for p8 and p9.
+- **Default unchanged:** p7h, with byte-identical fingerprints (`tests/engine_select.test.ts`).
+- **Not switched:** the live app was not touched or restarted.
+
+### Reading and recommendation
+- **The gate is met.** P10b is the first engine whose paired season result beats the live P7H_LheldTie with a CI that
+  excludes 0:
+  - pooled over both seasons: **+2.40 ± 1.39** pts/wk;
+  - per season, week-clustered: 2025-26 +1.81 ± 1.79, 2024-25 +3.30 ± 2.21;
+  - it is ahead in both halves of both seasons and in all 3 synthetic leagues.
+  - The 2025-26 result alone is borderline: its naive CI is ± 2.21.
+  - P10b also beats P8 (+2.27 ± 0.60) and P9 (+1.35 ± 0.70) pooled, with no rule violations and no dominated actions.
+  - Under the model (46 team-weeks × 5 scenarios) it is +3.45 ± 2.13 vs live and +1.60 ± 1.41 vs P8, the smallest gap
+    to the Lagrangian bound so far (8.4 pts).
+- **Pre-registration.** No P10 parameter was tuned on season outcomes.
+  - Racing settings were fixed before any season run, from a 4-team-week cost check.
+  - The base was chosen by a rule fixed before the 2025-26 results.
+  - The 2024-25 season is therefore an out-of-sample test. There it beat live by +3.30 and P8 by +2.33, more than on
+    2025-26.
+- **P10b vs P10 is not settled on real outcomes:** +0.42 ± 0.65 pooled.
+  - The rule picked P10b on 2025-26 (+0.85); 2024-25 agrees in direction (+0.31) but not significantly.
+  - Under the model, P10b − P10 is +1.55 ± 1.36, which is significant.
+  - P10 also beats live pooled (+1.93 ± 1.34) at ~1/5 of P10b's decision cost.
+- **Recommendation.**
+  - Make **`p10b`** the live engine if a few seconds per decision and minutes per plan refresh are acceptable.
+  - Otherwise use **`p10`**: same rules record, about 0.4 pt/wk less, compute like p9.
+  - Either is a one-line config change (`"engine": "p10b"`) and reverts the same way. Switching is the user's decision:
+    it was not done here.
+- **Follow-ups:**
+  - Speed. Most of the time goes to continuations of near-tied candidates; a tie-aware stopping rule or cheaper
+    continuations (task C's profiling) would cut P10b's cost.
+  - Phase 4 contingency tables could precompute P10b's decisions before tip-off.
+  - The model expectation runs ~5–7 pts above real outcomes, so the model gaps above are optimistic in level, not in
+    ranking.
+
+### Reproduce
+```
+npx esbuild research/p10run.ts --bundle --platform=node --format=cjs --outfile=research/dist/p10run.cjs --log-level=error   # (+ gap.ts)
+node research/runtasks.mjs research/dist/p10run.cjs s10 "" 'POLS=P10;P10b' PAR=14                                    # 2025-26, 2.0 h
+node research/runtasks.mjs research/dist/p10run.cjs s24p10 "" SEASON=research/data/season2024.json POLS=P10 PAR=14   # 51 min
+node research/runtasks.mjs research/dist/p10run.cjs s24p10b "" SEASON=research/data/season2024.json POLS=P10b PAR=14 # 4.1 h
+node research/runtasks.mjs research/dist/gap.cjs gap10 "" TASKS=<the 46 gap4 team-weeks> GAPPOLS=P8 N=10 N7=10 GAP7=P10 ITERS=2000 PAR=14   # 43 min
+node research/runtasks.mjs research/dist/gap.cjs gap10b "" TASKS=<same> GAPPOLS=P8 N=10 N7=5 GAP7=P10b ITERS=2000 PAR=14
+cd research/out && python3 ../summ_season.py s8,s9,s10 P10b:P7H_LheldTie,... && python3 ../summ_s24.py s24,s24p10,s24p10b P10b:P8,...
+python3 ../summ_pool.py s8,s9,s10 s24,s24p10,s24p10b P10b:P7H_LheldTie,... && python3 ../summ_p10.py s10 P10,P10b
+python3 ../summ_inv.py s10:P10b,s24p10b:P10b,... && python3 ../summ_gap10.py
+```
+(The driver scripts used for this run are in `research/scratch/p10/pipeline*.mjs`. Bug fixed along the way:
+`research/invariants.ts` ran its own CLI inside any bundle that imported it, e.g. `gap.cjs`. That wasted time but did
+not change results, because each script writes its output last.)
+
+## Engine speed: profiling, bit-identical optimisations, native-port decision (overnight 2026-10-15, task C)
+
+### 1. Where the time goes (`node --cpu-prof`, `research/perfprof.ts`, `research/profsum.py`)
+Profiles of representative runs on the baseline engine (commit 99f1a40), team-week w5 r1:
+
+| run | top hot spots (inclusive share) |
+|---|---|
+| P7H_LheldTie, real week (14.8 s) | `evalLock` 76% → `assignExact` 62% (Kuhn matcher: `filter`+`sort`+closure+`Map` per call, `slotOrder` built a string key per call), `heldSeatable` 13% (a `Float64Array` + full matching per call), `lockAwarePlacement` 30% (a `cloneState` per starter), GC 8% |
+| P8, real week + 20 model weeks | Lagrangian solver 89%: `tables` 48% self, `minimizeBound` 23% self (two `Math.pow` per coordinate per Adam step: 55% of its lines), `evaluate` 14%, GC 10% (tuple returns in `intervalMin`, closures per player, `mu.slice()` + object spread on every improvement) |
+| P8f, 300 model weeks | the same solver, 85% (warm re-solves after results) |
+| P10b, first 2 days of a real week | `decideIndex` race 87% → continuations' warm re-solves 82% (same profile as P8) |
+
+So two kernels dominate everything: the **slot assignment** (rule family: P2LAH, P7H, the app's mass simulations) and the
+**Lagrangian bound evaluation** (P8 family: P8, P8f, P9, P10, P10b).
+
+### Optimisations (all results bit-identical; `lib/engine/core.ts`, `lagrange.ts`, `p8.ts`, `p10.ts`)
+- **Assignment.** `assignExact` keeps Kuhn's algorithm (its slot map decides placements) without allocation: module
+  workspace, stable insertion sort, no closure, `slotOrder` cached by array identity (guarded against in-place edits).
+  Callers that need only the total (`evalLock`, 5–7 matchings per call) or feasibility (`heldSeatable`) use an exact
+  **Hall-condition counter** over the 5 position bits: a player set is matchable iff for every bit set u,
+  #{players with mask ⊆ u} ≤ #{open slots intersecting u}. Kuhn's greedy accepts p iff accepted ∪ {p} is matchable,
+  so the counter accepts the same players and sums the same weights in the same order (exact early exit when all slots
+  are used). Falls back to Kuhn for > 12 slots or masks outside 0..31.
+- **evalLock / placement.** No per-call arrays or Sets; the held list for the strand check is built once per call;
+  `lockAwarePlacement` evaluates on the state itself (changes restored) instead of cloning it per starter; the reserve
+  loop lost an O(n²) `games.indexOf`.
+- **stopValue memo** per team-week, (player, game index, played-last) → value, validated by the identity of everything
+  it reads (`games`, `byPlayer`, `dnp`, `pNext`, `nextGameIdx`, `resid`); legacy flags bypass it.
+- **emax**: one `Math.exp` instead of two (exp(−z²/2) and exp(−0.5z²) are the same double).
+- **Solver**: no tuple/closure allocation, typed eligibility lists, slot-outer pointwise minimum (same first-minimum
+  tie-break), Adam bias corrections hoisted out of the coordinate loop, best point copied into preallocated arrays,
+  the "bound at μ = 0" of warm starts computed lazily.
+- **Re-solve memo** (`p8.ts`): a warm re-solve is a pure function of (starting prices, the state `fromState` reads, t,
+  iterations, rate); continuations that reach the same state at the same tip-off (every scenario of one candidate
+  before any game ends) share it. LRU of 1000 views per team-week; off for P8f's "after new results" schedule, where
+  states hardly repeat (it cost ~5% there).
+- **Rollouts** (P7H lock/start simulations, P10 race) reuse one scratch state instead of `cloneState` per continuation.
+
+### Verification: bit-identical totals
+- **Season backtest, 230 team-weeks** (`research/perfcheck.ts`, `research/perfcmp.py`): P8, P7H_LheldTie, P8f and
+  P2LAH_LheldTie, each on the real outcomes plus 2 model scenarios (seeds of `p8exp`), baseline bundle vs optimised:
+  **0 differences in 2,760 totals** (and lock counts), with and without the re-solve memo (`pcbase` / `pcnew`, `pcnew2`).
+- **P10 and P10b**, real weeks on 14 team-weeks spread over the season (`pc10base` / `pc10new`): **0 differences**.
+- **Final engine** (re-solve memo + the price-view guard below): `pcnew3` (season, 2,760 totals) and `pc10new3`
+  (P10 / P10b, 14 team-weeks): **0 differences**.
+- **Unit tests** 59/59 (`npm test`), including `tests/perf.test.ts`: 3,000 random matchings (ties, zero/negative weights,
+  partial open masks, random layouts and masks) against the original matcher — totals and slot maps equal; slotOrder
+  after an in-place edit; memo invalidation; `emax` equal bit for bit on 20,000 random inputs.
+
+### Speedups (idle machine, one process at a time; `research/perftimes.mjs` → `research/out/perftimes2.json`; w5 r1 unless noted)
+| run | baseline | optimised | speedup |
+|---|---|---|---|
+| P7H_LheldTie, real week (w5 r1 / w14 r4) | 14.8 s / 13.4 s | 2.85 s / 2.92 s | **5.2× / 4.6×** |
+| P2LAH_LheldTie, model week (the rule; app projections, P7H rollouts) | 1.32 ms | 0.36 ms | **3.7×** |
+| P8, real week incl. the week-start price solve | 4.14 s | 3.29 s | 1.26× |
+| P8, model week after the price solve | 31.9 ms | 21.9 ms | **1.46×** |
+| P8f, model week after the price solve | 5.33 ms | 4.34 ms | 1.23× |
+| P10, first day of a real week | 12.3 s | 9.96 s | 1.24× |
+| P10b, first day of a real week | 39.9 s | 27.6 s | **1.45×** |
+| bound evaluation (solver kernel), µs, 4 team-weeks | 16.5–20.8 | 13.1–16.6 | 1.26× |
+
+Under the 13-way parallel load of the season runs the ratios were similar (P7H 4.4×, P2LAH 2.2–2.7×, P8 1.3–1.4×).
+The rule family (live P7H decisions, every mass simulation of the app under p7h) is now ~4–5× cheaper. The P8 family is
+bound by the solver's arithmetic: what is left per evaluation is the required floating-point work (≈ 130 `exp` for the
+games' E[max] and P(X > t), a div + sqrt per coordinate in Adam, the min/prefix loops), with no allocation and < 3% GC.
+
+### 2. Would a Rust (napi / wasm) port pay? Measured: **no**
+The kernel worth porting is the bound evaluation (80–90% of P8/P8f/P10/P10b time; the rule family is now cheap).
+- **wasm, measured.** `research/kernel/boundasm.js` is an asm.js port of `tables` + `evaluate` (week-start instance) +
+  the Adam loop, line for line. V8 validates it ("use asm" → `%IsAsmWasmCode` = true) and compiles it with its
+  WebAssembly pipeline (TurboFan for wasm) — what a hand-written or Rust-generated wasm module gets, minus LLVM's own
+  optimisations. Same `Math.exp`/`pow`, so it is checked bit for bit: **the bound after 20,000 Adam iterations is
+  identical** to the TS solver on all 4 instances.
+
+  | instance | TS baseline µs/eval | **TS optimised** | **asm.js → wasm** | wasm, accessors not inlined |
+  |---|---|---|---|---|
+  | w5 r1 (B = 54) | 20.8 | **16.6** | **16.7** | 42.1 |
+  | w9 r3 (B = 43) | 16.5 | **13.1** | **13.2** | 34.2 |
+  | w14 r4 (B = 53) | 19.7 | **15.5** | **15.8** | 42.1 |
+  | w20 r5 (B = 51) | 19.9 | **15.6** | **16.1** | 40.5 |
+
+  wasm runs at **0.97–1.0× the speed of the optimised TS**: for scalar float loops over typed arrays V8's JS and wasm
+  back ends produce equivalent code. (Without manual inlining of the heap accessors wasm is 2.6× slower: V8 did not
+  inline small asm.js functions.)
+- **native (napi), not measurable tonight.** No Rust toolchain is installed, and compiling the ready C port
+  (`research/kernel/bound.c`, the same kernel; Rust would compile to the same LLVM IR modulo bounds checks) needs a
+  compiler call that this unattended session may not run (clang / cc / swiftc / cffi all go through an approval gate;
+  not circumvented). To measure it in a minute:
+  `clang -O3 -o research/kernel/bound research/kernel/bound.c -lm && research/kernel/bound research/kernel/inst_5_1.txt 20000`
+  vs `node research/dist/perfbench_new.cjs adam 5:1 20000` (instances: `node research/dist/perfbench_new.cjs export 5:1 research/kernel/inst_5_1.txt`).
+  Expected from the kernel's shape (scalar, branchy, `exp`-heavy, B ≈ 50): LLVM -O3 maybe 1.5–2.5× over V8
+  (auto-vectorised min and Adam loops, cheaper libm `exp`), i.e. ~1.4–1.9× on P10b end to end (Amdahl, 85% solver).
+- **Recommendation: do not port.**
+  1. wasm, the portable option (browser, worker threads, no per-platform builds), gives nothing — measured.
+  2. A native addon would at best give ~1.5–2× on the P8 family, at the price of per-platform native builds for the
+     Next.js server and worker threads, two implementations of the solver to keep in sync, and **loss of
+     reproducibility**: a native `exp`/`pow` differs from V8's in the last bits, so TS backtests would no longer
+     reproduce the app's decisions exactly (they do today: the wasm port matches bit for bit only because it calls V8's
+     own `Math.exp`).
+  3. Bigger levers exist without leaving TS: P10b's race is embarrassingly parallel (scenarios × candidates), and the
+     app already has a 12-worker pool — racing on workers would cut a decision ~8–10×, far more than a port; fewer
+     solver iterations (warm starts are good: early stopping on a stalled bound) is algorithmic and needs a backtest.
+
+### Reproduce
+```
+npx esbuild research/perfcheck.ts --bundle --platform=node --format=cjs --outfile=research/dist/perfcheck_new.cjs --log-level=error
+# baseline bundle: the same driver built against `git show 99f1a40:<engine files>` (research/scratch/base/, not committed)
+node research/runtasks.mjs research/dist/perfcheck_base.cjs pcbase "" "POLS=P8;P7H_LheldTie;P8f;P2LAH_LheldTie" NSC=2 PAR=13
+node research/runtasks.mjs research/dist/perfcheck_new.cjs pcnew2 "" "POLS=P8;P7H_LheldTie;P8f;P2LAH_LheldTie" NSC=2 PAR=13
+node research/runtasks.mjs research/dist/perfcheck_{base,new}.cjs pc10{base,new} "" "POLS=P10;P10b" NSC=0 PAR=14 TASKS=2:1,4:2,5:3,6:4,8:5,10:6,12:7,13:8,14:9,16:10,18:1,20:2,21:3,22:4
+cd research/out && python3 ../perfcmp.py pcbase pcnew2 && python3 ../perfcmp.py pc10base pc10new
+node research/perftimes.mjs research/out/perftimes2.json      # idle machine, sequential (perfbench/perfprof base+new bundles, asm kernel)
+node --cpu-prof --cpu-prof-dir=research/scratch/prof research/dist/perfprof_new.cjs 5 1 P7H_LheldTie && python3 research/profsum.py <profile> 30 [fn,fn]
+```
+
+### Engine hardening found while testing the pre-game planner (`lib/engine/p8.ts`)
+`pricesAt` reused the current price view whenever it had been solved at the same time `t`. A price state seeded from
+*another* simulation at the same moment (here: the planner's check seeded its prices from a slot another engine had
+just used) then carried a stale slot mapping: a free slot mapped to "no slot", its price read as `undefined`, the hold
+value became NaN, and `Math.max(…, NaN)` made every hold weight of that player NaN, so the assignment could not keep his
+score. The view is now re-solved unless it was solved for the same locked slots. In the engine's own flows a view is
+never reused at its own time from a different state, so nothing changes there: identity re-checked (season P8 / P7H /
+P8f / P2LAH and P10 / P10b on 14 team-weeks: see the Phase 4 reproduce block).
+
+## Engine v2 — Phase 4 prototype: pre-game planner (`research/pregame.ts`, overnight 2026-10-15)
+
+### What it produces
+Before tonight's first tip-off, from the league state (season replay, or `live <leagueId> <rosterId>` from the live
+Sleeper/ESPN data; tested once on the live league, 2026-27 week 1):
+1. **Tonight's lineup**: the decision engine (P10b) at tonight's tip-offs, up to the first moment one of tonight's games
+   ends (later tip-offs that follow a finished game are decided inside the simulations).
+2. **A contingency table for the morning-after decision** — the first tip-off of the next game day, when all of tonight's
+   results are known and a held score competes for a slot again. Per starter, as a function of his score x tonight:
+   **lock** if x ≥ lock cut-off, **keep** (hold in a starting slot, decide later) between the let-go and the lock
+   cut-off, **free the slot** below the let-go cut-off; plus the same cut-offs **conditional on a key teammate's result**
+   tonight (≥ or < that teammate's own lock cut-off) when conditioning moves the cut-off by ≥ 1 pt and > 2 SE.
+   (The first version used the first decision after each game; when that is a later tip-off the same night, keeping is
+   free and "lock" only wins for extreme scores — correct but useless to a user, so the decision moved to the morning.)
+3. JSON (`research/out/pgc_<week>_<rid>.json`, value curves included) and a readable summary, e.g. (w7 r3, Wed):
+```
+Before Thu 7:00 PM, with tonight's results:
+  Giannis Antetokounmpo [F] proj 33.8±12.5: LOCK if >= 39.4 (±9.6; P 33% if he plays); otherwise keep
+  Jamal Murray [G] proj 25±11.2: LOCK if >= 30.4 (±3.2; P 31% if he plays); keep 20.4-30.4; free the slot below 20.4
+      if Karl-Anthony Towns scores >= 41.8: lock if >= 55.7; otherwise lock if >= 29.9  (Δ 25.8 ± 10)
+  Jalen Brunson [UTIL] proj 26±11.3: LOCK if >= 29.9 (±0.5; P 36% if he plays); keep 26.4-29.9; free the slot below 26.4
+  Bennedict Mathurin [SF] proj 18.8±10.1: don't lock (not even at 46.7); keep 24.1+; free the slot below 24.1
+      if Giannis Antetokounmpo scores >= 39.4: lock if >= 23.6; otherwise lock if >= 46.7  (Δ -23.1 ± 8.4)
+```
+
+### Method (deep search, common random numbers, time budget)
+- Scenarios of tonight and the rest of the week are drawn from the model. For each starter, each scenario and each x on
+  a grid of his score (0 and μ + σ·{−1, −½, 0, ½, 1, 1.5, 2, 2.75}), the rest of the week is played three times by the
+  base policy (P8, prices re-solved at every tip-off: the continuations P10b uses) with his action at the morning-after
+  decision forced to lock / keep / free; everything else (including tonight's later tip-offs) is decided by the base.
+  Cut-offs = first crossing of the value curves (linear interpolation), SEs by bootstrap over scenarios.
+- Rounds of 16 scenarios until `BUDGET_S` (default 1800 s of search) or `KMAX`; with 4–7 starters, 27 continuations per
+  starter and scenario, 30 minutes give 430–3,900 scenarios (110k–330k continuations) per team-week-day on one core.
+- Conditional cut-offs re-use the same continuations, split by the teammate's simulated result (post-stratification):
+  no extra simulation.
+
+### Test: 13 team-week-days of 2025-26 vs the real-time engines (`pg` tables, `pgc` checks; `research/summ_pregame.py`)
+Cases spread over the season (weeks 3–21, mid-week days). History up to tonight played by P8 on the real results;
+tonight's lineup by P10b. The real-time engines (P10b, and P8 on its own price state) then play tonight and the next
+morning on the real results; for every starter still holding a score at the morning-after tip-off, the three actions are
+scored **from P10b's real state just before that decision** by 300 paired model continuations each (base P8), and every
+choice (table, P10b, P8) is charged its regret against the best of the three.
+
+| | value |
+|---|---|
+| team-week-days / tonight's starters | 13 / 61 (one day with no starter: a noon Christmas game nobody started) |
+| starters P10b still held at the morning-after decision | 41 (11 scores were already locked or let go at a later tip-off tonight; 9 n/a) |
+| scenarios per plan (30 min) | 432–3,904; lock cut-off SE median 0.4–10 pts per plan |
+| key-teammate conditions found | 13, in 7 of 12 plans (e.g. a teammate's lock moves a cut-off by 3–30 pts) |
+| agreement: table = P10b / table = P8 / P10b = P8 | 23/41 / 21/41 / **39/41** |
+| best action under the deep evaluation chosen by: table / P10b / P8 | 29/41 / 27/41 / 25/41 |
+| **total regret vs the best action, 41 decisions** (95% CI): table / P10b / P8 | **1.65 ± 2.50 / 3.27 ± 3.00 / 4.31 ± 3.23 pts** |
+
+- **Decisions as good as the real-time engine's.** The table's total regret over 41 decisions is 1.6 pts vs 3.3 for
+  real-time P10b; the difference is within noise. Most disagreements (12 of 18 exactly, 14 within 0.1 pt) are between
+  actions worth the same, mostly keep vs free when nobody needs the slot before the player's next game. The ones that cost something: the table locked
+  high scores P10b kept (Sensabaugh 47.5, Holiday 51, Gobert 43: P10b regret 0.84 / 1.55 / 0.32) and locked Giddey's
+  48.5 where keeping was 1.08 ± 0.78 better.
+- **P10b's race hardly touches these decisions** (39/41 identical to P8): the morning-after lock/hold choice is mostly
+  P8's priced comparison.
+- **Precision is the limit.** 30 minutes on one core give cut-offs with SEs of a few points; the value curves are flat
+  near the crossing, so a wrong cut-off costs little, but conditional cut-offs (split samples) are noisy (Δ ± 5–15) and
+  some look implausible. Fixes: run the rounds on the app's worker threads (12× the scenarios in the same time),
+  adaptive grids around the crossing, and pooled (regression) conditioning instead of post-stratification.
+- **What it does not cover.** Decisions at later tip-offs tonight after a game has ended (made by the base policy
+  inside the simulations, and in real time by P10b: 11 of 61 scores were resolved that way); joint conditions on more
+  than one teammate; a pre-computed start/sit table for tomorrow (tomorrow's lineup is left to the real-time engine).
+
+### Reading
+The Phase 4 idea works as a prototype: before tip-off it turns tomorrow morning's lock decisions into a short table
+("lock if ≥ X; if teammate Y also goes off, ≥ X′") whose choices are as good as P10b's real-time choices on the 41
+decisions tested. It does not beat the real-time engine (no significant difference), so its value is product-side —
+decisions become lookups available before the games, with the reasons (value curves) attached — not points. Next steps
+if pursued: worker-thread parallel search, adaptive grids, and a live-app view that shows the table next to the plan's
+existing single "lock if ≥" cut-offs (`simCutoff`, which is a lock-vs-let-go cut-off at the first decision after the
+game and does not consider keeping).
+
+### Reproduce
+```
+npx esbuild research/pregame.ts --bundle --platform=node --format=cjs --outfile=research/dist/pregame.cjs --log-level=error
+T=3:2:1,4:7:2,6:5:1,7:3:2,9:9:1,10:4:2,12:1:1,13:6:2,15:8:1,16:2:2,18:10:1,20:3:2,21:7:1      # week:rid:day
+node research/runtasks.mjs research/dist/pregame.cjs pg "" PAR=13 BUDGET_S=1800 KEVAL=300 TASKS=$T   # 35 min
+node research/runtasks.mjs research/dist/pregame.cjs pgc "" PAR=13 KEVAL=300 TABLE=research/out/pg TASKS=$T   # check only, 4 min
+cd research/out && python3 ../summ_pregame.py pgc
+node research/dist/pregame.cjs live <leagueId> <rosterId> out.json BUDGET_S=1800            # live league state
+# identity of the final engine (incl. the price-view guard):
+node research/runtasks.mjs research/dist/perfcheck_new.cjs pcnew3 "" "POLS=P8;P7H_LheldTie;P8f;P2LAH_LheldTie" NSC=2 PAR=13
+node research/runtasks.mjs research/dist/perfcheck_new.cjs pc10new3 "" "POLS=P10;P10b" NSC=0 PAR=14 TASKS=<the 14 above>
+python3 ../perfcmp.py pcbase pcnew3 && python3 ../perfcmp.py pc10base pc10new3
+```
+(The first `pg` run's checks were wrong: the P8 comparison run shared the "top" price slot with P10b and the value
+checks seeded their prices from it, which produced NaN hold values — up to 38 pts of spurious "regret" for P10b. Found
+by the `forcedOk` diagnostic, fixed in the planner and hardened in `p8.ts` above; the tables themselves were unaffected
+and were re-checked with `TABLE=`.)
+
+## Engine v2 — Phase 5: playing for the win (overnight 2026-10-15, task E)
+Goal: decisions that maximise the probability of beating **this week's** opponent, with a small weight on points
+(points-for is the standings tiebreaker). Behind late in the week → take variance; ahead → secure points.
+
+**Summary.**
+- **Policy.** P11 = P10 with every raced continuation scored by T + β·F_opp(T). F_opp is the CDF of the opponent's
+  final total, simulated as a human from what we can see of him. β = 1000, phased in over the last 3 game days, with a
+  risk dial that makes the continuations' own decisions play to the score.
+- **(b) Simulated weeks against human-model opponents.**
+  - Fresh confirmation, 674 weeks: **+0.40 pp** win probability vs P10 (95% CI ± 0.35 naive / ± 0.46 week-clustered).
+  - All 1,118 simulated weeks: **+0.53 ± 0.31** pp (week-clustered).
+- **(a) Real 2025-26 season against the real opponents' actual scores.**
+  - **145-68-1** vs P10's 142-70-2: +1.17 pp, 4 weeks flipped to wins and 1 to a loss.
+  - The pre-registered opponent model: 144-68-2 (+0.93 pp).
+- **Points and rules.** Points unchanged (−0.15 ± 0.28 simulated, +0.09 real). 0 rule violations.
+- **Gate (win rate improves on both, 0 violations): met.** The gain is real but small: about half a win per 100 weeks.
+  The objective is a config option (`objective: "win"`, with engine `p10` / `p10b`); the default is unchanged.
+
+### Design (`lib/engine/p11.ts`, `lib/engine/human.ts`, `lib/live/opponent.ts`; tests `tests/p11.test.ts`)
+**Objective.** At each tip-off P10 races complete decisions: P8's decision and its best alternatives, scored on common
+scenarios of the rest of the week. P11 scores each continuation by
+
+  U = T + β(t) · F_opp(T)      (U/β = P(win) + E[points]/β, i.e. w_pts = 1/β)
+
+- T is our simulated final.
+- F_opp is the CDF of the opponent's final total, given what is known of him at t.
+- β is points per unit of win probability: β = 1000 means one percentage point of win probability is worth 10 points.
+
+The race rules are P10's, in U units. P8's own decision is the incumbent and is replaced only by a candidate that is
+better by > 0.5 and by > 2 se. With β = 0, or before the phase-in, **P11 is P10 exactly** (bit-identical, tested).
+
+**Fix 1: the opponent distribution once per decision moment, not one paired opponent sample per rollout.**
+- **The old method.** P4/P4S scored every rollout as win/loss against one simulated opponent week. The opponent's rest
+  of the week doesn't depend on our action.
+- **The new method.**
+  - At each decision moment P11 simulates the opponent M = 400 times from his current state (human model below).
+  - It keeps the finals and smooths their empirical CDF with a Gaussian kernel (Silverman bandwidth ≥ 1 pt, tabulated on
+    a 0.25-pt grid).
+  - Every continuation is scored by F_opp(T). The distribution is memoised per opponent state, since it changes only
+    when his games tip off or end.
+- **Variance reduction, measured.** The diagnostic `vr` used 64 extra scenarios per decision and its own random stream,
+  so decisions were unchanged. It ran at 2,443 win-phase decisions of the real season (`research/summ_p11b.py vr`).
+  - It compares the per-scenario variance of the paired difference between P8's decision and the first challenger.
+  - That variance is **7.5× lower** with the smooth score than with win/loss against one paired opponent sample:
+    0.00115 vs 0.00862. 7.4× in the second run.
+  - So the same race precision needs 7.5× fewer continuations. In about half of the decisions both variances are 0
+    (the week is decided).
+
+**Fix 2: the opponent is a human (`lib/engine/human.ts`, fit and checks in `research/humanfit.ts`).** A "physical
+lineup" model of how the 2025-26 managers played.
+- **Bookkeeping.**
+  - Slot occupants persist until the manager changes them.
+  - Whoever sits in a starting slot at tip-off is started; benching a held score forfeits it.
+  - At week end every unlocked occupant's held score counts. Rules 1–7 hold by construction, and the unit tests check
+    the bookkeeping.
+- **Behaviour.**
+  - **Engagement.** e ~ Beta(engA, engB) per team-week = P(active) on each game day.
+  - **Management.** An active day is managed at every tip-off, with same-day slot reuse, with probability pt; otherwise
+    once before the first tip-off.
+  - **Week start.** The week starts from a standing lineup with probability sl, else from empty slots.
+  - **Locks.** Once per active day, each held starter with games left is locked with probability
+    σ(c0 + u + c1·z + c2·d), where:
+    - z = (score − his remaining games' optimal-stopping value) / sd;
+    - d = share of game days past;
+    - u ~ N(0, su²) per team-week.
+  - **Lineup.** Exact assignment of tonight's players (weighted by start-vs-skip value) and of held scores without a game
+    today (weighted by (1 − tf) × keep-vs-let-go value). A DNP is known in advance with probability kd.
+- **Fit.** Method of simulated moments (Nelder-Mead, common random numbers) on the real team-weeks, each replayed on its
+  **real** outcomes so that only the manager's choices are random. Moments matched:
+  - mean, sd, and 10% / 90% quantiles of the weekly total (the mean weighted most);
+  - the share of slots ending at 0;
+  - the share of slot scores from a player's first / last game;
+  - the mean z of kept scores.
+- **Two fits.** The first fit used all 230 team-weeks (`HUMAN_ALL`). The real-season calibration of validation (a)
+  then showed it ~16 pts low on the opponents we actually face: the 16 team-weeks without an opponent (playoff-week byes
+  of eliminated teams) averaged ~83 pts and pulled it down. It was refit on the 214 team-weeks with an opponent
+  (`HUMAN`, used by the live option and run a2). The simulated validation (b) used `HUMAN_ALL` throughout: there the
+  opponents *are* that model, so it is internally consistent.
+
+| moment (2025-26) | managers | `HUMAN_ALL` (all 230) | managers, 214 with an opponent | **`HUMAN`** (214) |
+|---|---|---|---|---|
+| mean weekly total | 232.5 | 225.4 | 241.5 | **238.8** |
+| sd of weekly totals | 76.2 | 57.8 | 69.7 | 51.8 |
+| 10% / 50% / 90% quantile | 121 / 249 / 325 | 155 / 233 / 288 | 138 / 256 / 326 | 176 / 244 / 298 |
+| share of slots ending at 0 | 20.1% | 10.5% | 18.4% | 7.3% |
+| slot scores from the player's first / last game (≥ 2 games) | 34% / 32% | 34% / 32% | 35% / 29% | 35% / 32% |
+| mean z of kept scores | 0.90 | 0.66 | 0.95 | 0.71 |
+| corr(simulated mean, real total) per team-week | | 0.62 | | 0.69 |
+
+**Fitted `HUMAN`:**
+- **Engagement.** Beta(1.28, 0.12): mean 0.91; 72% of team-weeks have e > 0.95 and 6% have e < 0.5.
+- **Lock logit.** c0 = −3.37, c1 = 5.34, c2 = 1.72, su = 1.28. A held score is locked once it beats the value of waiting
+  by about 0.6 sd at week start, 0.5 mid-week and 0.3 at the end.
+- **Lineup.** tf = 0.79 (held scores mostly give way to tonight's players); pt = 1.00 (active days are managed
+  tip-off by tip-off).
+- **Rest.** kd = 0.005 (the fit found no use for advance DNP knowledge); sl = 0.19.
+
+**What the model gets right and wrong.**
+- **Right.** It reproduces the level, the timing of kept games and most of the shape.
+- **Too consistent.** Real managers have more very bad weeks (zero slots, abandoned weeks) and more very good ones
+  (kept scores 0.95 sd above the mean vs 0.71). The mechanistic model can't reach either tail; no tested mechanism did,
+  including advance injury news and per-week threshold offsets.
+- **Fix.** The opponent's distribution gets a calibrated residual N(δ, σ²·ρ) while games remain, with ρ = share of his
+  games not yet tipped off: δ = −5, σ = 55 (`HUMAN_RESID`; −5 / 60 with `HUMAN_ALL`).
+- **How it was chosen.** Grid search for uniform PITs of the real totals under the model's distribution from no-look-ahead
+  snapshots (`research/oppreal.ts`), at the start of every game day.
+
+| `calibm` (HUMAN + residual, 214 team-weeks; at the start of each of his game days) | game days left 1 | 2 | 3 | 4 | 5 | 6 | 7+ |
+|---|---|---|---|---|---|---|---|
+| predicted mean − actual mean | +2.8 | +2.4 | +3.4 | +2.0 | +2.5 | +0.4 | −2.1 |
+| PIT quintiles (uniform = n/5 each) | 55/36/33/40/50 | 48/35/41/47/43 | 49/28/41/56/40 | 44/35/37/59/39 | 43/33/36/52/41 | 38/31/35/54/38 | 33/24/27/46/33 |
+| (raw model, no residual: PIT) | 82/25/23/25/59 | 74/25/29/20/66 | 67/33/19/31/64 | 69/23/27/29/66 | 64/27/20/31/63 | 63/17/21/30/65 | 49/14/21/21/58 |
+
+**What P11 sees of the opponent.**
+- **Live** (`lib/live/opponent.ts`): his Sleeper state, i.e. locks and points, held scores in his starting slots,
+  players in a game, lineup, finished games, and injury tags (play probabilities of his next games).
+- **Real-season backtest.** Only what the data proves at t (`research/oppreal.ts`):
+  - the final lineup's counted scores, matched to games;
+  - such a score is "in a game" while its game runs, "held" until the player's next tip-off (the last moment he could
+    lock it), and "locked" after;
+  - everything else is unknown until week end. Scores he held and later let go are never seen: less than the live app
+    sees.
+
+**Fix 3: phase-in and a risk dial.**
+- **Phase-in schedules.** `late` = β in the last 3 game days of our week (chosen); `ramp` = linear over the game days;
+  `const` = all week.
+- **Risk dial.** The continuations are played by P8f, which maximises points. With the dial, their own future decisions
+  play to the score:
+  - **Tilt.** Every game's mean in the priced DPs is shifted by γ·sd², the certainty equivalent under a locally
+    exponential utility (`lagrange.gameDist` tilt, `IndexOpts.tilt`). A view with another tilt forces a warm-started
+    price re-solve.
+  - **γ formula.** γ = ½·E[U″]/E[U′] at our projected final T ~ N(μ, sd²), from 32 pilot continuations of P8's
+    decision against the opponent samples O_i. With z = (μ − O_i)/s and s² = sd² + h²:
+    - E[F′] = mean φ(z)/s;
+    - E[F″] = mean −zφ(z)/s².
+  - **Sign.** γ > 0 when behind (holding for ceilings, higher lock cut-offs and volatile starters look better). γ < 0
+    when ahead. γ → 0 when the week is decided either way: then points (the tiebreaker) decide.
+  - **Limits.** |γ| ≤ 0.05/pt. |γ| < 0.001 → 0, so decided weeks play as P10.
+  - **Candidate.** P8's decision under the tilt joins the race.
+
+### Validation design
+- **Base engine.** P11 is built on P10 (continuations by P8f): it costs 1/5 of P10b and was within 0.4 ± 0.65 pts/wk of
+  it in Phase 3. `P11b` (on P10b) exists, and the live option works with either engine.
+- **Pairing and population.** Every comparison is paired with P10, with the same seeds. The population is team-weeks
+  with an opponent: 214 of 230 in 2025-26 and all 690 in 2024-25.
+- **(b) Simulated weeks** (`research/p11run.ts` sim). Our games and the opponent's are drawn from the walk-forward
+  model; the human model plays the opponent with traits drawn per week; P11 sees his exact state, as the live app does.
+  Win-rate differences under 1 pp need variance reduction, all of it unbiased:
+  - **Shared prefix.** All arms are identical before the phase-in, so the week is played once up to the first tip-off of
+    the third-last game day. Each arm continues from that state with the same random streams and prices. Spot checks
+    against from-scratch runs through the invariant checker matched exactly (3 arms in development, then 44 runs, see the
+    rules section).
+  - **More completions for open weeks.** If P10's win probability at the branch is in (0.02, 0.98), the rest of the
+    week is redrawn 6 times: ours and his, his decisions included, his traits kept. Every arm plays each redraw. The
+    choice uses only information at the branch, so each week's mean over its completions is unbiased.
+  - **Rao-Blackwellized (RB) win.** P(his final < ours | his state at our last tip-off, his true traits), from 400
+    simulations of his remaining games. It has the same expectation as the 0/1 result and less noise; binary win/loss is
+    reported too.
+- **Tuning set and pre-registered choice.** The tuning set is 2025-26 (214 team-weeks, model week j = 0) plus 2024-25
+  league A (rids 1–10, 230). The rule, fixed before the results: the largest RB gain vs P10; within 0.1 pp, the smaller
+  points cost.
+- **Confirmation on fresh data.** 2024-25 leagues B and C (460, j = 0) and 2025-26 (214, new draws j = 1), the chosen
+  arm vs P10.
+- **(a) Real 2025-26 season** (`research/p11run.ts` real). Our team is played on the real outcomes through the invariant
+  checker, against the opponent visible in the data. Every final is compared with his **actual** score. The P10
+  baseline is the Phase-3 season run `s10` (same seeds, reproduced exactly).
+- **Gate criterion, stated before the runs.** (b) must be significantly positive on the confirmation set; (a) must not be
+  negative. 214 real weeks cannot resolve ~1 pp: its CI is about ± 1.5–2.5 pp.
+
+### Results
+**Tuning (444 model weeks; 311 still open at the branch, 1,999 completions; P10 won 82.9% (RB);
+`summ_p11.py sim p11/u25,p11/u24 P10`).** All arms use the late schedule. Win% diffs are in percentage points; 95%
+CIs naive / week-clustered.
+
+| arm | **RB win% diff** | binary win% diff | weeks flipped L→W / W→L | pts/wk diff | 2025-26 RB | 2024-25 A RB | rule viol. (real-week checker runs) |
+|---|---|---|---|---|---|---|---|
+| β = 100 | +0.51 ± 0.35 / ± 0.44 | +0.53 ± 0.46 | 22 / 9 | +0.32 ± 0.37 | +0.77 ± 0.52 | +0.27 ± 0.47 | — |
+| β = 300 | +0.62 ± 0.39 / ± 0.41 | +0.75 ± 0.54 | 32 / 13 | +0.00 ± 0.35 | +0.80 ± 0.54 | +0.45 ± 0.56 | — |
+| **β = 1000 (chosen)** | **+0.73 ± 0.37 / ± 0.43** | +0.41 ± 0.53 | 28 / 19 | −0.27 ± 0.49 | +0.59 ± 0.55 | +0.85 ± 0.51 | 0 |
+| β = 300, no risk dial | +0.45 ± 0.36 / ± 0.39 | +0.64 ± 0.47 | 24 / 8 | −0.25 ± 0.36 | +0.19 ± 0.53 | +0.69 ± 0.48 | — |
+
+- **Open vs decided weeks.** In weeks still open at the branch (70%) β = 1000 gains +1.04 ± 0.53. In decided weeks
+  every arm is within 0.03 pp of P10: points decide there, by design.
+- **The choice.** β = 1000 had the largest gain; β = 300 was 0.11 pp behind, outside the tie window. The ordering of β
+  is within noise, and the two seasons disagree on it. All β gain about 0.5–0.7 pp at ≤ 0.3 pts/wk.
+- **The risk dial adds +0.17 pp at β = 300.** Not significant: 2025-26 +0.80 vs +0.19, 2024-25 +0.45 vs +0.69. It is
+  kept because it makes the imagined future decisions play to the score.
+
+**Schedule** (β = 300; 2025-26, 214 weeks, completion 0 only, paired across `p11/v25` and `p11/u25` with `--c0`):
+
+| schedule | RB win% diff vs P10 | pts/wk diff | win-phase decisions/wk | decisions changed/wk |
+|---|---|---|---|---|
+| late (the last 3 game days) | +1.29 ± 1.30 | −0.10 ± 1.05 | 11.8 | 1.9 |
+| ramp (linear over the week's game days) | −0.01 ± 0.85 | −0.13 ± 1.21 | 21.8 | 3.1 |
+| (late, β = 1000) | +1.73 ± 1.38 | +0.21 ± 1.16 | 11.9 | 2.0 |
+
+Earlier phase-in gains nothing:
+- Early in the week the opponent's final is wide open: F_opp is flat and the dial is near 0.
+- The extra raced changes are noise.
+- `late` stays: the rule fixed beforehand was that ramp replaces late only if it is significantly better.
+
+**(b) Confirmation on fresh model weeks (P10 vs P11 β = 1000; `p11/c24`, `p11/c25`).**
+
+| set | model weeks (open at branch) | **RB win% diff** | binary win% diff | flips L→W / W→L | pts/wk diff |
+|---|---|---|---|---|---|
+| 2024-25 leagues B + C | 460 (335) | **+0.51 ± 0.43 / ± 0.43** | +0.33 ± 0.47 | 23 / 14 | −0.17 ± 0.35 |
+| 2025-26, new draws (j = 1) | 214 (155) | +0.16 ± 0.63 / ± 0.81 | +0.00 ± 0.81 | 10 / 9 | +0.15 ± 0.69 |
+| **confirmation pooled** | 674 (490) | **+0.40 ± 0.35 / ± 0.46** | +0.22 ± 0.41 | 33 / 23 | −0.07 ± 0.32 |
+| all simulated weeks (tuning + confirmation) | 1,118 | **+0.53 ± 0.26 / ± 0.31** | +0.30 ± 0.33 | 61 / 42 | −0.15 ± 0.28 |
+
+- Base win rate against the human-model opponents: P10 ≈ 83%.
+- The confirmation's naive CI excludes 0. Its week-clustered CI (2024-25's leagues share most players) touches 0:
+  −0.06 to +0.86.
+
+**(a) Real 2025-26 season, real opponents' actual scores** (214 team-weeks; `summ_p11.py real p11/a25,s10:P10 P10`):
+
+| run | W-L-T | win% | win% diff vs P10 (CI naive / week) | flips L→W / W→L | pts/wk | pts diff | L_ rule violations |
+|---|---|---|---|---|---|---|---|
+| P10 (`s10`) | 142-70-2 | 66.8% | | | 285.7 | | 0 |
+| **P11 β = 1000, pre-registered opponent model (`HUMAN_ALL`)** | **144-68-2** | 67.8% | +0.93 ± 1.29 / ± 2.34 | 2 / 0 | 286.1 | +0.37 ± 1.09 | **0** |
+| P11 β = 1000, refit opponent model (`HUMAN`; a2) | 145-68-1 | 68.0% | +1.17 ± 1.89 / ± 2.65 | 4 / 1 | 285.8 | +0.09 ± 1.08 | 0 |
+
+- **The flipped weeks** are close ones where P11 found the points late. For example, w19 r1: 237.5 → 246 against the
+  human's 245; w22 r2: 272 → 281 against 273.5.
+- **a2 was run after the refit.** The refit was prompted by run (a)'s calibration table (below), not by its wins. a2 is
+  reported as secondary.
+- **The opponent model as P11 used it in the real season** (`summ_p11b.py calib`):
+  - F_opp(actual final) at each of our tip-offs, by our game days left;
+  - predicted mean vs actual: `HUMAN_ALL` 225–239 vs 242–252; `HUMAN` 233–246.
+  - With `HUMAN`, PIT quintiles are still skewed high mid-week (e.g. 2 days left: 169/125/141/173/293). Real opponents
+    in real matchups still score a few points more than the model expects.
+
+**(c) Sanity: monotone risk response** (`research/p11risk.ts`; `summ_p11b.py risk p11/risk`).
+- **Setup.** 44 real 2025-26 states (two teams per week, P10 played to the first tip-off of the third-last game day).
+  P11 (β = 1000) decided that tip-off against opponents placed at a margin m below our projected final (sd 25).
+- **Measured, against P8's decision:** the change in the sd of our final and in expected points (96 common scenarios,
+  untilted continuations).
+
+| margin m (our projected final − his mean) | dial γ (mean) | P(win) | decision changed vs P8 | sd of our final, chosen − P8 | E[points], chosen − P8 | P(win), chosen − P8 |
+|---|---|---|---|---|---|---|
+| −150 (hopeless) | 0.0000 | 0.000 | 16% | −0.12 ± 0.17 | +0.35 ± 0.51 | 0.00 pp |
+| −50 | +0.0171 | 0.068 | 16% | −0.05 ± 0.07 | +0.35 ± 0.49 | +0.16 ± 0.27 pp |
+| −20 | +0.0082 | 0.269 | 23% | −0.01 ± 0.06 | +0.42 ± 0.42 | +0.42 ± 0.42 pp |
+| 0 (close) | +0.0005 | 0.485 | 34% | −0.04 ± 0.21 | +0.39 ± 0.54 | +0.40 ± 0.54 pp |
+| +20 | −0.0071 | 0.703 | 20% | −0.01 ± 0.20 | +0.25 ± 0.51 | +0.18 ± 0.41 pp |
+| +50 | −0.0165 | 0.914 | 25% | −0.24 ± 0.32 | +0.37 ± 0.52 | +0.21 ± 0.23 pp |
+| +150 (far ahead) | 0.0000 | 1.000 | 18% | −0.12 ± 0.17 | +0.35 ± 0.51 | 0.00 pp |
+
+- **The dial's sign is right in every state** (44/44): γ ≥ 0 at every margin behind, γ ≤ 0 at every margin ahead, and
+  γ = 0 when the week is decided.
+- **Manager's invariant, relative to neutral: 0/44 violations.** "Far ahead never more risk than close" and
+  "hopelessly behind never less risk than close" hold as: far ahead is never more risk-seeking than max(γ_close, 0), and
+  hopeless is never more risk-averse than min(γ_close, 0).
+  - The strict ordering γ(far ahead) ≤ γ(close) ≤ γ(hopeless) fails in 32/44 states, by design. "Close" is rarely
+    exactly even: slightly ahead makes it mildly averse. Far ahead and hopeless are neutral because nothing is left to
+    win, and the points tiebreaker decides there.
+  - The unit test reproduces the shape on a lock-or-gamble decision. With one game left, a sure 22 vs a final game of
+    mean 20 / sd 12:
+    - far ahead → lock;
+    - close → lock;
+    - behind by 10 → gamble;
+    - hopeless → lock (the points choice).
+- **Realized risk at single decisions is small.** The sd changes above are at most 0.24 pt. With a 0.25-pt tolerance,
+  per-state comparisons with "close" show far ahead taking more risk in 2/44 and hopeless taking less in 4/44. Both are
+  within noise: in those states both decisions are P10-like.
+- **No decision is perverse.** Any changed decision never costs expected points on average (+0.25 to +0.42 at every
+  margin). The win-probability effect is positive where the week is open.
+
+**Rules (invariant checker).**
+- **Real season.** 0 L_ violations in 2 × 214 real team-weeks for P11; recount = engine total everywhere.
+  - 0 unforced let-gos and 0 ex-ante idle benchings.
+  - The other counters are at P10's levels (per week, P11 / P10): deadline let-go-then-sat 0.52 / 0.55, lock into a
+    wider slot 0.07 / 0.06, final-game locks 0.36 / 0.30, race overrides of P8 3.5 / 3.2.
+- **Simulated weeks.** `p11/chk`: 23 model weeks (one team per 2025-26 week), P10 and P11 each run from scratch through
+  the checker. 22 model weeks with an opponent: 44 checked runs, **0 L_ violations**. Each equals its
+  shared-prefix continuation exactly (44/44).
+- **Unit tests.** `tests/p11.test.ts`:
+  - the opponent CDF;
+  - the dial's sign, cap and the invariants;
+  - the schedules;
+  - P11 ≡ P10 at β = 0 and before the phase-in;
+  - the monotone lock-or-gamble response;
+  - every P11 decision legal on random weeks with opponents close / far ahead / far behind;
+  - the human model's bookkeeping.
+
+  `tests/engine_select.test.ts` covers the live option. `npm test`: 67/67.
+
+**Compute.**
+- **Per decision.** A win-phase decision adds 400 opponent simulations (~20–50 ms), 32 pilot continuations and, if
+  γ ≠ 0, one tilted price re-solve plus one more raced candidate.
+- **Per week.** On real weeks P11 cost 65 s of decision time per week vs P10's 70 s (both measured under 14-way load;
+  P11's figure includes the variance diagnostic): the difference is within load noise.
+- **Validation.** The pipelines took about 7 h on 14 cores.
+
+### Live option (`lib/live/engine.ts`, `lib/live/opponent.ts`, `lib/live/advise.ts`)
+- **Setting.** `objective: "points" | "win"`, via env `LOCKIN_OBJECTIVE` or `"objective"` in `~/.sleeper-lockin/config.json`.
+  The env wins, the setting is re-read every 30 s, and unknown values mean `points`. **The default is `points`, which
+  changes nothing.**
+- **When "win" is active.** Only with a race engine (`p10` / `p10b`); with `p7h` / `p8` / `p9` it is ignored, with a
+  warning. Then:
+  - the plan's tip-off decisions use P11 (`WIN_OPTS` = β 1000, late 3 days);
+  - the lock / hold / bench options of held scores are ranked by points + β·P(win), with the win probability against
+    the human model of the opponent.
+- **The opponent.** He comes from his Sleeper state (`humanSnapshot`): locks and points, held scores in starting slots,
+  players in a game, lineup, finished games, and injury tags via his next games' play probabilities. His distribution is
+  `HUMAN` + `HUMAN_RESID`, 400 simulations, once per view.
+- **Caches.** The tag is `<engine>+win` when active. The views' fingerprints already contain the opponent's state
+  (`teamFingerprint(opp)`). Default fingerprints are byte-identical (tested).
+- **Not covered.** Replay of a finished week stays on points.
+- **The live app was not touched, built or restarted.**
+
+### Recommendation
+- **The gate is met.** Win rate improves on both validations with 0 rule violations:
+  - simulated: +0.40 pp on fresh weeks, +0.53 ± 0.31 pp on all 1,118;
+  - real: 144-68-2 / 145-68-1 vs 142-70-2.
+  - Points are unchanged.
+- **Turning it on.** Set `"objective": "win"` together with engine `p10b` (or `p10`). The default stays `points`, and
+  switching is the user's decision: it was not done here.
+- **What to expect.** About +0.5 pp of win probability, ≈ 0.1 extra wins per 23-week season, at no measurable points
+  cost.
+  - The gain comes from the ~70% of weeks still open after the fourth game day (+1 pp there). P10 already wins ~67% of
+    real matchups (~83% of simulated ones); most weeks are decided before any late decision matters.
+  - It is small because the levers late in a Lock-In week are few: hold or lock a score, start a volatile player or not.
+- **Caveats.**
+  - The opponent model is the weak link. It is calibrated on average, but real managers are more erratic than it.
+  - The early-week win objective (ramp) does not help.
+  - The ordering among β = 100 / 300 / 1000 is not resolved; all of them help.
+  - P11 was validated on P10. On P10b the mechanism is the same, but it was not separately backtested.
+- **Follow-ups.**
+  - Per-manager engagement estimated from his past weeks (some managers are reliably active, others not).
+  - Use the opponent's visible lineup in the backtest snapshot (the live app has it).
+  - P11b on the real season (about 1.6 h).
+
+### Reproduce
+```
+npx esbuild research/humanfit.ts --bundle --platform=node --format=cjs --outfile=research/dist/humanfit.cjs --log-level=error   # (+ p11run as p11run2/p11run3.cjs, p11risk)
+node research/dist/humanfit.cjs fitm research/out/humanfit_m.json                 # opponent model (fit, evalm, calibm "<params>", scan)
+node research/dist/humanfit.cjs calibm research/out/humancalib_m.json "1.2844,0.1235,-3.3698,5.3396,1.7237,1.2764,0.7909,0.9989,0.0054,0.1877"
+node research/runtasks.mjs research/dist/p11run2.cjs p11/u25 sim "POLS=P10;P11:beta=100;P11:beta=300;P11:beta=1000;P11:beta=300,dial=false" KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/u24 sim SEASON=research/data/season2024.json TASKS=<w:1..10> <same POLS> KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/v25 sim "POLS=P11:beta=300,sched=ramp" KC=1 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/a25 real "POLS=P11:beta=1000,vr=64" PAR=14          # (a); a2: p11run3.cjs -> p11/a25m
+node research/runtasks.mjs research/dist/p11risk.cjs p11/risk "" TASKS=<46 team-weeks> PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/c24 sim SEASON=research/data/season2024.json TASKS=<w:11..30> "POLS=P10;P11:beta=1000" KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run2.cjs p11/c25 sim "POLS=P10;P11:beta=1000" S0=1 KC=6 PAR=14
+node research/runtasks.mjs research/dist/p11run3.cjs p11/chk sim TASKS=<23> "POLS=P10;P11:beta=1000" CHECKBRANCH=1 KC=1 PAR=14
+cd research/out && python3 ../summ_p11.py sim p11/u25,p11/u24 P10 && python3 ../summ_p11.py sim p11/c24,p11/c25 P10
+python3 ../summ_p11.py sim p11/u25,p11/v25 P10 "P11:beta=300" "P11:beta=300,sched=ramp" --c0
+python3 ../summ_p11.py real p11/a25,s10:P10 P10 && python3 ../summ_p11b.py vr p11/a25 "P11:beta=1000,vr=64" && python3 ../summ_p11b.py calib p11/a25
+python3 ../summ_p11b.py risk p11/risk
+```
+- **Bundles.** `p11run2.cjs` was built at commit 75564de, with `HUMAN_ALL` as `HUMAN`. `p11run3.cjs` uses the refit
+  `HUMAN`; it was built separately so the running pipeline kept one consistent bundle.
+- **Drivers and outputs.** The drivers are `research/scratch/p11/pipeline*.mjs`. Single-draw tuning outputs from an
+  earlier design (`p11/t25`, superseded) are kept; their P10 totals equal `p11/u25`'s completion 0 exactly.
+
+## P8 simulation repeatability (overnight 2026-10-15, task F)
+
+**Report.** Under `LOCKIN_ENGINE=p8`, two runs of `research/tradeeval.ts` (same seeds, N = 150) gave different
+numbers: "lose Moussa Diabaté alone" −2.00 ± 0.75 vs −0.14 ± 0.78; "trade, spot empty" +0.49 vs +1.42. p7h was
+repeatable.
+
+**Verdict.**
+- There was a real engine bug: an independent P8 simulation started mid-week depended on call order. It is fixed
+  (commit 75c7984).
+- It does **not** explain the tradeeval runs. At the asOf tradeeval uses (2026-10-19, preseason) every week starts at
+  event 0, a case the bug never touched.
+- Re-run tonight, tradeeval is repeatable to the last digit, on the old engine and on the fixed one (table below).
+  The manager's two runs (file times: Oct 14 evening) most likely saw different **inputs**.
+  - Rosters, injury tags and Sleeper projections are re-fetched during a run: in-memory TTLs are 1 min to 1 h
+    (`lib/live/sources.ts`).
+  - A P8 tradeeval run takes ~10–20 min; a p7h run takes seconds.
+  - The app's data logger recorded 357 injury-tag changes over Oct 12–14. It stopped at 07:38 UTC on Oct 14, so the
+    run window itself can't be checked.
+  - This cause is likely but not proven. Over two 8-minute probes tonight, the inputs and the P8 week values did not
+    change (`research/scratch/p8repeat_data*.log`).
+
+### The bug
+- **Where.** `simulate()` reset an index policy's price state (slot "top", "sim", ...) only at event 0 or with
+  `fresh`. A run started at `fromEv > 0` without `fresh` continued from whatever the slot's last run had left.
+- **What that state was.** Typically the end of the previous scenario's week: a view solved for a later time and a
+  different state.
+- **Affected.** Any independent mid-week P8 / P8f / P10 top-level run, e.g. `research/p10cmp.ts` with `ENG=p8` or
+  `p10` whenever `T.evIdx > 0`.
+- **Not affected.** The live app's projections, waivers, league odds and cut-offs: they use `simPolicy()`, which is
+  `fresh`. The live plan always got a new team-week per request.
+- **A second, minor dependence.** The week-start prices were solved with the `weekIters` of whichever policy first
+  touched the team-week. Only tests set `weekIters`.
+
+**Repro** (`research/scratch/p8repeat.ts`). Season week 5, one team, 6 model scenarios. Each run starts from the same
+mid-week state (40% of the games played), with no prefix simulation, as the live app and p10cmp do. Columns: how many
+of the 6 totals differ from the first pass when the pass is repeated, run in reverse order, or interleaved with
+another team.
+
+| policy | engine | again | reversed | interleaved | mean of the 6 totals |
+|---|---|---|---|---|---|
+| P8f `fresh` (slot "sim") | old | 0/6 | 0/6 | 0/6 | 313.38 |
+| P8f | old | **5/6** | **6/6** | **5/6** | 300.97 |
+| P8 | old | **3/6** | **2/6** | **1/6** | 309.36 |
+| P8f | fixed | 0/6 | 0/6 | 0/6 | 313.38 (= `fresh`) |
+| P8 | fixed | 0/6 | 0/6 | 0/6 | 319.28 |
+
+- Runs from event 0 were already repeatable (0/6 everywhere), and their totals are unchanged by the fix.
+- The stale prices were not just noise. P8f lost ~12 pts/week in this repro: decisions were priced from another
+  scenario's later state.
+
+### The fix (`lib/engine/p8.ts`, `lib/engine/core.ts`; no clamping)
+- **When a run keeps its slot's price state.** Only when it **continues** a run: the same `State` object, resumed at
+  the event index where the last run on that slot stopped. This is how chunked runs work: the live plan, replays,
+  the invariant checker stepping one event at a time.
+- **Explicit arming.** A slot can also be armed just before the run by `seedPrices` (rollouts), `restorePrices`
+  (p11run branches) or the new `continuePrices`.
+- **Every other run** starts from the week-start prices. Its result is then a pure function of (team-week, state,
+  event index, outcomes).
+- `fresh` still always resets.
+- Week-start prices are cached per `weekIters`.
+- `research/pregame.ts` continues one simulated week from copies of its state in two places. Both now call
+  `continuePrices` explicitly, so its results are unchanged.
+- **Regression test** (`tests/p8.test.ts`). Two team-weeks; P8, P8f and P8f `fresh`; mid-week and event-0 starts;
+  each pass repeated, reversed and interleaved with the other team. Also checks that a run stepped in daily chunks
+  equals the run in one go.
+  - The test fails on the old engine and passes on the fix.
+  - `npm test`: 68/68.
+
+### Backtests unaffected (checked)
+- **Why they can't be affected.**
+  - Index-policy season runs use `research/runtasks.mjs`: one process per team-week.
+  - Every top-level run starts at event 0 from `initState` (reset, as before).
+  - Rollouts (P9 / P10 / P11) seed their slot immediately before each continuation.
+  - The checker's one-event steps are continuations.
+- **The policies of one team-week share a process.** They share only the week-start prices (all at the default
+  `weekIters`) and the memo of warm re-solves, which is a pure function of its key. So order between them never
+  mattered.
+- **Empirical check.** Old (HEAD~1) vs fixed bundles on the same tasks (`research/scratch/oldnew.mjs`), outputs
+  compared with timings masked:
+
+| run | outputs |
+|---|---|
+| p10run, 3 team-weeks, P8; P8f; P9; P9b; P10, real outcomes + 2 model scenarios | identical |
+| p10run, week 9, P10b; P11 | identical |
+| p11run, week 9, P10 vs P11:beta=300 (save / restore price branches) | identical |
+| pregame, week 9 day 2 (KMAX = 32, KEVAL = 30) | identical |
+| gap, week 9, P8 and P8f on 20 model scenarios | identical |
+
+- **Conclusion.** No reported P8 / P8f / P9 / P10 / P11 backtest number changes.
+- **One possibly affected result.** Ad-hoc `research/p10cmp.ts` comparisons made at a mid-week asOf would have been
+  affected. None are in this REPORT.
+
+**tradeeval two-run repro** (LOCKIN_ENGINE=p8, N = 150, weeks 2,5,8,11,14,18,20; base 278.6 pts/wk in all runs):
+
+| run | lose Murray | lose Diabaté | trade, spot empty |
+|---|---|---|---|
+| old engine, run A | −2.16 ± 0.88 | −0.46 ± 0.77 | +1.26 ± 1.04 |
+| old engine, run B (concurrent) | −2.16 ± 0.88 | −0.46 ± 0.77 | +1.26 ± 1.04 |
+| fixed engine, runs A and B | −2.16 ± 0.88 | −0.46 ± 0.77 | +1.26 ± 1.04 |
+
+- **Recommendation for trade and waiver evaluations.** Snapshot the inputs once per evaluation, e.g. set
+  `LOCKIN_CACHE_DIR` and pre-warm, or build every variant from one fetched data set. Then a long P8 run can't mix
+  data from different hours. Not changed here: `lib/live` belongs to the live app's data path.
+
+### Reproduce
+```
+npx esbuild research/scratch/p8repeat.ts --bundle --platform=node --format=cjs --outfile=research/dist/p8repeat.cjs --log-level=error
+node research/dist/p8repeat.cjs 5 6 0.4          # week, scenarios, mid-week fraction (0 = event 0)
+node research/dist/p8repeat_live.cjs 2,5 30 p8   # live buildWeek + weekValues path (research/scratch/p8repeat_live.ts)
+node research/dist/p8repeat_data.cjs 8 2,5,8,11,14,18,20 10   # do the live inputs change between rebuilds?
+node research/scratch/runenv.cjs LOCKIN_ENGINE=p8 N=150 SKIPTHEM=1 NFA=0 "GIVE=Keegan Murray,Moussa Diabate" "GET=Caleb Wilson" research/dist/tradeeval.cjs
+node research/scratch/oldnew.mjs                 # old vs fixed bundles (research/dist/<script>_old.cjs / _new.cjs)
+```
+
+## Shipping P10b (overnight 2026-10-15, task G)
+**Problem.** Engine `p10b` switched *every* simulation in the app to P8f, not just the decisions: projections,
+Waivers, Matchups, IR and cut-offs, all 5–20× slower. Its notifier lock/hold/bench reminders were also not P10b's
+decisions: they were the best option of P8f rollouts.
+
+**Fix: engine `p10b` is now decision-only** (`lib/live/engine.ts`). The old behaviour is kept as `p10b-full`.
+- **What P10b decides:**
+  - the plan (P8 + the P10b race at every tip-off: start/sit, hold/lock/let go);
+  - replay;
+  - the hold/lock/bench call for each held score.
+- **How the hold/lock/bench call is made** (`advise.ts`, `engineCall`):
+  - it is P10b's decision at the plan's first tip-off, so the reminders now always agree with the plan's holds and
+    forfeits;
+  - the options' expected points are still shown, from the quick simulations;
+  - a disagreement or near-tie is stated in the reason.
+- **What stays on POLICY** (`simPolicy("p10b") === POLICY`): projections and win probability, Matchups, Waivers, IR,
+  lock cut-offs, and the options' quick simulations.
+- **Caches.**
+  - `fingerprint(x, "sim")` keys mass-simulation results by the simulation engine, so p10b shares p7h's entries.
+  - Advise and replay are keyed by the decision engine: `p10b+sim:p7h`, never the old `p10b` tag.
+  - p7h's fingerprints are byte-identical to before.
+- **Notifier** (`scripts/notify.ts`):
+  - logs the engine;
+  - with a race engine, precomputes last week's replay once per week in quiet hours (a P10b replay takes 3–5 min).
+
+**Checks.**
+- **Unit tests 71/71** (`tests/engine_select.test.ts` has 3 new tests plus extended ones). They cover:
+  - the split;
+  - p10b projections and cut-off simulations identical to p7h's;
+  - fingerprint scopes;
+  - each p10b call equal to an independently reproduced engine decision and consistent with the plan.
+- **Type check:** clean.
+- **Live code vs engine-v2 in one process on the same live contexts** (`research/scratch/g/p7h_equiv.ts`, 11/11 pass):
+  - with p7h: identical projections, full advice JSON and fingerprints;
+  - with p10b: identical projections, option values and mass-simulation fingerprints.
+- **End-to-end notifier run** (`research/scratch/g/notify_e2e.mjs`): `HOME` pointed at a scratch dir with
+  `"engine": "p10b"`, DRY_RUN. Cold 55.8 s (advise + forced Waivers + IR), next run 0.5 s.
+
+**Latency** (real league, week 1 of 2026-27; one process per view, 12 workers; live services running). The tip-off
+rows use week 1 simulated forward by POLICY to 10 min before that day's first tip-off.
+
+| view | p7h | **p10b** | p10b-full |
+|---|---|---|---|
+| /api/advise Tue week-1 noon, cold (plan + 2 × 20k projections) | 5.3 s | **13.6 s** | 136.7 s |
+| /api/advise now, cold / warm | 5.4 s / 2 ms | **14.1 s / 2 ms** | |
+| notifier advise, Wed tip-off (3 held, 8 tip-offs in 30 h) | 5.4 s | **42.1 s** (43.4 s under concurrent Matchups + Waivers) | 166.8 s |
+| notifier advise, Fri tip-off (6 held, 9 tip-offs) | 2.6 s | **12.4 s** | |
+| notifier advise, Sat tip-off (4 held, 7 tip-offs) | 1.1 s | **3.9 s** | |
+| Matchups cold / warm | shared entry | **30.1 s / 6 ms** | ≈ p8 (782 s) |
+| Waivers cold / warm | shared entry | **36.4 s / 2 ms** | ≈ p8 (1,186 s) |
+| IR cold / warm | shared entry | **5.6 s / 63 ms** | ≈ p8 (396 s) |
+| Replay 2025-26 weeks 5 / 12 / 20, cold | 2.9 / 1.6 / – s | **198 / 292 / 210 s** | |
+
+- **Shared entries confirmed.** The p7h runs of Matchups, Waivers and IR, started after p10b's, were cache hits
+  (0.1–0.4 s).
+- **Watchdog.** The worst notifier game-day run is about 1.5 min, against a 9-min limit. The replay precompute takes
+  3.3–4.9 min in quiet hours.
+- **Web.** The live web server shares the notifier's disk cache (`LOCKIN_CACHE_DIR` in its environment), so advise
+  and last week's replay are usually warm.
+  - Cold advise takes ≤ 45 s.
+  - A replay that was not precomputed takes 3–5 min on its first view. `next start` doesn't enforce `maxDuration`.
+- **Where the extra time goes.** All of it is the single-threaded P10b race, 1–7 s per planned tip-off.
+
+**Deployment.** See `DEPLOY_P10B.md`: files, config change, rollback, checklist.
+- **The rehearsal found a merge conflict.** lockin-live's watchdog commit (80192a5) is cherry-picked in engine-v2, and
+  an engine-v2 edit next to it made the merge conflict. That edit was moved, and the merge is now clean.
+- **A second problem: `next build` would have failed.** It type-checks `research/**/*.ts`, and a committed scratch
+  script imported an untracked folder. The script is now `@ts-nocheck`.
+- **Rehearsal** (throwaway clone of lockin-live in /tmp): **all OK**.
+  - The merge of engine-v2 is clean.
+  - `tsc` clean, `npm test` 71/71, `build:notify` OK.
+  - `next build` OK in 537 s. It was built with webpack and a symlinked node_modules, because turbopack rejects a
+    node_modules symlink outside the project and cloning node_modules took over 15 min. The live build uses
+    turbopack, on the same code and the same type check.
+
+```
+npx esbuild research/livecost_g.ts --bundle --platform=node --format=cjs --outfile=research/dist/livecost_g.cjs --log-level=error
+npx esbuild scripts/simworker.ts --bundle --platform=node --format=cjs --outfile=research/dist/simworker_g.cjs --log-level=error
+node research/livecost_g_run.mjs p7h:advise-tue:a7 p10b:advise-tue:a10 p10b:tick:T10w p10b:league:L p7h:league:L ...   # engine:view:cacheTag[:KEY=VAL]
+node research/scratch/g/extract_live.mjs && node research/scratch/runenv.cjs LOCKIN_NO_WORKERS=1 LOCKIN_CUTOFF_SIMS=2000 research/dist/p7h_equiv.cjs out.json
+node research/scratch/g/notify_e2e.mjs p10b 2     # needs research/dist/g/{notify,simworker}.cjs
+node research/scratch/g/rehearse.mjs /tmp/g_deploy2
+```

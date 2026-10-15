@@ -74,7 +74,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
     inj: [...rel].map((p) => [p, players[p]?.injury_status ?? null]),
     dropped: [...recentlyDropped.entries()].filter(([p]) => rel.has(p)),
     me: teamFingerprint(baseCtxNow.me),
-  });
+  }, "sim");
   const res = await cachedCompute(`waivers-${o.leagueId}-${o.rosterId}`, fp, () => simulateWaivers());
   return { ...res.value, cached: res.cached, checkedAt: Date.now() };
 
