@@ -1272,3 +1272,116 @@ python3 ../summ_inv.py s10:P10b,s24p10b:P10b,... && python3 ../summ_gap10.py
 (The driver scripts used for this run are in `research/scratch/p10/pipeline*.mjs`. Bug fixed along the way:
 `research/invariants.ts` ran its own CLI inside any bundle that imported it, e.g. `gap.cjs`. That wasted time but did
 not change results, because each script writes its output last.)
+
+## Engine speed: profiling, bit-identical optimisations, native-port decision (overnight 2026-10-15, task C)
+
+### 1. Where the time goes (`node --cpu-prof`, `research/perfprof.ts`, `research/profsum.py`)
+Profiles of representative runs on the baseline engine (commit 99f1a40), team-week w5 r1:
+
+| run | top hot spots (inclusive share) |
+|---|---|
+| P7H_LheldTie, real week (14.8 s) | `evalLock` 76% → `assignExact` 62% (Kuhn matcher: `filter`+`sort`+closure+`Map` per call, `slotOrder` built a string key per call), `heldSeatable` 13% (a `Float64Array` + full matching per call), `lockAwarePlacement` 30% (a `cloneState` per starter), GC 8% |
+| P8, real week + 20 model weeks | Lagrangian solver 89%: `tables` 48% self, `minimizeBound` 23% self (two `Math.pow` per coordinate per Adam step: 55% of its lines), `evaluate` 14%, GC 10% (tuple returns in `intervalMin`, closures per player, `mu.slice()` + object spread on every improvement) |
+| P8f, 300 model weeks | the same solver, 85% (warm re-solves after results) |
+| P10b, first 2 days of a real week | `decideIndex` race 87% → continuations' warm re-solves 82% (same profile as P8) |
+
+So two kernels dominate everything: the **slot assignment** (rule family: P2LAH, P7H, the app's mass simulations) and the
+**Lagrangian bound evaluation** (P8 family: P8, P8f, P9, P10, P10b).
+
+### Optimisations (all results bit-identical; `lib/engine/core.ts`, `lagrange.ts`, `p8.ts`, `p10.ts`)
+- **Assignment.** `assignExact` keeps Kuhn's algorithm (its slot map decides placements) without allocation: module
+  workspace, stable insertion sort, no closure, `slotOrder` cached by array identity (guarded against in-place edits).
+  Callers that need only the total (`evalLock`, 5–7 matchings per call) or feasibility (`heldSeatable`) use an exact
+  **Hall-condition counter** over the 5 position bits: a player set is matchable iff for every bit set u,
+  #{players with mask ⊆ u} ≤ #{open slots intersecting u}. Kuhn's greedy accepts p iff accepted ∪ {p} is matchable,
+  so the counter accepts the same players and sums the same weights in the same order (exact early exit when all slots
+  are used). Falls back to Kuhn for > 12 slots or masks outside 0..31.
+- **evalLock / placement.** No per-call arrays or Sets; the held list for the strand check is built once per call;
+  `lockAwarePlacement` evaluates on the state itself (changes restored) instead of cloning it per starter; the reserve
+  loop lost an O(n²) `games.indexOf`.
+- **stopValue memo** per team-week, (player, game index, played-last) → value, validated by the identity of everything
+  it reads (`games`, `byPlayer`, `dnp`, `pNext`, `nextGameIdx`, `resid`); legacy flags bypass it.
+- **emax**: one `Math.exp` instead of two (exp(−z²/2) and exp(−0.5z²) are the same double).
+- **Solver**: no tuple/closure allocation, typed eligibility lists, slot-outer pointwise minimum (same first-minimum
+  tie-break), Adam bias corrections hoisted out of the coordinate loop, best point copied into preallocated arrays,
+  the "bound at μ = 0" of warm starts computed lazily.
+- **Re-solve memo** (`p8.ts`): a warm re-solve is a pure function of (starting prices, the state `fromState` reads, t,
+  iterations, rate); continuations that reach the same state at the same tip-off (every scenario of one candidate
+  before any game ends) share it. LRU of 1000 views per team-week; off for P8f's "after new results" schedule, where
+  states hardly repeat (it cost ~5% there).
+- **Rollouts** (P7H lock/start simulations, P10 race) reuse one scratch state instead of `cloneState` per continuation.
+
+### Verification: bit-identical totals
+- **Season backtest, 230 team-weeks** (`research/perfcheck.ts`, `research/perfcmp.py`): P8, P7H_LheldTie, P8f and
+  P2LAH_LheldTie, each on the real outcomes plus 2 model scenarios (seeds of `p8exp`), baseline bundle vs optimised:
+  **0 differences in 2,760 totals** (and lock counts), with and without the re-solve memo (`pcbase` / `pcnew`, `pcnew2`).
+- **P10 and P10b**, real weeks on 14 team-weeks spread over the season (`pc10base` / `pc10new`): **0 differences**.
+- **Unit tests** 59/59 (`npm test`), including `tests/perf.test.ts`: 3,000 random matchings (ties, zero/negative weights,
+  partial open masks, random layouts and masks) against the original matcher — totals and slot maps equal; slotOrder
+  after an in-place edit; memo invalidation; `emax` equal bit for bit on 20,000 random inputs.
+
+### Speedups (idle machine, one process at a time; `research/perftimes.mjs` → `research/out/perftimes2.json`; w5 r1 unless noted)
+| run | baseline | optimised | speedup |
+|---|---|---|---|
+| P7H_LheldTie, real week (w5 r1 / w14 r4) | 14.8 s / 13.4 s | 2.85 s / 2.92 s | **5.2× / 4.6×** |
+| P2LAH_LheldTie, model week (the rule; app projections, P7H rollouts) | 1.32 ms | 0.36 ms | **3.7×** |
+| P8, real week incl. the week-start price solve | 4.14 s | 3.29 s | 1.26× |
+| P8, model week after the price solve | 31.9 ms | 21.9 ms | **1.46×** |
+| P8f, model week after the price solve | 5.33 ms | 4.34 ms | 1.23× |
+| P10, first day of a real week | 12.3 s | 9.96 s | 1.24× |
+| P10b, first day of a real week | 39.9 s | 27.6 s | **1.45×** |
+| bound evaluation (solver kernel), µs, 4 team-weeks | 16.5–20.8 | 13.1–16.6 | 1.26× |
+
+Under the 13-way parallel load of the season runs the ratios were similar (P7H 4.4×, P2LAH 2.2–2.7×, P8 1.3–1.4×).
+The rule family (live P7H decisions, every mass simulation of the app under p7h) is now ~4–5× cheaper. The P8 family is
+bound by the solver's arithmetic: what is left per evaluation is the required floating-point work (≈ 130 `exp` for the
+games' E[max] and P(X > t), a div + sqrt per coordinate in Adam, the min/prefix loops), with no allocation and < 3% GC.
+
+### 2. Would a Rust (napi / wasm) port pay? Measured: **no**
+The kernel worth porting is the bound evaluation (80–90% of P8/P8f/P10/P10b time; the rule family is now cheap).
+- **wasm, measured.** `research/kernel/boundasm.js` is an asm.js port of `tables` + `evaluate` (week-start instance) +
+  the Adam loop, line for line. V8 validates it ("use asm" → `%IsAsmWasmCode` = true) and compiles it with its
+  WebAssembly pipeline (TurboFan for wasm) — what a hand-written or Rust-generated wasm module gets, minus LLVM's own
+  optimisations. Same `Math.exp`/`pow`, so it is checked bit for bit: **the bound after 20,000 Adam iterations is
+  identical** to the TS solver on all 4 instances.
+
+  | instance | TS baseline µs/eval | **TS optimised** | **asm.js → wasm** | wasm, accessors not inlined |
+  |---|---|---|---|---|
+  | w5 r1 (B = 54) | 20.8 | **16.6** | **16.7** | 42.1 |
+  | w9 r3 (B = 43) | 16.5 | **13.1** | **13.2** | 34.2 |
+  | w14 r4 (B = 53) | 19.7 | **15.5** | **15.8** | 42.1 |
+  | w20 r5 (B = 51) | 19.9 | **15.6** | **16.1** | 40.5 |
+
+  wasm runs at **0.97–1.0× the speed of the optimised TS**: for scalar float loops over typed arrays V8's JS and wasm
+  back ends produce equivalent code. (Without manual inlining of the heap accessors wasm is 2.6× slower: V8 did not
+  inline small asm.js functions.)
+- **native (napi), not measurable tonight.** No Rust toolchain is installed, and compiling the ready C port
+  (`research/kernel/bound.c`, the same kernel; Rust would compile to the same LLVM IR modulo bounds checks) needs a
+  compiler call that this unattended session may not run (clang / cc / swiftc / cffi all go through an approval gate;
+  not circumvented). To measure it in a minute:
+  `clang -O3 -o research/kernel/bound research/kernel/bound.c -lm && research/kernel/bound research/kernel/inst_5_1.txt 20000`
+  vs `node research/dist/perfbench_new.cjs adam 5:1 20000` (instances: `node research/dist/perfbench_new.cjs export 5:1 research/kernel/inst_5_1.txt`).
+  Expected from the kernel's shape (scalar, branchy, `exp`-heavy, B ≈ 50): LLVM -O3 maybe 1.5–2.5× over V8
+  (auto-vectorised min and Adam loops, cheaper libm `exp`), i.e. ~1.4–1.9× on P10b end to end (Amdahl, 85% solver).
+- **Recommendation: do not port.**
+  1. wasm, the portable option (browser, worker threads, no per-platform builds), gives nothing — measured.
+  2. A native addon would at best give ~1.5–2× on the P8 family, at the price of per-platform native builds for the
+     Next.js server and worker threads, two implementations of the solver to keep in sync, and **loss of
+     reproducibility**: a native `exp`/`pow` differs from V8's in the last bits, so TS backtests would no longer
+     reproduce the app's decisions exactly (they do today: the wasm port matches bit for bit only because it calls V8's
+     own `Math.exp`).
+  3. Bigger levers exist without leaving TS: P10b's race is embarrassingly parallel (scenarios × candidates), and the
+     app already has a 12-worker pool — racing on workers would cut a decision ~8–10×, far more than a port; fewer
+     solver iterations (warm starts are good: early stopping on a stalled bound) is algorithmic and needs a backtest.
+
+### Reproduce
+```
+npx esbuild research/perfcheck.ts --bundle --platform=node --format=cjs --outfile=research/dist/perfcheck_new.cjs --log-level=error
+# baseline bundle: the same driver built against `git show 99f1a40:<engine files>` (research/scratch/base/, not committed)
+node research/runtasks.mjs research/dist/perfcheck_base.cjs pcbase "" "POLS=P8;P7H_LheldTie;P8f;P2LAH_LheldTie" NSC=2 PAR=13
+node research/runtasks.mjs research/dist/perfcheck_new.cjs pcnew2 "" "POLS=P8;P7H_LheldTie;P8f;P2LAH_LheldTie" NSC=2 PAR=13
+node research/runtasks.mjs research/dist/perfcheck_{base,new}.cjs pc10{base,new} "" "POLS=P10;P10b" NSC=0 PAR=14 TASKS=2:1,4:2,5:3,6:4,8:5,10:6,12:7,13:8,14:9,16:10,18:1,20:2,21:3,22:4
+cd research/out && python3 ../perfcmp.py pcbase pcnew2 && python3 ../perfcmp.py pc10base pc10new
+node research/perftimes.mjs research/out/perftimes2.json      # idle machine, sequential (perfbench/perfprof base+new bundles, asm kernel)
+node --cpu-prof --cpu-prof-dir=research/scratch/prof research/dist/perfprof_new.cjs 5 1 P7H_LheldTie && python3 research/profsum.py <profile> 30 [fn,fn]
+```
