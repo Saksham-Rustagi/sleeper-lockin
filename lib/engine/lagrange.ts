@@ -92,6 +92,8 @@ export interface Prepared {
   gl: number[][];                 // per player: game indices sorted by tip
   gA: Int32Array; gE: Int32Array; // per game: bucket index of tip / end
   masks: number[]; maskOf: Int32Array; eligOfMask: number[][];
+  elig?: Int32Array[];            // eligOfMask as typed arrays (hot loops)
+  minBuf?: Float64Array;          // scratch of tables()
   ws?: Tables; ews?: { slotDiff: Float64Array; maskDiff: Float64Array; occ: Float64Array; V: Float64Array }; // reusable workspaces
 }
 export function prepare(inst: LInstance): Prepared {
@@ -136,18 +138,20 @@ export function tables(P: Prepared, mu: Float64Array, reuse = false): Tables {
   const { inst, nS, nP, B, gl, gA, gE, masks, maskOf, eligOfMask } = P;
   const W = B + 1; const nM = masks.length;
   const ws = reuse ? P.ws : undefined;
+  const elig = P.elig ?? (P.elig = eligOfMask.map((el) => Int32Array.from(el)));
   // prefix sums per slot, and of the pointwise minimum over each eligibility mask (with its argmin slot)
   const Ps = ws ? ws.Ps : new Float64Array(nS * W);
-  for (let s = 0; s < nS; s++) for (let b = 0; b < B; b++) Ps[s * W + b + 1] = Ps[s * W + b] + mu[s * B + b];
+  for (let s = 0; s < nS; s++) { const o = s * W, om = s * B; let a = Ps[o]; for (let b = 0; b < B; b++) { a = a + mu[om + b]; Ps[o + b + 1] = a; } }
   const Pm = ws ? ws.Pm : new Float64Array(nM * W); const argm = ws ? ws.argm : new Int32Array(nM * B);
+  if (!P.minBuf || P.minBuf.length < B) P.minBuf = new Float64Array(B);
+  const mb = P.minBuf;
   for (let m = 0; m < nM; m++) {
-    const el = eligOfMask[m];
-    for (let b = 0; b < B; b++) {
-      let best = Infinity, bs = -1;
-      for (const s of el) if (mu[s * B + b] < best) { best = mu[s * B + b]; bs = s; }
-      if (bs < 0) best = Infinity; // no eligible slot at all
-      Pm[m * W + b + 1] = Pm[m * W + b] + best; argm[m * B + b] = bs;
-    }
+    // pointwise minimum over the eligible slots (slot-outer, bucket-inner; strict < keeps the first minimal slot)
+    const el = elig[m]; const ne = el.length; const o = m * W, oa = m * B;
+    mb.fill(Infinity, 0, B); argm.fill(-1, oa, oa + B);
+    for (let i = 0; i < ne; i++) { const s = el[i], os = s * B; for (let b = 0; b < B; b++) { const x = mu[os + b]; if (x < mb[b]) { mb[b] = x; argm[oa + b] = s; } } }
+    let a = Pm[o];
+    for (let b = 0; b < B; b++) { a = a + (argm[oa + b] < 0 ? Infinity : mb[b]); Pm[o + b + 1] = a; } // (no eligible slot at all: Infinity)
   }
   const intervalMin = (m: number, a: number, e: number): [number, number] => { // min over eligible slots of sum_{a<=b<e} mu
     let best = Infinity, bs = -1;
@@ -160,18 +164,25 @@ export function tables(P: Prepared, mu: Float64Array, reuse = false): Tables {
     const l = gl[p]; const n = l.length; const m = maskOf[p];
     if (!ws) { C.push(new Float64Array((n + 1) * 2)); start.push(new Uint8Array(n * 2)); gSlot.push(new Int32Array(n)); lSlot.push(new Int32Array(n).fill(-1)); kap.push(new Float64Array(n)); thr.push(new Float64Array(n)); }
     const Cp = C[p], st = start[p], gs = gSlot[p], ls = lSlot[p], kp = kap[p], th = thr[p];
-    if (!n || !eligOfMask[m].length) continue;
+    const el = elig[m], ne = el.length;
+    if (!n || !ne) continue;
     // backward DP: C[k*2+lp] = value just before tip-off k with nothing held, lp = played last game
     for (let k = n - 1; k >= 0; k--) {
       const g = inst.games[l[k]];
-      const [G, gsl] = intervalMin(m, gA[l[k]], gE[l[k]]); gs[k] = gsl;
+      // G = cheapest eligible slot for his game (intervalMin, inlined: no tuple per call)
+      const ga = gA[l[k]], ge = gE[l[k]];
+      let G = Infinity, gsl = -1;
+      for (let i = 0; i < ne; i++) { const o = el[i] * W; const c = Ps[o + ge] - Ps[o + ga]; if (c < G) { G = c; gsl = el[i]; } }
+      gs[k] = gsl;
       let kappa: number;
       if (k < n - 1) {
-        const nx = l[k + 1];
-        const H = Pm[m * W + gA[nx]] - Pm[m * W + gE[l[k]]];
-        const [L, lsl] = intervalMin(m, gA[nx], B); ls[k] = lsl;
+        const nx = l[k + 1]; const na = gA[nx];
+        const H = Pm[m * W + na] - Pm[m * W + ge];
+        let L = Infinity, lsl = -1;
+        for (let i = 0; i < ne; i++) { const o = el[i] * W; const c = Ps[o + B] - Ps[o + na]; if (c < L) { L = c; lsl = el[i]; } }
+        ls[k] = lsl;
         kappa = H + L;
-      } else kappa = Pm[m * W + B] - Pm[m * W + gE[l[k]]];
+      } else kappa = Pm[m * W + B] - Pm[m * W + ge];
       kp[k] = kappa;
       const c1 = Cp[(k + 1) * 2 + 1], c0 = Cp[(k + 1) * 2];
       th[k] = c1 + kappa; // after playing: keep (lock / hold to week end) iff x > thr
@@ -198,46 +209,48 @@ export interface Evaluation {
 
 // Bound and a subgradient (1 - occ) at mu. mu layout: mu[s*B + b] (points for the whole bucket).
 export function evaluate(P: Prepared, mu: Float64Array): Evaluation {
-  const { inst, nS, nP, B, gl, gA, gE, masks, maskOf, eligOfMask } = P;
-  const Tb = tables(P, mu, true); const { W, Ps, Pm, argm, intervalMin } = Tb;
+  const { inst, nS, nP, B, gl, gA, gE, masks, maskOf } = P;
+  const Tb = tables(P, mu, true); const { W, Ps, Pm, argm } = Tb; const elig = P.elig!;
   const nM = masks.length;
   if (!P.ews) P.ews = { slotDiff: new Float64Array(nS * W), maskDiff: new Float64Array(nM * W), occ: new Float64Array(nS * B), V: new Float64Array(nP) };
   const { slotDiff, maskDiff, V } = P.ews; slotDiff.fill(0); maskDiff.fill(0); V.fill(0);
   const { p1, p0 } = inst.dnp;
   const addSlot = (s: number, a: number, e: number, w: number) => { slotDiff[s * W + a] += w; slotDiff[s * W + e] -= w; };
   const addMask = (m: number, a: number, e: number, w: number) => { maskDiff[m * W + a] += w; maskDiff[m * W + e] -= w; };
+  const inits = inst.init;
   for (let p = 0; p < nP; p++) {
-    const init: PlayerInit = inst.init?.[p] ?? { kind: "free", lp: inst.lastPlayed0[p] ? 1 : 0 };
-    if (init.kind === "out") continue;
-    const l = gl[p]; const n = l.length; const m = maskOf[p]; if (!eligOfMask[m].length) continue;
+    const init: PlayerInit | undefined = inits?.[p];
+    const kind = init ? init.kind : "free";
+    if (kind === "out") continue;
+    const l = gl[p]; const n = l.length; const m = maskOf[p]; const el = elig[m], ne = el.length; if (!ne) continue;
     const C = Tb.C[p], start = Tb.start[p], gSlot = Tb.gSlot[p], lSlot = Tb.lSlot[p], thr = Tb.thr[p];
-    // keep a score from time-bucket a: hold to his next tip-off and lock (or hold to week end); returns charge
-    const keepCharge = (a: number): [number, number] => {
-      if (!n) return [Pm[m * W + B] - Pm[m * W + a], -1];
-      const [L, ls] = intervalMin(m, gA[l[0]], B);
-      return [Pm[m * W + gA[l[0]]] - Pm[m * W + a] + L, ls];
-    };
-    const addKeep = (a: number, ls: number, w: number) => {
-      if (!n) { addMask(m, a, B, w); return; }
-      addMask(m, a, gA[l[0]], w); addSlot(ls, gA[l[0]], B, w);
-    };
     let r0 = 0, r1 = 0; // mass free before his first future game, by lp
-    if (init.kind === "free") { V[p] = C[init.lp ? 1 : 0]; if (init.lp) r1 = 1; else r0 = 1; }
-    else if (init.kind === "held") {
-      const [kc, ls] = keepCharge(0); const keep = init.x - kc; const go = C[init.lp ? 1 : 0];
-      if (keep > go) { V[p] = keep; addKeep(0, ls, 1); } else { V[p] = go; if (init.lp) r1 = 1; else r0 = 1; }
-    } else {
-      // in a game, pinned to init.slot until init.end; then keep the score or let it go
-      const e = P.bucketOf.get(init.end)!;
-      const charge = Ps[init.slot * W + e] - Ps[init.slot * W];
-      const [kc, ls] = keepCharge(e);
-      const c1 = n ? C[1] : 0, c0 = n ? C[0] : 0; const th = c1 + kc;
-      const q = init.pPlay ?? (init.lp ? p1 : p0);
-      V[p] = -charge + q * (eMaxDist(init.dist, th) - kc) + (1 - q) * c0;
-      addSlot(init.slot, 0, e, 1);
-      const keep = q * pAbove(init.dist, th);
-      if (keep > 0) addKeep(e, ls, keep);
-      r1 = q - keep; r0 = 1 - q;
+    if (kind === "free") { const lp = init ? (init as { lp: number }).lp : inst.lastPlayed0[p] ? 1 : 0; V[p] = C[lp ? 1 : 0]; if (lp) r1 = 1; else r0 = 1; }
+    else {
+      // keeping a score from time-bucket a: hold to his next tip-off f0 and lock there in the cheapest slot kls (charge
+      // Pm(f0) - Pm(a) + kL), or hold to week end if he has no game left (charge Pm(B) - Pm(a))
+      const f0 = n ? gA[l[0]] : B;
+      let kL = 0, kls = -1;
+      if (n) { kL = Infinity; for (let i = 0; i < ne; i++) { const o = el[i] * W; const c = Ps[o + B] - Ps[o + f0]; if (c < kL) { kL = c; kls = el[i]; } } }
+      if (init!.kind === "held") {
+        const kc = n ? Pm[m * W + f0] - Pm[m * W + 0] + kL : Pm[m * W + B] - Pm[m * W + 0];
+        const keep = init!.x - kc; const go = C[init!.lp ? 1 : 0];
+        if (keep > go) { V[p] = keep; if (!n) addMask(m, 0, B, 1); else { addMask(m, 0, f0, 1); addSlot(kls, f0, B, 1); } }
+        else { V[p] = go; if (init!.lp) r1 = 1; else r0 = 1; }
+      } else {
+        const ig = init as Extract<PlayerInit, { kind: "inGame" }>;
+        // in a game, pinned to init.slot until init.end; then keep the score or let it go
+        const e = P.bucketOf.get(ig.end)!;
+        const charge = Ps[ig.slot * W + e] - Ps[ig.slot * W];
+        const kc = n ? Pm[m * W + f0] - Pm[m * W + e] + kL : Pm[m * W + B] - Pm[m * W + e];
+        const c1 = n ? C[1] : 0, c0 = n ? C[0] : 0; const th = c1 + kc;
+        const q = ig.pPlay ?? (ig.lp ? p1 : p0);
+        V[p] = -charge + q * (eMaxDist(ig.dist, th) - kc) + (1 - q) * c0;
+        addSlot(ig.slot, 0, e, 1);
+        const keep = q * pAbove(ig.dist, th);
+        if (keep > 0) { if (!n) addMask(m, e, B, keep); else { addMask(m, e, f0, keep); addSlot(kls, f0, B, keep); } }
+        r1 = q - keep; r0 = 1 - q;
+      }
     }
     // forward pass over his future games: expected occupancy of the optimal relaxed policy
     for (let k = 0; k < n; k++) {
@@ -283,42 +296,52 @@ export function minimizeBound(inst: LInstance, opts: { iters?: number; mu0?: Flo
   const P = prepare(inst);
   const n = P.nS * P.B; const iters = opts.iters ?? 4000; const patience = opts.patience ?? 30; const method = opts.method ?? "adam";
   let mu = opts.mu0 ? opts.mu0.slice() : new Float64Array(n);
-  const ev0 = evaluate(P, new Float64Array(n));
-  let ev = opts.mu0 ? evaluate(P, mu) : ev0;
-  let best = ev.bound, bestMu = mu.slice(), bestEv: Evaluation = { ...ev, occ: ev.occ.slice(), V: ev.V.slice() }; // (evaluate reuses its arrays)
+  // free (the bound at mu = 0) is only evaluated up front when the search starts there; a warm start computes it on
+  // demand (evaluate only reuses workspaces, so the order of evaluations doesn't change any result)
+  const ev0 = opts.mu0 ? null : evaluate(P, new Float64Array(n));
+  let ev = ev0 ?? evaluate(P, mu);
+  // best point so far, copied into preallocated arrays (evaluate reuses its arrays)
+  const bestMu = mu.slice(), bestOcc = ev.occ.slice(), bestV = ev.V.slice();
+  let best = ev.bound, bestReward = ev.reward;
   let delta = Math.max(1, 0.1 * best), stall = 0, it = 0;
   const g = new Float64Array(n), m1 = new Float64Array(n), m2 = new Float64Array(n);
   const lr0 = opts.lr ?? (method === "adam" ? 0.3 : method === "sqrt" ? 10 : 1);
   for (; it < iters; it++) {
     let gn = 0;
-    for (let i = 0; i < n; i++) { let gi = 1 - ev.occ[i]; if (mu[i] <= 0 && gi > 0) gi = 0; g[i] = gi; gn += gi * gi; }
+    const occ = ev.occ;
+    for (let i = 0; i < n; i++) { let gi = 1 - occ[i]; if (mu[i] <= 0 && gi > 0) gi = 0; g[i] = gi; gn += gi * gi; }
     if (gn < 1e-18) break; // zero projected subgradient: optimal
     if (method === "polyak") {
       const step = (ev.bound - best + delta) / gn;
       for (let i = 0; i < n; i++) { const v = mu[i] - step * g[i]; mu[i] = v > 0 ? v : 0; }
     } else if (method === "adam") {
       const lr = lr0 / Math.sqrt(1 + it / 100), b1 = 0.9, b2 = 0.999;
+      const c1 = 1 - b1 ** (it + 1), c2 = 1 - b2 ** (it + 1); // bias corrections (the same for every coordinate)
       for (let i = 0; i < n; i++) {
-        m1[i] = b1 * m1[i] + (1 - b1) * g[i]; m2[i] = b2 * m2[i] + (1 - b2) * g[i] * g[i];
-        const v = mu[i] - lr * (m1[i] / (1 - b1 ** (it + 1))) / (Math.sqrt(m2[i] / (1 - b2 ** (it + 1))) + 1e-8); mu[i] = v > 0 ? v : 0;
+        const gi = g[i];
+        const a1 = b1 * m1[i] + (1 - b1) * gi, a2 = b2 * m2[i] + (1 - b2) * gi * gi; m1[i] = a1; m2[i] = a2;
+        const v = mu[i] - lr * (a1 / c1) / (Math.sqrt(a2 / c2) + 1e-8); mu[i] = v > 0 ? v : 0;
       }
     } else {
       const step = lr0 / Math.sqrt(it + 1) / Math.sqrt(gn);
       for (let i = 0; i < n; i++) { const v = mu[i] - step * g[i]; mu[i] = v > 0 ? v : 0; }
     }
     ev = evaluate(P, mu);
-    if (ev.bound < best - 1e-9) { if (ev.bound < best - 0.1 * delta) stall = 0; else stall++; best = ev.bound; bestMu = mu.slice(); bestEv = { ...ev, occ: ev.occ.slice(), V: ev.V.slice() }; }
+    if (ev.bound < best - 1e-9) { if (ev.bound < best - 0.1 * delta) stall = 0; else stall++; best = ev.bound; bestReward = ev.reward; bestMu.set(mu); bestOcc.set(ev.occ); bestV.set(ev.V); }
     else stall++;
-    if (method === "polyak" && stall >= patience) { delta *= 0.5; stall = 0; mu = bestMu.slice(); ev = bestEv; if (delta < 1e-7 * Math.max(1, best)) { delta = Math.max(1, 0.1 * best) * 0.01; } }
+    if (method === "polyak" && stall >= patience) { delta *= 0.5; stall = 0; mu = bestMu.slice(); ev = { bound: best, reward: bestReward, occ: bestOcc, V: bestV }; if (delta < 1e-7 * Math.max(1, best)) { delta = Math.max(1, 0.1 * best) * 0.01; } }
   }
-  return { bound: best, mu: bestMu, iters: it, free: ev0.bound, P, at: bestEv };
+  const res = { bound: best, mu: bestMu, iters: it, P, at: { bound: best, reward: bestReward, occ: bestOcc, V: bestV } } as BoundResult;
+  if (ev0) res.free = ev0.bound;
+  else { let free: number | undefined; Object.defineProperty(res, "free", { enumerable: true, configurable: true, get: () => (free ??= evaluate(P, new Float64Array(n)).bound), set: (v: number) => { free = v; } }); }
+  return res;
 }
 // The schedule used for the season gap study: Adam (rate 0.3) then a refinement from the best point (rate 0.03).
 // On real team-weeks (B ~ 35-60 buckets) 2 x 200k iterations land within ~0.01 pts of 1M-iteration runs.
 export function tightBound(inst: LInstance, iters = 200000): BoundResult {
   const a = minimizeBound(inst, { method: "adam", lr: 0.3, iters });
   const b = minimizeBound(inst, { method: "adam", lr: 0.03, iters, mu0: a.mu });
-  return b.bound <= a.bound ? { ...b, free: a.free, iters: a.iters + b.iters } : a;
+  return b.bound <= a.bound ? { bound: b.bound, mu: b.mu, P: b.P, at: b.at, free: a.free, iters: a.iters + b.iters } : a;
 }
 
 // Expected perfect-hindsight score of one realised scenario: every player counts at most his best game, locked into

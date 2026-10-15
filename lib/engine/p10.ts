@@ -175,7 +175,7 @@ export const newStats = (): P10Stats => ({ decisions: 0, raced: 0, cands: 0, swi
 // base: the policy that plays the continuations (P8f or P8; its index.slot must be its own price state, e.g. "roll")
 export function p10Hooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], seed: number,
   realised: { actual: Float64Array; played: Uint8Array }, o: P10Opts = {}, stats: P10Stats = newStats()): E.Hooks & { stats: P10Stats } {
-  const r = E.rng(seed ^ 0x3c6ef372);
+  const r = E.rng(seed ^ 0x3c6ef372); const scratch = E.scratchState();
   return {
     stats,
     decideIndex: (st, t, evIdx, ctx) => {
@@ -188,7 +188,7 @@ export function p10Hooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], seed: n
         for (let k = 0; k < n; k++) {
           const scen = E.sampleScenario(tw, st, t, r, realised);
           alive.forEach((c, j) => {
-            const s2 = E.cloneState(st); applyIndexDecision(tw, s2, e, cs[c].d); seedPrices(tw, base.index?.slot ?? "roll");
+            const s2 = scratch(st); applyIndexDecision(tw, s2, e, cs[c].d); seedPrices(tw, base.index?.slot ?? "roll");
             out[j].push(E.simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total);
           });
         }
