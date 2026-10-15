@@ -1,0 +1,7 @@
+p10run 3 4 {"POLS":"P8;P8f;P9;P9b;P10","NSC":"2"}: IDENTICAL
+p10run 9 10 {"POLS":"P8;P8f;P9;P9b;P10","NSC":"2"}: IDENTICAL
+p10run 15 6 {"POLS":"P8;P8f;P9;P9b;P10","NSC":"2"}: IDENTICAL
+p10run 9 2 {"POLS":"P10b;P11","NSC":"0"}: IDENTICAL
+p11run 9 3 {"POLS":"P10;P11:beta=300","M":"100"}: IDENTICAL
+pregame season 9 4 2 {"KMAX":"32","ROUND":"16","BUDGET_S":"100000","KEVAL":"30"}: DIFFER at char 3804: old ...plan w9 r4 day 2 (tonight from Wed 8:00 PM; 32 scenarios, 2592 continuations, 38 s; lineup by P10b, continuations by P8-plan)\nTonight: Donte DiVincenzo (F, Wed... new ...plan w9 r4 day 2 (tonight from Wed 8:00 PM; 32 scenarios, 2592 continuations, 38.2 s; lineup by P10b, continuations by P8-plan)\nTonight: Donte DiVincenzo (F, W...
+gap 9 5 {"GAPPOLS":"P8,P8f","N":"20","N7":"2","ITERS":"20000"}: IDENTICAL

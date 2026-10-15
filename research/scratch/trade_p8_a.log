@@ -1,0 +1,9 @@
+TRADE: you MiningMath give [ 'Keegan Murray', 'Moussa Diabaté' ] | get [ 'Caleb Wilson' ] from DuggyDaman
+{"name":"Keegan Murray","team":"SAC","pos":"PF/SF","age":26,"years_exp":4,"injury":null,"ppg":20.7,"gp":1,"adp_dynasty":95.5,"dynValue":12,"owner":"MiningMath","slot":"active"}
+{"name":"Moussa Diabaté","team":"CHA","pos":"C","age":24,"years_exp":4,"injury":null,"ppg":17.7,"gp":1,"adp_dynasty":162.5,"dynValue":2.7,"owner":"MiningMath","slot":"active"}
+{"name":"Caleb Wilson","team":"CHI","pos":"PF/SF","age":20,"years_exp":0,"injury":null,"ppg":24.2,"gp":1,"adp_dynasty":26.8,"dynValue":55.1,"owner":"DuggyDaman","slot":"active"}
+
+YOUR base: 278.6 pts/wk over weeks 2,5,8,11,14,18,20
+  lose Keegan Murray alone: -2.16 ± 0.88
+  lose Moussa Diabaté alone: -0.46 ± 0.77
+  TRADE (2-for-1, open roster spot left empty): +1.26 ± 1.04   per week: w2:-5.6 w5:5.1 w8:0.9 w11:1.2 w14:3.0 w18:2.1 w20:2.2

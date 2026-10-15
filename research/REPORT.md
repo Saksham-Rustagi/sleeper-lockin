@@ -1847,3 +1847,117 @@ python3 ../summ_p11b.py risk p11/risk
   `HUMAN`; it was built separately so the running pipeline kept one consistent bundle.
 - **Drivers and outputs.** The drivers are `research/scratch/p11/pipeline*.mjs`. Single-draw tuning outputs from an
   earlier design (`p11/t25`, superseded) are kept; their P10 totals equal `p11/u25`'s completion 0 exactly.
+
+## P8 simulation repeatability (overnight 2026-10-15, task F)
+
+**Report.** Under `LOCKIN_ENGINE=p8`, two runs of `research/tradeeval.ts` (same seeds, N = 150) gave different
+numbers: "lose Moussa Diabaté alone" −2.00 ± 0.75 vs −0.14 ± 0.78; "trade, spot empty" +0.49 vs +1.42. p7h was
+repeatable.
+
+**Verdict.**
+- There was a real engine bug: an independent P8 simulation started mid-week depended on call order. It is fixed
+  (commit 75c7984).
+- It does **not** explain the tradeeval runs. At the asOf tradeeval uses (2026-10-19, preseason) every week starts at
+  event 0, a case the bug never touched.
+- Re-run tonight, tradeeval is repeatable to the last digit, on the old engine and on the fixed one (table below).
+  The manager's two runs (file times: Oct 14 evening) most likely saw different **inputs**.
+  - Rosters, injury tags and Sleeper projections are re-fetched during a run: in-memory TTLs are 1 min to 1 h
+    (`lib/live/sources.ts`).
+  - A P8 tradeeval run takes ~10–20 min; a p7h run takes seconds.
+  - The app's data logger recorded 357 injury-tag changes over Oct 12–14. It stopped at 07:38 UTC on Oct 14, so the
+    run window itself can't be checked.
+  - This cause is likely but not proven. Over two 8-minute probes tonight, the inputs and the P8 week values did not
+    change (`research/scratch/p8repeat_data*.log`).
+
+### The bug
+- **Where.** `simulate()` reset an index policy's price state (slot "top", "sim", ...) only at event 0 or with
+  `fresh`. A run started at `fromEv > 0` without `fresh` continued from whatever the slot's last run had left.
+- **What that state was.** Typically the end of the previous scenario's week: a view solved for a later time and a
+  different state.
+- **Affected.** Any independent mid-week P8 / P8f / P10 top-level run, e.g. `research/p10cmp.ts` with `ENG=p8` or
+  `p10` whenever `T.evIdx > 0`.
+- **Not affected.** The live app's projections, waivers, league odds and cut-offs: they use `simPolicy()`, which is
+  `fresh`. The live plan always got a new team-week per request.
+- **A second, minor dependence.** The week-start prices were solved with the `weekIters` of whichever policy first
+  touched the team-week. Only tests set `weekIters`.
+
+**Repro** (`research/scratch/p8repeat.ts`). Season week 5, one team, 6 model scenarios. Each run starts from the same
+mid-week state (40% of the games played), with no prefix simulation, as the live app and p10cmp do. Columns: how many
+of the 6 totals differ from the first pass when the pass is repeated, run in reverse order, or interleaved with
+another team.
+
+| policy | engine | again | reversed | interleaved | mean of the 6 totals |
+|---|---|---|---|---|---|
+| P8f `fresh` (slot "sim") | old | 0/6 | 0/6 | 0/6 | 313.38 |
+| P8f | old | **5/6** | **6/6** | **5/6** | 300.97 |
+| P8 | old | **3/6** | **2/6** | **1/6** | 309.36 |
+| P8f | fixed | 0/6 | 0/6 | 0/6 | 313.38 (= `fresh`) |
+| P8 | fixed | 0/6 | 0/6 | 0/6 | 319.28 |
+
+- Runs from event 0 were already repeatable (0/6 everywhere), and their totals are unchanged by the fix.
+- The stale prices were not just noise. P8f lost ~12 pts/week in this repro: decisions were priced from another
+  scenario's later state.
+
+### The fix (`lib/engine/p8.ts`, `lib/engine/core.ts`; no clamping)
+- **When a run keeps its slot's price state.** Only when it **continues** a run: the same `State` object, resumed at
+  the event index where the last run on that slot stopped. This is how chunked runs work: the live plan, replays,
+  the invariant checker stepping one event at a time.
+- **Explicit arming.** A slot can also be armed just before the run by `seedPrices` (rollouts), `restorePrices`
+  (p11run branches) or the new `continuePrices`.
+- **Every other run** starts from the week-start prices. Its result is then a pure function of (team-week, state,
+  event index, outcomes).
+- `fresh` still always resets.
+- Week-start prices are cached per `weekIters`.
+- `research/pregame.ts` continues one simulated week from copies of its state in two places. Both now call
+  `continuePrices` explicitly, so its results are unchanged.
+- **Regression test** (`tests/p8.test.ts`). Two team-weeks; P8, P8f and P8f `fresh`; mid-week and event-0 starts;
+  each pass repeated, reversed and interleaved with the other team. Also checks that a run stepped in daily chunks
+  equals the run in one go.
+  - The test fails on the old engine and passes on the fix.
+  - `npm test`: 68/68.
+
+### Backtests unaffected (checked)
+- **Why they can't be affected.**
+  - Index-policy season runs use `research/runtasks.mjs`: one process per team-week.
+  - Every top-level run starts at event 0 from `initState` (reset, as before).
+  - Rollouts (P9 / P10 / P11) seed their slot immediately before each continuation.
+  - The checker's one-event steps are continuations.
+- **The policies of one team-week share a process.** They share only the week-start prices (all at the default
+  `weekIters`) and the memo of warm re-solves, which is a pure function of its key. So order between them never
+  mattered.
+- **Empirical check.** Old (HEAD~1) vs fixed bundles on the same tasks (`research/scratch/oldnew.mjs`), outputs
+  compared with timings masked:
+
+| run | outputs |
+|---|---|
+| p10run, 3 team-weeks, P8; P8f; P9; P9b; P10, real outcomes + 2 model scenarios | identical |
+| p10run, week 9, P10b; P11 | identical |
+| p11run, week 9, P10 vs P11:beta=300 (save / restore price branches) | identical |
+| pregame, week 9 day 2 (KMAX = 32, KEVAL = 30) | identical |
+| gap, week 9, P8 and P8f on 20 model scenarios | identical |
+
+- **Conclusion.** No reported P8 / P8f / P9 / P10 / P11 backtest number changes.
+- **One possibly affected result.** Ad-hoc `research/p10cmp.ts` comparisons made at a mid-week asOf would have been
+  affected. None are in this REPORT.
+
+**tradeeval two-run repro** (LOCKIN_ENGINE=p8, N = 150, weeks 2,5,8,11,14,18,20; base 278.6 pts/wk in all runs):
+
+| run | lose Murray | lose Diabaté | trade, spot empty |
+|---|---|---|---|
+| old engine, run A | −2.16 ± 0.88 | −0.46 ± 0.77 | +1.26 ± 1.04 |
+| old engine, run B (concurrent) | −2.16 ± 0.88 | −0.46 ± 0.77 | +1.26 ± 1.04 |
+| fixed engine, runs A and B | −2.16 ± 0.88 | −0.46 ± 0.77 | +1.26 ± 1.04 |
+
+- **Recommendation for trade and waiver evaluations.** Snapshot the inputs once per evaluation, e.g. set
+  `LOCKIN_CACHE_DIR` and pre-warm, or build every variant from one fetched data set. Then a long P8 run can't mix
+  data from different hours. Not changed here: `lib/live` belongs to the live app's data path.
+
+### Reproduce
+```
+npx esbuild research/scratch/p8repeat.ts --bundle --platform=node --format=cjs --outfile=research/dist/p8repeat.cjs --log-level=error
+node research/dist/p8repeat.cjs 5 6 0.4          # week, scenarios, mid-week fraction (0 = event 0)
+node research/dist/p8repeat_live.cjs 2,5 30 p8   # live buildWeek + weekValues path (research/scratch/p8repeat_live.ts)
+node research/dist/p8repeat_data.cjs 8 2,5,8,11,14,18,20 10   # do the live inputs change between rebuilds?
+node research/scratch/runenv.cjs LOCKIN_ENGINE=p8 N=150 SKIPTHEM=1 NFA=0 "GIVE=Keegan Murray,Moussa Diabate" "GET=Caleb Wilson" research/dist/tradeeval.cjs
+node research/scratch/oldnew.mjs                 # old vs fixed bundles (research/dist/<script>_old.cjs / _new.cjs)
+```
