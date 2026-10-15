@@ -1961,3 +1961,87 @@ node research/dist/p8repeat_data.cjs 8 2,5,8,11,14,18,20 10   # do the live inpu
 node research/scratch/runenv.cjs LOCKIN_ENGINE=p8 N=150 SKIPTHEM=1 NFA=0 "GIVE=Keegan Murray,Moussa Diabate" "GET=Caleb Wilson" research/dist/tradeeval.cjs
 node research/scratch/oldnew.mjs                 # old vs fixed bundles (research/dist/<script>_old.cjs / _new.cjs)
 ```
+
+## Shipping P10b (overnight 2026-10-15, task G)
+**Problem.** Engine `p10b` switched *every* simulation in the app to P8f, not just the decisions: projections,
+Waivers, Matchups, IR and cut-offs, all 5–20× slower. Its notifier lock/hold/bench reminders were also not P10b's
+decisions: they were the best option of P8f rollouts.
+
+**Fix: engine `p10b` is now decision-only** (`lib/live/engine.ts`). The old behaviour is kept as `p10b-full`.
+- **What P10b decides:**
+  - the plan (P8 + the P10b race at every tip-off: start/sit, hold/lock/let go);
+  - replay;
+  - the hold/lock/bench call for each held score.
+- **How the hold/lock/bench call is made** (`advise.ts`, `engineCall`):
+  - it is P10b's decision at the plan's first tip-off, so the reminders now always agree with the plan's holds and
+    forfeits;
+  - the options' expected points are still shown, from the quick simulations;
+  - a disagreement or near-tie is stated in the reason.
+- **What stays on POLICY** (`simPolicy("p10b") === POLICY`): projections and win probability, Matchups, Waivers, IR,
+  lock cut-offs, and the options' quick simulations.
+- **Caches.**
+  - `fingerprint(x, "sim")` keys mass-simulation results by the simulation engine, so p10b shares p7h's entries.
+  - Advise and replay are keyed by the decision engine: `p10b+sim:p7h`, never the old `p10b` tag.
+  - p7h's fingerprints are byte-identical to before.
+- **Notifier** (`scripts/notify.ts`):
+  - logs the engine;
+  - with a race engine, precomputes last week's replay once per week in quiet hours (a P10b replay takes 3–5 min).
+
+**Checks.**
+- **Unit tests 71/71** (`tests/engine_select.test.ts` has 3 new tests plus extended ones). They cover:
+  - the split;
+  - p10b projections and cut-off simulations identical to p7h's;
+  - fingerprint scopes;
+  - each p10b call equal to an independently reproduced engine decision and consistent with the plan.
+- **Type check:** clean.
+- **Live code vs engine-v2 in one process on the same live contexts** (`research/scratch/g/p7h_equiv.ts`, 11/11 pass):
+  - with p7h: identical projections, full advice JSON and fingerprints;
+  - with p10b: identical projections, option values and mass-simulation fingerprints.
+- **End-to-end notifier run** (`research/scratch/g/notify_e2e.mjs`): `HOME` pointed at a scratch dir with
+  `"engine": "p10b"`, DRY_RUN. Cold 55.8 s (advise + forced Waivers + IR), next run 0.5 s.
+
+**Latency** (real league, week 1 of 2026-27; one process per view, 12 workers; live services running). The tip-off
+rows use week 1 simulated forward by POLICY to 10 min before that day's first tip-off.
+
+| view | p7h | **p10b** | p10b-full |
+|---|---|---|---|
+| /api/advise Tue week-1 noon, cold (plan + 2 × 20k projections) | 5.3 s | **13.6 s** | 136.7 s |
+| /api/advise now, cold / warm | 5.4 s / 2 ms | **14.1 s / 2 ms** | |
+| notifier advise, Wed tip-off (3 held, 8 tip-offs in 30 h) | 5.4 s | **42.1 s** (43.4 s under concurrent Matchups + Waivers) | 166.8 s |
+| notifier advise, Fri tip-off (6 held, 9 tip-offs) | 2.6 s | **12.4 s** | |
+| notifier advise, Sat tip-off (4 held, 7 tip-offs) | 1.1 s | **3.9 s** | |
+| Matchups cold / warm | shared entry | **30.1 s / 6 ms** | ≈ p8 (782 s) |
+| Waivers cold / warm | shared entry | **36.4 s / 2 ms** | ≈ p8 (1,186 s) |
+| IR cold / warm | shared entry | **5.6 s / 63 ms** | ≈ p8 (396 s) |
+| Replay 2025-26 weeks 5 / 12 / 20, cold | 2.9 / 1.6 / – s | **198 / 292 / 210 s** | |
+
+- **Shared entries confirmed.** The p7h runs of Matchups, Waivers and IR, started after p10b's, were cache hits
+  (0.1–0.4 s).
+- **Watchdog.** The worst notifier game-day run is about 1.5 min, against a 9-min limit. The replay precompute takes
+  3.3–4.9 min in quiet hours.
+- **Web.** The live web server shares the notifier's disk cache (`LOCKIN_CACHE_DIR` in its environment), so advise
+  and last week's replay are usually warm.
+  - Cold advise takes ≤ 45 s.
+  - A replay that was not precomputed takes 3–5 min on its first view. `next start` doesn't enforce `maxDuration`.
+- **Where the extra time goes.** All of it is the single-threaded P10b race, 1–7 s per planned tip-off.
+
+**Deployment.** See `DEPLOY_P10B.md`: files, config change, rollback, checklist.
+- **The rehearsal found a merge conflict.** lockin-live's watchdog commit (80192a5) is cherry-picked in engine-v2, and
+  an engine-v2 edit next to it made the merge conflict. That edit was moved, and the merge is now clean.
+- **A second problem: `next build` would have failed.** It type-checks `research/**/*.ts`, and a committed scratch
+  script imported an untracked folder. The script is now `@ts-nocheck`.
+- **Rehearsal** (throwaway clone of lockin-live in /tmp): **all OK**.
+  - The merge of engine-v2 is clean.
+  - `tsc` clean, `npm test` 71/71, `build:notify` OK.
+  - `next build` OK in 537 s. It was built with webpack and a symlinked node_modules, because turbopack rejects a
+    node_modules symlink outside the project and cloning node_modules took over 15 min. The live build uses
+    turbopack, on the same code and the same type check.
+
+```
+npx esbuild research/livecost_g.ts --bundle --platform=node --format=cjs --outfile=research/dist/livecost_g.cjs --log-level=error
+npx esbuild scripts/simworker.ts --bundle --platform=node --format=cjs --outfile=research/dist/simworker_g.cjs --log-level=error
+node research/livecost_g_run.mjs p7h:advise-tue:a7 p10b:advise-tue:a10 p10b:tick:T10w p10b:league:L p7h:league:L ...   # engine:view:cacheTag[:KEY=VAL]
+node research/scratch/g/extract_live.mjs && node research/scratch/runenv.cjs LOCKIN_NO_WORKERS=1 LOCKIN_CUTOFF_SIMS=2000 research/dist/p7h_equiv.cjs out.json
+node research/scratch/g/notify_e2e.mjs p10b 2     # needs research/dist/g/{notify,simworker}.cjs
+node research/scratch/g/rehearse.mjs /tmp/g_deploy2
+```
