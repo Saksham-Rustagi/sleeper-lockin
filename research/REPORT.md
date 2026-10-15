@@ -1139,11 +1139,28 @@ identical. CIs are clustered by team-week.
 | live P7H_LheldTie | 287.0 | 13.4 | −2.11 ± 1.35 | −1.38 ± 1.37 | 0 |
 | P2LAH_LheldTie | 281.3 | 19.2 | −7.90 ± 1.76 | −7.17 ± 1.62 | −5.79 ± 1.37 |
 
-**5 scenarios per team-week, with P10b:** still running.
+**5 scenarios per team-week, with P10b** (the first 5 of the same 10 scenarios, so all policies are paired; 230 model
+weeks per policy):
 
-- **Under the model**, P10 is the best policy so far, and it closes part of P8's remaining gap to the bound (10.6 vs 11.3).
-- Unlike P9 (−0.73 vs P8), its rollouts do not make P8 worse.
-- **Checker on these model weeks** (P10, 460 weeks): 0 L_ violations, 0 unforced let-gos, 0 idle benchings.
+| policy | model E | gap to the Lagrangian bound (300.5) | vs P8 | vs P9 | vs live P7H_LheldTie |
+|---|---|---|---|---|---|
+| **P10b** | **292.1** | **8.4** | **+1.60 ± 1.41** | **+3.43 ± 1.52** | **+3.45 ± 2.13** |
+| P10 | 290.5 | 9.9 | +0.05 ± 1.38 | +1.88 ± 1.69 | +1.89 ± 1.97 |
+| P8 | 290.5 | 10.0 | 0 | +1.83 ± 1.46 | +1.85 ± 2.18 |
+| P9 | 288.6 | 11.8 | −1.83 ± 1.46 | 0 | +0.01 ± 2.07 |
+| live P7H_LheldTie | 288.6 | 11.8 | −1.85 ± 2.18 | −0.01 ± 2.07 | 0 |
+| P2LAH_LheldTie | 281.5 | 18.9 | −8.98 ± 2.28 | −7.15 ± 2.30 | −7.14 ± 2.05 |
+
+P10b − P10 on these 230 model weeks: **+1.55 ± 1.36**.
+
+- **Under the model**, P10b is the best policy so far: it closes 1.6 of P8's 10.0 remaining points to the bound (8.4
+  left), and its edge over P8, P9 and live is significant on 5 scenarios per team-week.
+- P10 is the best on the 10-scenario set (+0.69 vs P8). On the 5-scenario subset it ties P8 (+0.05). Either way its
+  rollouts do not make P8 worse, unlike P9 (−0.73 / −1.83 vs P8).
+- **P8 continuations matter.** P10b − P10 is +1.55 ± 1.36 under the model, which is significant. On the real seasons it
+  is +0.42 ± 0.65 pooled. This supports the base choice that the pre-set rule made on 2025-26.
+- **Checker on these model weeks:** 0 L_ violations, 0 unforced let-gos and 0 idle benchings, for both P10 (460 weeks)
+  and P10b (230 weeks). F_deadline_benched is 0.45 / 0.40 per week and S_lock_wider is 0.04 per week for both.
 
 ### Rules and sanity (checker on every real team-week; model weeks from the gap runs)
 | check | P10b real 2025-26 (230) | P10b real 2024-25 (690) | P10 real 2025-26 (230) | P10 real 2024-25 (690) | P10 model (460 wk) | P8 real 2024-25 | P9 real 2024-25 |
@@ -1217,13 +1234,16 @@ identical. CIs are clustered by team-week.
   - it is ahead in both halves of both seasons and in all 3 synthetic leagues.
   - The 2025-26 result alone is borderline: its naive CI is ± 2.21.
   - P10b also beats P8 (+2.27 ± 0.60) and P9 (+1.35 ± 0.70) pooled, with no rule violations and no dominated actions.
+  - Under the model (46 team-weeks × 5 scenarios) it is +3.45 ± 2.13 vs live and +1.60 ± 1.41 vs P8, the smallest gap
+    to the Lagrangian bound so far (8.4 pts).
 - **Pre-registration.** No P10 parameter was tuned on season outcomes.
   - Racing settings were fixed before any season run, from a 4-team-week cost check.
   - The base was chosen by a rule fixed before the 2025-26 results.
   - The 2024-25 season is therefore an out-of-sample test. There it beat live by +3.30 and P8 by +2.33, more than on
     2025-26.
-- **P10b vs P10 is not settled:** +0.42 ± 0.65 pooled.
+- **P10b vs P10 is not settled on real outcomes:** +0.42 ± 0.65 pooled.
   - The rule picked P10b on 2025-26 (+0.85); 2024-25 agrees in direction (+0.31) but not significantly.
+  - Under the model, P10b − P10 is +1.55 ± 1.36, which is significant.
   - P10 also beats live pooled (+1.93 ± 1.34) at ~1/5 of P10b's decision cost.
 - **Recommendation.**
   - Make **`p10b`** the live engine if a few seconds per decision and minutes per plan refresh are acceptable.
