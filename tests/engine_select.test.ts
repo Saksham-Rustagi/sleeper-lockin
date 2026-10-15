@@ -7,7 +7,8 @@ import os from "os";
 import path from "path";
 import * as E from "../lib/engine/core";
 import { POLICY, type LiveTeam } from "../lib/live/week";
-import { engineName, resetEngineCache, decisionPolicy, simPolicy, planHooks, replayHooks, engineTag, P8_POLICY, objectiveName, winActive } from "../lib/live/engine";
+import { engineName, resetEngineCache, decisionPolicy, simPolicy, planHooks, replayHooks, engineTag, simTag, engineDecidesHolds, P8_POLICY, objectiveName, winActive } from "../lib/live/engine";
+import { computeAdvice, engineCall } from "../lib/live/advise";
 import { humanSnapshot, liveOppSource } from "../lib/live/opponent";
 import { fingerprint } from "../lib/live/cache";
 import { weekValues, lockWaitTotals } from "../lib/live/teamsim";
@@ -90,7 +91,7 @@ test("plan / replay hooks follow the engine", () => {
   assert.ok(h7?.decideStarts && !h7.decideIndex); assert.equal(h8, undefined); assert.ok(h9?.decideIndex);
   assert.ok(withEngine(undefined, undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real))?.decideLock);
   assert.equal(withEngine("p8", undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real)), undefined);
-  for (const e of ["p10", "p10b"]) {
+  for (const e of ["p10", "p10b", "p10b-full"]) {
     assert.ok(withEngine(e, undefined, () => planHooks(T.tw, T.events, 10, 1, T.real))?.decideIndex, `${e} plan hooks`);
     assert.ok(withEngine(e, undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real))?.decideIndex, `${e} replay hooks`);
     assert.equal(withEngine(e, undefined, engineName), e);
@@ -132,4 +133,72 @@ test("objective 'win': plan hooks play P11 against the opponent's snapshot; with
   assert.ok(h0?.decideIndex && !(h0 as any).stats?.win, "no opponent: P10");
   const hp = withObjective(undefined, { engine: "p10" }, () => planHooks(T.tw, T.events, 10, 1, T.real, undefined, liveOppSource(opp, asOf, 1, 200)));
   assert.ok(hp?.decideIndex && !(hp as any).stats?.win, "objective points: P10 even with an opponent");
+});
+
+// p10b ships as a split engine (task G): P10b decides, mass simulations stay on POLICY; the old all-P8f p10b is p10b-full
+test("p10b: decisions by P10b, mass simulations (projections, cut-offs) exactly p7h's; p10b-full keeps P8f", () => {
+  withEngine("p10b", undefined, () => {
+    assert.equal(decisionPolicy(), P8_POLICY); assert.equal(simPolicy(), POLICY); assert.ok(engineDecidesHolds());
+  });
+  withEngine("p10b-full", undefined, () => {
+    assert.equal(decisionPolicy(), P8_POLICY); assert.ok(simPolicy().index?.fresh, "p10b-full simulates with P8f"); assert.ok(!engineDecidesHolds());
+  });
+  for (const e of [undefined, "p8", "p9", "p10"]) assert.ok(!withEngine(e, undefined, () => engineDecidesHolds()), `${e ?? "p7h"} unchanged`);
+  const T = liveTeam(); const asOf = T0 + 12 * H;
+  const v7 = withEngine(undefined, undefined, () => weekValues(T, 60, 11, asOf));
+  assert.deepEqual(withEngine("p10b", undefined, () => weekValues(T, 60, 11, asOf)), v7, "p10b projections = p7h's");
+  assert.ok(Array.from(withEngine("p10b-full", undefined, () => weekValues(T, 60, 11, asOf))).some((x, k) => x !== v7[k]), "p10b-full projections differ");
+  const g = T.tw.byPlayer[2][0]; const tip = T.tw.games[g].tip;
+  const st0 = E.cloneState(T.st); st0.inGame[2] = g; st0.started[g] = 1; st0.pinned[1] = 2; st0.pinnedUntil[1] = T.tw.games[g].end; st0.lastSlot[2] = 1;
+  const ev0 = T.events.findIndex((e) => e.t > tip);
+  for (const mode of ["lock", "wait"] as const) {
+    const c7 = withEngine(undefined, undefined, () => lockWaitTotals(T, E.cloneState(st0), ev0, 2, g, 40, mode, 30, 3, asOf));
+    assert.deepEqual(withEngine("p10b", undefined, () => lockWaitTotals(T, E.cloneState(st0), ev0, 2, g, 40, mode, 30, 3, asOf)), c7, `p10b cut-off sims (${mode}) = p7h's`);
+  }
+});
+
+test("p10b cache fingerprints: mass simulations share p7h's entries, decisions have their own (also vs p10b-full)", () => {
+  const x = { v: 3, K: 20000, week: 7, team: { pids: ["1", "2"] } };
+  const raw = crypto.createHash("sha1").update(JSON.stringify(x)).digest("hex");
+  assert.equal(withEngine(undefined, undefined, () => fingerprint(x, "sim")), raw, "p7h sim fingerprints byte-identical");
+  assert.equal(withEngine(undefined, undefined, () => fingerprint(x)), raw, "p7h decision fingerprints byte-identical");
+  assert.equal(withEngine("p10b", undefined, () => fingerprint(x, "sim")), raw, "p10b projections / Waivers / Matchups / IR: p7h's cache entries");
+  const d10b = withEngine("p10b", undefined, () => fingerprint(x)), dFull = withEngine("p10b-full", undefined, () => fingerprint(x));
+  assert.ok(d10b !== raw && dFull !== raw && d10b !== dFull, "advise / replay: one entry per decision engine");
+  assert.notEqual(withEngine("p10b-full", undefined, () => fingerprint(x, "sim")), raw, "p10b-full simulates differently");
+  assert.equal(withEngine("p10b", undefined, () => engineTag()), "p10b+sim:p7h", "never the old p10b's tag");
+  assert.equal(withEngine("p8", undefined, () => fingerprint(x, "sim")), withEngine("p8", undefined, () => fingerprint(x)), "p8 unchanged: one tag");
+  assert.equal(withObjective(undefined, { engine: "p10b", objective: "win" }, () => fingerprint(x, "sim")), raw, "win changes decisions only");
+  assert.notEqual(withObjective(undefined, { engine: "p10b", objective: "win" }, () => fingerprint(x)), d10b);
+  assert.equal(withEngine("p10b", undefined, () => simTag()), undefined);
+});
+
+test("p10b advice: every hold / lock / bench call is P10b's decision at the first tip-off, consistent with the plan", async () => {
+  process.env.LOCKIN_NO_WORKERS = "1";
+  const T = liveTeam(); const asOf = T0 + 12 * H; const week = 3;
+  const ctx = { league: { name: "L" } as any, season: "2026", week, dates: [], asOf, mode: "live" as const, slotNames: T.tw.slotNames, me: T, opp: null, notes: [] };
+  const ms = new Float64Array([1, 2, 3]);
+  const with10b = async <R>(f: () => Promise<R>) => { process.env.LOCKIN_ENGINE = "p10b"; resetEngineCache(); try { return await f(); } finally { delete process.env.LOCKIN_ENGINE; resetEngineCache(); } };
+  const a = await with10b(() => computeAdvice(ctx, 40, ms, null));
+  assert.equal(a.decisions.length, 1, "A holds 30"); const d = a.decisions[0];
+  // the engine's decision, reproduced independently: P8 + the P10b race (plan hooks) on the plan's median path
+  const firstTip = a.plan[0].tip; assert.equal(firstTip, T0 + 24 * H);
+  const actual = T.real.actual.slice(), played = T.real.played.slice();
+  T.games.forEach((g) => { if (g.status !== "post") { actual[g.gi] = g.mu; played[g.gi] = 1; } });
+  const hooks = planHooks(T.tw, T.events, 200, 4242 + week, T.real, "p10b");
+  const st = E.simulate(T.tw, P8_POLICY, T.events, actual, played, E.cloneState(T.st), T.evIdx, hooks, firstTip).st;
+  const call = engineCall(st, 0);
+  assert.equal(d.recommended, call.action, d.reason);
+  if (call.action === "LOCK") assert.equal(T.tw.slots[T.tw.slotNames.indexOf(d.recommendedSlot!)], T.tw.slots[call.slot!]);
+  assert.match(d.reason, /^P10b/);
+  assert.ok(d.options.some((o) => o.action === d.recommended), "the call is one of the options shown");
+  const inHolds = a.plan[0].holds.some((h) => h.pid === "a"), forfeit = a.plan[0].forfeits.some((f) => f.player === "A");
+  if (d.recommended === "HOLD") assert.ok(inHolds); else if (d.recommended === "BENCH") assert.ok(forfeit); else assert.ok(!inHolds && !forfeit);
+  // engineCall: the three outcomes
+  const s = E.cloneState(T.st); assert.equal(engineCall(s, 0).action, "HOLD");
+  s.pendingX[0] = NaN; assert.equal(engineCall(s, 0).action, "BENCH");
+  const s2 = E.cloneState(T.st); E.doLock(s2, 0, 2); assert.deepEqual(engineCall(s2, 0), { action: "LOCK", slot: 2 });
+  // the default engine keeps its own rule (best quick-simulation option)
+  const a7 = await computeAdvice(ctx, 40, ms, null);
+  assert.doesNotMatch(a7.decisions[0].reason, /P10b/);
 });

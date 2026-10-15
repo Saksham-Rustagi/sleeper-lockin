@@ -8,7 +8,7 @@ import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS, simCutoff } from "./teamsim";
-import { decisionPolicy, simPolicy, planHooks, replayHooks, winActive, WIN_OPTS } from "./engine";
+import { decisionPolicy, simPolicy, planHooks, replayHooks, winActive, engineDecidesHolds, WIN_OPTS } from "./engine";
 import { liveOppSource } from "./opponent";
 import { betaAt } from "../engine/p11";
 
@@ -120,7 +120,16 @@ export function lockMoves(slotNames: string[], slots: number[], pmask: number[],
   return steps;
 }
 
-function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
+// The engine's own call for held score p at the plan's first tip-off (p10b): locked there -> LOCK (slot); let go
+// (no score, not playing) -> BENCH; otherwise HOLD (keeps holding, or plays his game tipping then).
+export function engineCall(st: E.State, p: number): { action: "LOCK" | "HOLD" | "BENCH"; slot: number | null } {
+  if (st.isLocked[p]) return { action: "LOCK", slot: Array.from(st.lockedBy).indexOf(p) };
+  if (Number.isNaN(st.pendingX[p]) && st.inGame[p] < 0) return { action: "BENCH", slot: null };
+  return { action: "HOLD", slot: null };
+}
+
+// eng (p10b): the state after the engine's decision at the plan's first tip-off; each recommendation is that decision
+function decisions(ctx: WeekContext, K: number, seed: number, eng?: { st: E.State; tip: number } | null): Decision[] {
   const T = ctx.me; const out: Decision[] = []; const r = E.rng(seed);
   // objective "win" (p10 / p10b): options scored by points + beta * P(beat the opponent simulated as a human)
   const D = winActive() ? liveOppSource(ctx.opp, ctx.asOf, seed ^ 0x5f3759df)?.dist(ctx.asOf) ?? null : null;
@@ -142,6 +151,14 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
       if (dup >= 0) alts[dup].slot = hereIdx; else alts.push({ action: "LOCK", slot: hereIdx });
     }
     if (!next) alts.splice(0, 2, { action: "HOLD", slot: null }); // final game: holding == auto-count
+    // the engine's call is always one of the options (a lock in a slot of the same type is the same decision: it
+    // keeps the slot he sits in when that one qualifies, as above)
+    const call = eng ? engineCall(eng.st, p) : null;
+    let ei = -1;
+    if (call) {
+      ei = alts.findIndex((a) => a.action === call.action && (call.slot === null || (a.slot !== null && T.tw.slots[a.slot] === T.tw.slots[call.slot])));
+      if (ei < 0) { alts.push({ action: call.action, slot: call.slot }); ei = alts.length - 1; }
+    }
     const pts = new Float64Array(alts.length); const win = new Float64Array(alts.length); const fw = new Float64Array(alts.length);
     for (let k = 0; k < K; k++) {
       const scen = E.sampleScenario(T.tw, T.st, ctx.asOf, r, T.real);
@@ -169,14 +186,23 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
       const hi = alts.findIndex((x) => x.action === "LOCK" && x.slot === hereIdx);
       if (hi >= 0 && options[hi].expPoints >= options[best].expPoints - 0.5) best = hi;
     }
+    const quick = best; if (ei >= 0) best = ei;
     const th = lockThreshold(T, E.cloneState(T.st), p, ctx.asOf);
     const o = options[best];
     const deadline = next ? next.tip : null;
     const lockOpt = options.filter((q) => q.action === "LOCK").sort((a, b) => b.expPoints - a.expPoints)[0];
     const hold = options.find((q) => q.action === "HOLD")!;
-    const reason = o.action === "LOCK" ? `Locking ${x.toFixed(1)} beats waiting by ${(o.expPoints - hold.expPoints).toFixed(1)} pts over the rest of the week.`
+    let reason = o.action === "LOCK" ? `Locking ${x.toFixed(1)} beats waiting by ${(o.expPoints - hold.expPoints).toFixed(1)} pts over the rest of the week.`
       : o.action === "HOLD" ? (next ? `Keep him in a starting slot (don't bench!) and decide before ${fmtTime(next.tip)}; locking now is worth ${lockOpt ? (lockOpt.expPoints - o.expPoints).toFixed(1) : "?"} pts vs holding.` : `This was his last game - leave him in a starting slot and it counts automatically.`)
       : `Free the slot for someone else: benching beats keeping ${x.toFixed(1)} by ${(o.expPoints - hold.expPoints).toFixed(1)} pts.`;
+    if (eng) {
+      // p10b decides; the quick simulations (rest of the week by the fast rule) are shown, and flagged when they disagree
+      const what = o.action === "LOCK" ? `lock ${x.toFixed(1)} now` : o.action === "BENCH" ? `let ${x.toFixed(1)} go (bench him)` : next ? `keep holding ${x.toFixed(1)} in a starting slot (don't bench!)` : `leave him in a starting slot - his last game counts automatically`;
+      const q = options[quick];
+      reason = `P10b (complete decision for the ${fmtTime(eng.tip)} tip-off, raced by simulation): ${what}.` + (alts[quick].action !== o.action
+        ? ` The quick simulations rate ${q.action === "LOCK" ? "locking" : q.action === "BENCH" ? "benching" : "holding"} ${(q.expPoints - o.expPoints).toFixed(1)} pts higher; P10b's search is the better-tested one (backtest +2.4 pts/wk).`
+        : "");
+    }
     const bestAlt = alts[best];
     const moves = o.action === "LOCK" && bestAlt.slot !== null
       ? lockMoves(ctx.slotNames, T.tw.slots, T.tw.pmask, T.names, T.pids, T.lineup, T.st, p, bestAlt.slot)
@@ -188,7 +214,8 @@ function decisions(ctx: WeekContext, K: number, seed: number): Decision[] {
   return out;
 }
 
-async function plan(ctx: WeekContext, hours: number): Promise<TipPlan[]> {
+// first (optional): receives the state right after the decision at the plan's first tip-off
+async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; tip?: number }): Promise<TipPlan[]> {
   const T = ctx.me; const out: TipPlan[] = [];
   // median path: unknown games score their mean, everyone plays
   const actual = T.real.actual.slice(); const played = T.real.played.slice();
@@ -205,6 +232,7 @@ async function plan(ctx: WeekContext, hours: number): Promise<TipPlan[]> {
   for (const tip of tips) {
     const res = E.simulate(T.tw, pol, T.events, actual, played, st, ev, startHooks, tip);
     st = res.st; ev = res.evIdx;
+    if (first && first0) { first0.st = E.cloneState(st); first0.tip = tip; }
     const groupGames = T.games.filter((g) => g.tip === tip);
     const starts: TipPlan["starts"] = []; const benched: TipPlan["benched"] = [];
     for (const g of groupGames) {
@@ -273,7 +301,8 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   return { ...value, cached, checkedAt: Date.now() };
 }
 
-async function computeAdvice(ctx: WeekContext, K: number, ms: Float64Array, os: Float64Array | null): Promise<Advice> {
+// (exported for tests and research/livecost: advice for a prepared WeekContext, no fetching, no cache)
+export async function computeAdvice(ctx: WeekContext, K: number, ms: Float64Array, os: Float64Array | null): Promise<Advice> {
   // Seed from the game state (finished games, locks, pending scores), not the clock: numbers only change when
   // something actually happens, instead of jittering on every refresh.
   let h = 2166136261 ^ ctx.week;
@@ -283,8 +312,16 @@ async function computeAdvice(ctx: WeekContext, K: number, ms: Float64Array, os: 
     T.st.lockedPts.forEach(mix); T.st.lockedBy.forEach(mix); T.st.pendingX.forEach((x) => mix(Number.isNaN(x) ? -1 : x));
   }
   const seed = h;
-  const ds = decisions(ctx, K, seed);
-  const pl = await plan(ctx, 30);
+  let ds: Decision[], pl: TipPlan[];
+  if (engineDecidesHolds()) {
+    // p10b: the plan's first tip-off decision (P10b's race) is also the hold / lock / bench call for every held score
+    const first: { st?: E.State; tip?: number } = {};
+    pl = await plan(ctx, 30, first);
+    ds = decisions(ctx, K, seed, first.st ? { st: first.st, tip: first.tip! } : null);
+  } else {
+    ds = decisions(ctx, K, seed);
+    pl = await plan(ctx, 30);
+  }
   return {
     generatedAt: Date.now(), asOf: ctx.asOf, mode: "live", league: ctx.league.name, season: ctx.season, week: ctx.week, dates: ctx.dates,
     me: teamView(ctx, ctx.me), opp: ctx.opp ? teamView(ctx, ctx.opp) : null, outlook: sharedOutlook(ms, os),
