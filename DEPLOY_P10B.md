@@ -206,3 +206,46 @@ Switch
   says "near-tie".
 - **Lock cut-offs.** The "lock if ≥ X" cut-offs are still computed with POLICY (as promised). They are a guide; the
   actual lock call is P10b's.
+
+## 8. Deploying the worker-thread race (task "P10b on worker threads", 2026-10-16)
+P10b's race now plays its continuations on 12 worker threads. **Decisions are bit-identical** to the single-thread race
+(tests, and 7/7 live views compared on the real league). Only the time changes. Details: REPORT "P10b on worker threads".
+
+**Files** (`git diff --stat lockin-live engine-v2 -- lib scripts tests app package.json`: these 7 files only, so the
+merge applies exactly them):
+- `lib/live/racepool.ts` (new): the pool, its fallbacks, and the worker side of the protocol.
+- `lib/engine/p10.ts`: the race's continuations can go to a pool (`P10Ext.pool`); scenarios are still drawn here.
+- `lib/engine/p8.ts`: `exportPrices` / `importPrices` (exact price views in the workers), `setMemoMax`.
+- `lib/engine/p11.ts`: passes the pool through (objective "win").
+- `lib/live/engine.ts`: the race engines use the pool; off-switch `"raceWorkers": 0`; measurement knob
+  `LOCKIN_RACE_KMAX` (unset = default 256).
+- `scripts/simworker.ts`: the worker bundle also answers race messages.
+- `tests/racepool.test.ts` (new, 5 tests; `npm test` 76/76).
+
+**Steps** (in the live checkout, as in §3):
+1. `git merge --no-ff engine-v2 -m "P10b race on worker threads"`, then `npx tsc --noEmit -p .` and `npm test` (76/76).
+2. **`npm run build:notify` is required.** It rebuilds `scripts/dist/simworker.cjs`, which the race workers load.
+   - With an old bundle, the app still works but races on one thread.
+   - It logs `[racepool] … predates the race protocol (rebuild: npm run build:notify)`.
+3. `npm run build` (web).
+4. **Restart both services** (web and notifier), the usual way.
+5. **Check:**
+   - The first race in each process logs `[racepool] 12 race workers from …/simworker.cjs (… ms)`.
+   - The notifier log shows `engine p10b: advice computed in N s`. N should be about 4–13 s on game days (was 4–45 s).
+   - A replay that isn't cached takes ~30–40 s (was 3–5 min).
+
+**Resources.**
+- 12 more worker threads per process that races (web, notifier), next to the projections' 12.
+- They start on the first race (~0.1 s) and stop after 10 min unused.
+- RSS while racing: 1.2–2.2 GB per process (single thread: ~0.8 GB).
+- CPU: all cores for the few seconds of a race; about +35–40% CPU time in total, for 3.5–7.5× less wall time.
+
+**Rollback.**
+- **Instant, no restart.** Add `"raceWorkers": 0` to `~/.sleeper-lockin/config.json`.
+  - It is re-read every 30 s, like `"engine"`.
+  - Races then run on one thread, with the same decisions as with workers.
+  - Env `LOCKIN_RACE_WORKERS=0` (or `LOCKIN_NO_WORKERS=1`) does the same, but needs a restart.
+- **Automatic.** If a worker fails or makes no progress for 60 s, the round is played on the main thread and the pool
+  is switched off for the life of that process. Decisions are identical either way.
+- **Code.** `git revert -m 1 <merge commit>`, then `npm run build:notify && npm run build` and restart both services.
+  - Cache entries stay valid: the fingerprints don't change, because the decisions don't.

@@ -1,5 +1,5 @@
 """P10b racing budget (kMax) study: paired real-outcome runs of research/p10run.ts (DECLOG=1) on a team-week sample.
-usage (from research/out): python3 ../summ_kmax.py <prefix> <BASE_POLICY> <POLICY,...> [<identity prefix>]
+usage (from research/out): python3 ../summ_kmax.py <prefix[,prefix...]> <BASE_POLICY> "<POLICY;POLICY;...>" [<identity prefix>]
 - totals: paired diff vs BASE_POLICY, naive and week-clustered 95% CI, better/worse, win% vs the real opponent
 - races: raced decisions / week, scenarios per race (mean, share at kMax), switches / week, continuations / race, s per raced
   decision (one process per team-week, 14 in parallel)
@@ -8,7 +8,7 @@ usage (from research/out): python3 ../summ_kmax.py <prefix> <BASE_POLICY> <POLIC
 - identity: BASE_POLICY totals vs the same policy in <identity prefix> (an earlier run of the same engine)"""
 import glob, json, math, os, statistics as st, sys
 
-pre, base, pols = sys.argv[1], sys.argv[2], sys.argv[3].split(",")
+pre, base, pols = sys.argv[1], sys.argv[2], sys.argv[3].split(";")
 ident = sys.argv[4] if len(sys.argv) > 4 else None
 S = json.load(open(os.environ.get("SEASON", "../data/season.json")))
 human = {(W["week"], str(r)): t["human_points"] for W in S["weeks"] for r, t in W["teams"].items() if t["human_points"] is not None}
@@ -16,9 +16,10 @@ opp = {}
 for W in S["weeks"]:
     for a, b in W["matchups"]: opp[(W["week"], str(a))] = (W["week"], str(b)); opp[(W["week"], str(b))] = (W["week"], str(a))
 R = {}
-for f in glob.glob(f"{pre}_*_*.json"):
-    r = json.load(open(f)); R[(r["week"], str(r["rid"]))] = r["pols"]
-keys = sorted(R)
+for pr in pre.split(","):
+    for f in glob.glob(f"{pr}_*_*.json"):
+        r = json.load(open(f)); R.setdefault((r["week"], str(r["rid"])), {}).update(r["pols"])
+keys = sorted(k for k in R if base in R[k] and all(p in R[k] for p in pols))
 print(f"{len(keys)} team-weeks ({pre})")
 if ident:
     same = diff = miss = 0

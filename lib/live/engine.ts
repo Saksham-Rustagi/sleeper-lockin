@@ -109,7 +109,7 @@ export function replayIsSlow(e: EngineName = engineName()): boolean { return RAC
 
 // P10 / P10b: raced complete decisions, continuations played by P8f / P8 on their own price state (K is not used: the
 // number of rollouts is adaptive). The races' continuations run on worker threads when available (lib/live/racepool.ts;
-// identical decisions, about 8-10x faster), else on this thread.
+// identical decisions; the race ~7x faster on 12 workers), else on this thread.
 const raceBase = (e: EngineName): E.Policy => p8Race(e) ? { ...P8_POLICY, index: { ...P8_POLICY.index!, slot: "roll" } } : { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } };
 // Measurement knob (not for live use): env LOCKIN_RACE_KMAX = the race's maximum number of scenarios (default 256); when
 // set, the decision results get their own cache entries (engineTag "+kMax=N").
