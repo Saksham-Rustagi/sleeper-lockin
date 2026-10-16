@@ -2450,3 +2450,104 @@ What the confirmation adds over simply lowering the race's threshold (same model
 - **It filters out the worthless switches.** It keeps the gain of a lower threshold with 43% fewer switches, because
   the switches it rejects are worth nothing on average. That is the "without adding flukes" part.
 - **Most of the gain comes from switching more often.** The confirmation adds only a little on top of that.
+
+### Validation: season backtests on real outcomes (prefixes `l/v25`, `l/v24`; baselines `s10`, `s24p10b`)
+**Result: the gate is not met. P10c does not ship.** The default engine and `p10b` are unchanged.
+
+| comparison | 2025-26 (230, real league) | 2024-25 (690, synthetic) | **pooled** (inverse variance, week-clustered) |
+|---|---|---|---|
+| P10c − P10b, pts/wk | +0.28 ± 1.50 (naive ± 1.16) | +0.10 ± 0.78 (naive ± 0.77) | **+0.14 ± 0.69** |
+
+| season | P10c pts/wk | P10b pts/wk | weeks 1–11 / 12–23 | better / worse team-weeks | league A / B / C | win% (P10b) |
+|---|---|---|---|---|---|---|
+| 2025-26 | 286.5 | 286.2 | −0.87 / +1.32 | 66 / 46 | | 68.2% vs the real opponents (68.2%) |
+| 2024-25 | 286.6 | 286.5 | −0.27 / +0.43 | 154 / 166 | +0.6 / +0.6 / −0.9 | 53.8% vs the live bot (53.1%) |
+
+- **Rules:** 0 L_ violations on all 920 team-weeks; recount = engine total everywhere. No dominated actions
+  (S_forfeit_unforced, S_idle_bench_exante 0). Final-game locks rise slightly (I_lock_final_game 0.16 → 0.21/wk,
+  0.17 → 0.20/wk), as expected from more lock switches.
+- **Reproducibility:** in the 9 + 47 team-weeks where the confirmation never changed a decision, P10c's total equals
+  P10b's (`s10` / `s24p10b`) exactly. The confirmation's stream leaves the race untouched, and the research path still
+  reproduces the published P10b runs.
+- **Run note:** one 2024-25 team-week (w6 r28) was missing after the pipeline, though the runner reported no failure. It
+  was rerun alone with the same command.
+
+**What the confirmation changed (per real week)**
+
+| season | confirmations | switches added | race switches vetoed | switches from P8's decision (P10b) | kinds switched | continuations: race + confirmation (P10b) |
+|---|---|---|---|---|---|---|
+| 2025-26 | 4.88 | **2.68** | 0 | 4.48 (2.30) | lock 3.43, out 0.71, in 0.30 | 21,450 + 1,250 (23,118) |
+| 2024-25 | 4.69 | **2.55** | 0 | 4.43 (2.28) | lock 3.38, out 0.71, in 0.29 | 19,211 + 1,200 (21,118) |
+
+- The confirmed candidates' race gain is +0.62 on average, their confirmation gain +0.06–0.07 (se 0.8). That is the
+  winner's curse again, now measured on real-season states.
+- **The confirmation's extra cost is +5–6% continuations.** The race itself needs slightly fewer, because the states
+  differ after earlier locks.
+- Decision time per week (single process, 12 jobs) was 236 / 181 s for P10c. It is not comparable with the P10b runs:
+  those predate task C's speed-ups and ran under 14 jobs.
+
+**Runner-up re-evaluation after the fix** (task H's statistic on P10c: the best challenger *not* chosen, when the
+race scored it > 0.25 better, re-scored against the chosen decision on 96 fresh scenarios; `FRESH=96`, own stream):
+
+| | task H (P10b) | **P10c 2025-26** | **P10c 2024-25** |
+|---|---|---|---|
+| decisions per week | 5.51 (2025-26) | 2.23 | 2.16 |
+| gain if always switched, pts/wk | +0.66 ± 0.44 (2024-25: +0.81 ± 0.64) | **−0.18 ± 0.23** | **−0.10 ± 0.12** |
+| "lock" runner-ups, per decision | +0.17 to +0.22 | −0.03 ± 0.12 | +0.02 ± 0.07 |
+| "out" runner-ups, per decision | −0.22 | −0.28 ± 0.22 | −0.26 ± 0.13 |
+
+- As intended, the one-step headroom the race leaves is gone: what remains is 0 or slightly negative, i.e. the race now
+  takes every one-step improvement the model can see.
+
+**Why the model's +1.18 did not materialise (exploratory, written after the results; `research/summ_l_diag.py`)**
+- Regress each team-week's P10c − P10b on its number of added switches. On real outcomes an added switch is worth
+  **+0.05 pts (95% CI −0.18 .. +0.28)**: 2025-26 −0.12, 2024-25 +0.10. The model's estimate, +0.38 per switch, lies
+  outside that CI.
+- At the first added switch both runs face identical states, but the week's difference shows no relation to the
+  confirmation's estimate at that switch (0–0.5: −0.30; 0.5–1: +1.27; 1–2: −0.51; > 2: +0.77; ± 1–4 each).
+- So the switches the model rates +0.2–0.4 each ("lock now" rather than keep holding) are worth about 0 on real
+  outcomes. Either the model's view of a held score's option value is off by that much (the model's week expectation
+  already runs 5–7 pts above real outcomes, Phase 3), or the one-step value (P8 continuations) does not carry over when
+  P10c also decides later. Real-outcome noise (paired SD ~6 pts per team-week) cannot separate a +0.1–0.2 pt/wk
+  effect: 920 team-weeks resolve ± 0.7.
+- Task H's "+0.5 pt/wk still on the table" was itself a model estimate (fresh *model* scenarios). This experiment
+  shows that it does not turn into real points, at least not resolvably.
+
+**Live path latency** (real league, 2026-27 week 1, 12 projection + 12 race workers, cold caches; `research/livecost_l_run.mjs`,
+outputs `research/scratch/l/`; run right after the backtests, load average ~3–16):
+
+| view | p10b | p10c | decisions |
+|---|---|---|---|
+| notifier tick Wed 6:50 pm (3 held, 8 tip-offs): total / advice (CPU) | 15.7 / 12.3 s (133 s) | 16.1 / 12.6 s (138 s) | first-tip-off calls identical; one later plan step differs |
+| tick Fri 6:50 pm | 6.0 / 4.3 s | 6.1 / 4.3 s | identical |
+| tick Sat 5:50 pm | 3.7 / 2.8 s | 3.6 / 2.7 s | identical |
+| replay 2025-26 week 12, cold (CPU) | 37.9 s (436 s) | 37.2 s (434 s) | differ (313.5 vs 325.5 pts; one week, anecdotal) |
+
+The confirmation costs ≤ 0.4 s per view on the worker pool. RSS is unchanged (1.1–2.2 GB).
+
+### Decision and recommendation
+- **Pre-registered gate:** a pooled 95% CI excluding 0 and 0 violations. Result: +0.14 ± 0.69 with 0 violations, so
+  **not met: keep `p10b` live.** No DEPLOY note was written. Nothing in the live app or its config was touched.
+- **Kept as an option:** `p10c` (engine option, `"engine": "p10c"`) and P10c (research policy), with the confirmation
+  options on `P10Opts`. They are safe: decisions are rule-clean, latency is the same, and P10c is at least not worse
+  (+0.14 ± 0.69). But they have no demonstrated gain.
+- **What this says about the race:** the 2-se acceptance rule was not leaving real points behind. The "rejected but
+  good" challengers were good under the model only.
+  - Further acceptance tuning should not be judged on model scenarios.
+  - Next, test the model's held-score option value against real outcomes. For example, compare its lock-now vs hold
+    valuations on real 2024-25 states with what happened (calibration of the hold option).
+  - This connects to ANALYSIS_H items 2–3: the bound gap, and hold priorities.
+
+### Reproduce
+```
+npx esbuild research/l_tune.ts --bundle --platform=node --format=cjs --outfile=research/dist/l_tune.cjs --log-level=error
+npx esbuild research/p10run.ts --bundle --platform=node --format=cjs --outfile=research/dist/p10run.cjs --log-level=error
+node research/launch_detached.mjs research/out/l/tune.log research/l_pipeline_tune.mjs     # 63 min, 12 processes
+python3 -E research/l_tune.py l/t25,l/t24 --top 30 > research/out/l/tune_summary.md && python3 -E research/l_tune_diag.py
+node research/launch_detached.mjs research/out/l/val.log research/l_pipeline_val.mjs v25 v24  # 1.3 h + 3.0 h, 12 processes
+cd research/out && python3 ../summ_pool.py s10,l/v25 s24p10b,l/v24 P10c:P10b && python3 ../summ_season.py s10,l/v25 P10c:P10b
+python3 ../summ_s24.py s24,s24p10b,l/v24 P10c:P10b && python3 ../summ_inv.py l/v25:P10c,s10:P10b,l/v24:P10c,s24p10b:P10b
+python3 -E ../summ_l.py && python3 -E ../summ_l_diag.py
+npx esbuild scripts/simworker.ts --bundle --platform=node --format=cjs --outfile=research/dist/simworker_l.cjs --log-level=error
+node research/livecost_l_run.mjs p10b:tick:bw:DAY=2026-10-21 p10c:tick:cw:DAY=2026-10-21 ... p10b:replay:br12:WEEK=12 p10c:replay:cr12:WEEK=12
+```

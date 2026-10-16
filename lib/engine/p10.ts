@@ -41,7 +41,8 @@ export interface P10Opts {
 const DEF: Required<P10Opts> = { nCand: 8, margin: 15, batch: 16, kMin: 32, kMax: 256, zDrop: 2, zAcc: 2, minGain: 0.5, pairs: true,
   confirm: 0, confGate: 0.5, confKinds: "lock", confMin: 0, confZ: 0, confAll: false };
 // P10c: P10b's race + the confirmation (fixed before the season backtests, from model-scenario tuning: REPORT "P10b acceptance fix")
-// (tuning: 138 model weeks, research/l_tune.py pick; +1.18 ± 0.29 pts/wk one-step, 1,400 extra continuations/wk = +6%)
+// (tuning: 138 model weeks, research/l_tune.py pick; +1.18 ± 0.29 pts/wk one-step, 1,400 extra continuations/wk = +6%.
+// Season validation vs P10b: +0.14 ± 0.69 pts/wk pooled, gate not met: not the live engine.)
 export const P10C_OPTS: P10Opts = { confirm: 128, confGate: 0.25, confKinds: "", confMin: 0, confZ: 0, confAll: false };
 const NEG = -Infinity;
 

@@ -25,6 +25,9 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 - `research/backtest.ts` + `research/btcommon.ts`: walk-forward backtest (no look-ahead; model fit on prior weeks only).
 - `research/waivers_bt.ts` + `research/wcommon.ts` + `research/w_run.mjs`: season-long waiver backtest of the Waivers
   page's valuation (task W, `research/WAIVERS_W.md`; datasets from `research/w_build.py`).
+- P10c / engine option `p10c` (task L, REPORT "P10b acceptance fix"; not shipped, gate not met): P10b + a fresh
+  confirmation batch for the race's best challenger (`confirm*` in `P10Opts`, `P10C_OPTS`). Probes on races:
+  `research/lprobe.ts` (tuning data `research/l_tune.ts`/`.py`; task H's runner-up statistic via `p10run` env FRESH=96).
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)
