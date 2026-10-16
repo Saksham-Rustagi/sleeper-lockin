@@ -23,6 +23,8 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
   at decision time). `lib/live/teamsim.ts`: shared simulation + worker threads. `lib/live/racepool.ts`: P10/P10b race
   continuations on their own worker threads (synchronous, bit-identical; research passes no pool = single thread).
 - `research/backtest.ts` + `research/btcommon.ts`: walk-forward backtest (no look-ahead; model fit on prior weeks only).
+- `research/waivers_bt.ts` + `research/wcommon.ts` + `research/w_run.mjs`: season-long waiver backtest of the Waivers
+  page's valuation (task W, `research/WAIVERS_W.md`; datasets from `research/w_build.py`).
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)

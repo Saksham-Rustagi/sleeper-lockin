@@ -2310,3 +2310,45 @@ node research/runtasks.mjs research/dist/p10run_w.cjs kmx "" "POLS=P10b;P10x:bas
 node research/runtasks.mjs research/dist/p10run_w.cjs kmxn "" "POLS=P10x:base=P8,rseed=1" DECLOG=1 PAR=14 TASKS=<same>   # 16 min
 cd research/out && python3 ../summ_kmax.py kmx,kmxn P10b "P10x:base=P8,rseed=1;P10x:base=P8,kMax=512;P10x:base=P8,kMax=1024" s10
 ```
+
+## Waivers page method: season-long waiver backtest (overnight 2026-10-16, task W)
+**Full write-up: `research/WAIVERS_W.md`** (design pre-registered in commit d5b9b38 before any result). No engine
+or live code changed.
+
+**Design.**
+- Every week, each team's real roster (2025-26: our league, 220 team-week decisions; 2024-25: three synthetic
+  leagues, 660) gets at most one add/drop from that week's real free agents, chosen before the week by each method.
+- The edited and the unedited roster are played on the real games by P8 (live P10b's base policy) over the 2 target
+  weeks (H2) and over the rest of the season while the pickup is kept (ROS).
+- New dataset: every player's games with full team schedules (`research/w_build.py`). `season_all.json` alone omits
+  free agents' DNPs.
+
+**Results** (pooled method minus current; P8 metric):
+
+| method | 2 weeks | rest of season |
+|---|---|---|
+| P8f simulations | +0.9 ± 2.2 | +1.4 ± 4.7 |
+| ROS term | −0.1 ± 1.4 | −0.8 ± 5.9 |
+| naive | −1.0 ± 2.1 | −1.3 ± 6.0 |
+
+- Live N = 2000 vs N = 300: +0.8 ± 2.0 / +3.7 ± 6.7 (2025-26 only).
+- A low-noise perfect-hindsight evaluator agrees with all of these.
+- **The current method stays. No config option was added (nothing won).**
+- P8f would also need a variant-parallel implementation to fit the 2-minute budget: 476 s on one thread, 61 s on
+  12 workers; POLICY takes 7 s at N = 300 and 44 s at N = 2000.
+
+**The method's value vs no move.**
+- 2024-25 (unmanaged rosters, good free agents left): **+8.8 ± 3.7** over 2 weeks, **+32 ± 13** over the rest of
+  the season. Predictions are 75–80% realized.
+- Our real league: **−1.6 ± 3.6** / −0.9 ± 13.8 (hindsight +1.0 ± 1.8), against +8.4 predicted.
+- The free agents left in our league are rotation players: the page's adds played 59% of their games and scored
+  9.0 per game against a projected 23.9. The pre-week model has no injury or rotation information for them.
+
+**Valuation sanity.**
+- In 58–71% of the current method's picks, the drop by itself is valued as a gain. In 72–88%, the move is worth
+  more than the add alone: the search selects POLICY's non-monotonicity and noise.
+- At N = 2000, 4.3% of all drop evaluations show a significant gain.
+- P8f halves the nonsense, but not the real outcome.
+
+**Exploratory, added after the results.** Capping play probability at the player's recent availability gave
++8.0 ± 5.5 vs current on 2025-26 but −2.6 ± 3.8 on 2024-25. It did not replicate.

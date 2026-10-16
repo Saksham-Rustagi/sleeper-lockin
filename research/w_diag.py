@@ -19,11 +19,11 @@ for sname, pref, afile in (("2025-26", "w25", "research/data/w/all2025.json"), (
             pre[(p, g["tip"])] = g["proj_sleeper"] if g["proj_sleeper"] is not None else last if last is not None else (sum(acts[-10:]) / len(acts[-10:]) if acts else 12)
             if g["proj_sleeper"] is not None: last = g["proj_sleeper"]
             if g["played"]: acts.append(g["actual"])
-    rows = [r for f in glob.glob(f"research/out/w/{pref}_d_*.json") for r in json.load(open(f))]
-    for m in ("policy", "naive"):
+    rows = [r for x in ("", "p8f", "a") for f in glob.glob(f"research/out/w/{pref}{x}_d_*.json") for r in json.load(open(f))]
+    for m in ("policy", "p8f", "policyA", "naive"):
         acc = {"add": [[], [], []], "drop": [[], [], []]}
         for r in rows:
-            p = r["methods"][m]["pick"]
+            p = r["methods"].get(m, {}).get("pick")
             if not p: continue
             for role in ("add", "drop"):
                 if not p[role]: continue
@@ -31,6 +31,7 @@ for sname, pref, afile in (("2025-26", "w25", "research/data/w/all2025.json"), (
                     for g in games.get((p[role], w), []):
                         acc[role][0].append(pre[(g["pid"], g["tip"])]); acc[role][1].append(g["actual"] if g["played"] else 0); acc[role][2].append(g["played"])
         for role, (pr, ac, pl) in acc.items():
+            if not pr: continue
             print(f"{sname} {m:7s} {role:4s}: {len(pr):5d} games  projection {st.mean(pr):5.1f}  actual {st.mean(ac):5.1f} (played {st.mean(pl):.0%}, "
                   f"{st.mean([a for a, q in zip(ac, pl) if q]):.1f} when played)")
 
