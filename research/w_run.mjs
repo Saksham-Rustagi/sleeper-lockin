@@ -11,7 +11,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 const kvs = rest.filter((x) => /^[A-Z0-9_]+=/.test(x)); const pos = rest.filter((x) => !/^[A-Z0-9_]+=/.test(x));
 const seasonEnv = (y) => y === "2024" ? { SEASON: path.resolve("research/data/season2024.json"), WALL: path.resolve("research/data/w/all2024.json") }
   : { SEASON: path.resolve("research/data/season.json"), WALL: path.resolve("research/data/w/all2025.json") };
-const BUNDLE = "research/dist/waivers_bt.cjs";
+const BUNDLE = kvs.find((x) => x.startsWith("W_BUNDLE="))?.slice(9) || process.env.W_BUNDLE || "research/dist/waivers_bt.cjs";
 const mkEnv = (y) => { const env = { ...process.env, ...seasonEnv(y) }; for (const x of kvs) { const i = x.indexOf("="); env[x.slice(0, i)] = x.slice(i + 1); } return env; };
 const OUT = "research/out/w"; fs.mkdirSync(OUT, { recursive: true });
 
@@ -48,7 +48,8 @@ if (cmd === "one") {
   const leagues = [...new Set(Object.values(A.leagueOf))].sort().filter((l) => !env.LEAGUES || env.LEAGUES.split(",").includes(l));
   const tasks = [];
   // SPLIT=team: one process per team-week (expensive methods), else one per (week, league)
-  for (let w = a; w <= (b ?? a); w++) for (const lg of leagues) {
+  const weekList = env.WEEKLIST ? env.WEEKLIST.split(",").map(Number) : Array.from({ length: (b ?? a) - a + 1 }, (_, i) => a + i);
+  for (const w of weekList) for (const lg of leagues) {
     const rids = env.SPLIT === "team" ? Object.keys(A.leagueOf).filter((r) => A.leagueOf[r] === lg) : [null];
     for (const rid of rids) {
       const out = `${OUT}/${prefix}_d_${w}_${lg}${rid ? "_" + rid : ""}.json`; if (fs.existsSync(out)) continue;
@@ -57,6 +58,19 @@ if (cmd === "one") {
   }
   // longest first (later weeks have the same cost; mixing leagues keeps memory even)
   await runAll(tasks, env, Number(env.PAR || 12));
+} else if (cmd === "score2") {
+  // secondary evaluators (hindsight ceiling, POLICY) for every roster-week the P8 scoring has scored: <prefix>_h_<i>.json
+  const [prefix, y] = pos; const env = { ...mkEnv(y), EVAL: "hp" };
+  const done = new Set(); const need = new Set();
+  for (const f of fs.readdirSync(OUT)) {
+    if (new RegExp(`^${prefix}_h_\\d+\\.json$`).test(f)) for (const k of Object.keys(JSON.parse(fs.readFileSync(`${OUT}/${f}`, "utf8")).res)) done.add(k);
+    if (new RegExp(`^${prefix}_s\\d+_\\d+\\.json$`).test(f)) for (const k of Object.keys(JSON.parse(fs.readFileSync(`${OUT}/${f}`, "utf8")).res)) need.add(k);
+  }
+  const all = [...need].filter((k) => !done.has(k)).map((k) => { const [w, rid, p] = k.split("|"); return { w: Number(w), rid, pids: p.split(","), k }; });
+  let i = 0; while (fs.existsSync(`${OUT}/${prefix}_h_${i}.json`)) i++;
+  const jf = `${OUT}/${prefix}_hj_${i}.json`; fs.writeFileSync(jf, JSON.stringify(all));
+  console.log(`secondary evaluators: ${all.length} roster-weeks`);
+  await runAll([{ args: ["score", jf, `${OUT}/${prefix}_h_${i}.json`] }], env, 1);
 } else if (cmd === "score") {
   const [prefix, y] = pos; const env = mkEnv(y); const S = JSON.parse(fs.readFileSync(env.SEASON, "utf8"));
   const LAST = Math.max(...S.weeks.map((W) => W.week));

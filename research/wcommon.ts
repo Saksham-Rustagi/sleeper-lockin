@@ -73,22 +73,23 @@ export function teamWeekFor(pids: string[], w: number, model: Model, lastPlayedT
 // Scenario k: per-player stream keyed by (pid, k, salt) exactly like lib/live/teamsim.ts, so a player has the same
 // draws in every roster variant (add / drop differences are paired).
 function hashStr(s: string) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
-export function scenario(tw: E.TeamWeek, pids: string[], k: number, salt: number) {
+// p1cap (exploratory variant policyA): per-player cap on P(play | played last), e.g. his recent played share
+export function scenario(tw: E.TeamWeek, pids: string[], k: number, salt: number, p1cap?: number[]) {
   const actual = new Float64Array(tw.games.length), played = new Uint8Array(tw.games.length);
   pids.forEach((pid, i) => {
     const r = E.rng(hashStr(pid) ^ Math.imul(k + 1, 2654435761) ^ salt);
-    let last = tw.lastPlayed0[i];
+    let last = tw.lastPlayed0[i]; const p1 = p1cap ? Math.min(tw.dnp.p1, p1cap[i]) : tw.dnp.p1;
     for (const gi of tw.byPlayer[i]) {
       const g = tw.games[gi]; const u1 = r(), u2 = r(), u3 = r();
-      const pl = u1 < (last ? tw.dnp.p1 : tw.dnp.p0) ? 1 : 0;
+      const pl = u1 < (last ? p1 : tw.dnp.p0) ? 1 : 0;
       const z = Math.sqrt(-2 * Math.log(Math.max(u2, 1e-12))) * Math.cos(2 * Math.PI * u3);
       played[gi] = pl; actual[gi] = pl ? Math.max(-5, g.mu + g.sd * z) : 0; last = pl;
     }
   });
   return { actual, played };
 }
-export function simValues(tw: E.TeamWeek, pids: string[], pol: E.Policy, N: number, salt: number): Float64Array {
+export function simValues(tw: E.TeamWeek, pids: string[], pol: E.Policy, N: number, salt: number, p1cap?: number[]): Float64Array {
   const ev = E.buildEvents(tw, pol.chain); const v = new Float64Array(N);
-  for (let k = 0; k < N; k++) { const sc = scenario(tw, pids, k, salt); v[k] = E.simulate(tw, pol, ev, sc.actual, sc.played, E.initState(tw), 0).total; }
+  for (let k = 0; k < N; k++) { const sc = scenario(tw, pids, k, salt, p1cap); v[k] = E.simulate(tw, pol, ev, sc.actual, sc.played, E.initState(tw), 0).total; }
   return v;
 }

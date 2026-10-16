@@ -47,13 +47,15 @@ function decideWeek(w: number, league: string) {
     const R = (p: string) => { const tm = W.teamAt(p, T); let s = 0; for (let x = w + 2; x <= W.LAST_WEEK; x++) s += (x >= PLAYOFF ? PLAYOFF_W : 1) * W.teamGamesIn(tm, x); return s * Math.max(0, model.a + model.b * ppg(p)) * W.availability(p, T); };
 
     // simulated value of a roster variant over the 2 weeks (paired draws per player)
-    const sims = (pol: E.Policy, N: number) => {
+    // capped (exploratory policyA, added after the results): P(play | played last) capped by the player's recent played share
+    const sims = (pol: E.Policy, N: number, capped = false) => {
       const cache = new Map<string, Float64Array[]>(); let n = 0;
       const get = (e: Edit) => {
         const k = key(e); let v = cache.get(k);
         if (!v) {
           const pids = roster.filter((p) => p !== e.drop).concat(e.add ? [e.add] : []);
-          v = weeks.map((x) => { const { tw } = W.teamWeekFor(pids, x, model, T); return W.simValues(tw, pids, pol, N, x * 7919); });
+          const cap = capped ? pids.map((p) => W.availability(p, T)) : undefined;
+          v = weeks.map((x) => { const { tw } = W.teamWeekFor(pids, x, model, T); return W.simValues(tw, pids, pol, N, x * 7919, cap); });
           cache.set(k, v); n++;
         }
         return v;
@@ -91,7 +93,11 @@ function decideWeek(w: number, league: string) {
     for (const m of METHODS) {
       const t1 = Date.now();
       if (m === "policy" || m === "policy2000") { const s = m === "policy" ? (sPol ??= sims(POLICY, NPOL)) : sims(POLICY, 2000); row.methods[m] = { ...pageSearch(s, () => 0, () => 0, pool1), variants: s.count() }; }
-      else if (m === "p8f") { const s = sims(SIMP8F, NP8F); row.methods[m] = { ...pageSearch(s, () => 0, () => 0, pool1), variants: s.count() }; }
+      else if (m === "policyA") {
+        const vA = (p: string) => window(p).reduce((s, g) => s + Math.min(pk(p), W.availability(p, T)) * Math.max(0, model.a + model.b * g.pre!), 0);
+        const poolA = fas.map((p) => [p, vA(p)] as [string, number]).sort((a, b) => b[1] - a[1]).slice(0, POOL).map(([p]) => p);
+        const s = sims(POLICY, NPOL, true); row.methods[m] = { ...pageSearch(s, () => 0, () => 0, poolA), variants: s.count(), pool: poolA };
+      } else if (m === "p8f") { const s = sims(SIMP8F, NP8F); row.methods[m] = { ...pageSearch(s, () => 0, () => 0, pool1), variants: s.count() }; }
       else if (m === "ros") {
         const s = (sPol ??= sims(POLICY, NPOL));
         const pool3 = [...new Set([...pool1, ...fas.map((p) => [p, v2(p) + LAMBDA * R(p)] as [string, number]).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([p]) => p)])];
@@ -120,12 +126,21 @@ export function realTotal(w: number, pids: string[]) {
   return E.simulate(tw, P8, E.buildEvents(tw, P8.chain), real.actual, real.played, E.initState(tw), 0).total;
 }
 
+function secondaryTotals(w: number, pids: string[]) {
+  if (!models.has(w)) models.set(w, W.fitModel(w));
+  const { tw, real } = W.teamWeekFor(pids, w, models.get(w)!, W.weekStart(w));
+  const pol = E.simulate(tw, POLICY, E.buildEvents(tw, POLICY.chain), real.actual, real.played, E.initState(tw), 0).total;
+  return [Math.round(E.hindsight(tw) * 100) / 100, Math.round(pol * 100) / 100];
+}
+
 if (mode === "decide") {
   const [w, lg, outFile] = [Number(process.argv[3]), process.argv[4], process.argv[5]];
   fs.writeFileSync(outFile, JSON.stringify(decideWeek(w, lg)));
 } else if (mode === "score") {
   const jobs: { w: number; rid: string; pids: string[]; k: string }[] = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
   const res: Record<string, number> = {}; const t0 = Date.now();
-  for (const j of jobs) res[j.k] = Math.round(realTotal(j.w, j.pids) * 100) / 100;
+  // EVAL=hp: secondary low-noise evaluators [perfect-hindsight lineup ceiling, POLICY on real outcomes] (added after the
+  // P8 metric turned out too noisy; not part of the pre-registered gate)
+  for (const j of jobs) res[j.k] = process.env.EVAL === "hp" ? secondaryTotals(j.w, j.pids) as any : Math.round(realTotal(j.w, j.pids) * 100) / 100;
   fs.writeFileSync(process.argv[4], JSON.stringify({ res, ms: Date.now() - t0, n: jobs.length }));
 }
