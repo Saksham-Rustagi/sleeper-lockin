@@ -25,6 +25,7 @@ import { indexRolloutHooks } from "../engine/p8";
 import { p10Hooks } from "../engine/p10";
 import { p11Hooks, type OppSource, type P11Opts } from "../engine/p11";
 import { POLICY } from "./week";
+import { liveRacePool } from "./racepool";
 
 export type EngineName = "p7h" | "p8" | "p9" | "p10" | "p10b" | "p10b-full";
 export const ENGINES: EngineName[] = ["p7h", "p8", "p9", "p10", "p10b", "p10b-full"];
@@ -100,15 +101,16 @@ export function engineDecidesHolds(e: EngineName = engineName()): boolean { retu
 export function replayIsSlow(e: EngineName = engineName()): boolean { return RACE.includes(e); }
 
 // P10 / P10b: raced complete decisions, continuations played by P8f / P8 on their own price state (K is not used: the
-// number of rollouts is adaptive)
+// number of rollouts is adaptive). The races' continuations run on worker threads when available (lib/live/racepool.ts;
+// identical decisions, about 8-10x faster), else on this thread.
 const raceBase = (e: EngineName): E.Policy => p8Race(e) ? { ...P8_POLICY, index: { ...P8_POLICY.index!, slot: "roll" } } : { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } };
 const p10 = (tw: E.TeamWeek, events: E.Ev[], seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName) =>
-  p10Hooks(tw, raceBase(e), events, seed, real);
+  p10Hooks(tw, raceBase(e), events, seed, real, {}, undefined, { pool: liveRacePool });
 // Hooks for the start decisions of the plan: p7h start/sit simulations; p8 none (the index policy decides);
 // p9 rollouts over the index decision played by P8f; p10 / p10b / p10b-full raced complete decisions.
 // With objective "win" (race engines) and an opponent: P11 (the race plays for the win against the opponent's distribution).
 export function planHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName = engineName(), opp?: OppSource | null): E.Hooks | undefined {
-  if (opp && winActive(e)) return p11Hooks(tw, P8_POLICY, raceBase(e), events, seed, real, opp, WIN_OPTS);
+  if (opp && winActive(e)) return p11Hooks(tw, P8_POLICY, raceBase(e), events, seed, real, opp, WIN_OPTS, undefined, liveRacePool);
   if (e === "p7h") return E.startRolloutHooks(tw, POLICY, events, K, seed, real);
   if (e === "p9") return indexRolloutHooks(tw, { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } }, events, K, seed, real);
   if (RACE.includes(e)) return p10(tw, events, seed, real, e);

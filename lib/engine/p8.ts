@@ -40,7 +40,8 @@ export interface IndexOpts {
 // before by seedPrices / restorePrices / continuePrices (rollouts, research branches). Every other run starts from the
 // week-start prices, so its result is a pure function of (team-week, state, event index, outcomes): independent of what
 // was simulated before (P8 simulation repeatability, REPORT).
-interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number; id: number; tilt: number }
+// st0: the state the view was solved from (with t0, tilt and the prices it rebuilds the view exactly: exportPrices)
+interface View { Tb: L.Tables; si: L.StateInstance; t0: number; bound: number; id: number; tilt: number; st0: E.State }
 // cur null = the week-start prices (solved on first use, per weekIters)
 interface PriceSlot { cur: View | null; day: number; ends: number; armed: boolean; st: E.State | null; ev: number }
 interface Cache { weeks: Map<number, View>; slots: Map<string, PriceSlot>; solves: number; solveMs: number; endTimes: number[]; memo: Map<string, View>; hits: number }
@@ -90,7 +91,7 @@ function solveView(tw: E.TeamWeek, st: E.State, t: number, iters: number, lr: nu
     }
   }
   const r = from ? L.minimizeBound(si.inst, { method: "adam", lr, iters, mu0 }) : L.tightBound(si.inst, iters);
-  return { Tb: L.tables(r.P, r.mu), si, t0: t, bound: r.bound, id: ++VIEW_ID, tilt };
+  return { Tb: L.tables(r.P, r.mu), si, t0: t, bound: r.bound, id: ++VIEW_ID, tilt, st0: E.cloneState(st) };
 }
 const sameLocks = (v: View, st: E.State) => { for (let s = 0; s < st.lockedBy.length; s++) if ((v.si.instSlot[s] < 0) !== (st.lockedBy[s] >= 0)) return false; return true; };
 // prices for a decision at time t; top-level policies may re-solve, rollout bases (resolve "never") reuse them
@@ -137,6 +138,19 @@ export function continuePrices(tw: E.TeamWeek, slot = "top") { slotOf(cacheOf(tw
 // restoring arms the slot for the next run
 export function savePrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (!c) return null; const a = slotOf(c, slot); return { cur: a.cur, day: a.day, ends: a.ends }; }
 export function restorePrices(tw: E.TeamWeek, saved: ReturnType<typeof savePrices>, slot = "top") { if (!saved) return; const a = slotOf(cacheOf(tw), slot); a.cur = saved.cur; a.day = saved.day; a.ends = saved.ends; a.armed = true; }
+// A slot's price state as plain data (structured-cloneable: worker threads, lib/live/racepool.ts). A view is a pure
+// function of (team-week, the state it was solved from, t, tilt, prices): tables() of the prepared instance at the
+// minimiser's prices, so importPrices rebuilds it exactly and everything priced from it is bit-identical.
+export interface PriceSnap { mu: Float64Array; st0: E.State; t0: number; tilt: number; bound: number; day: number; ends: number }
+export function exportPrices(tw: E.TeamWeek, slot = "top"): PriceSnap | null {
+  const c = CACHE.get(tw); const a = c?.slots.get(slot); if (!a?.cur) return null;
+  const v = a.cur; return { mu: v.Tb.mu.slice(), st0: E.cloneState(v.st0), t0: v.t0, tilt: v.tilt, bound: v.bound, day: a.day, ends: a.ends };
+}
+export function importPrices(tw: E.TeamWeek, snap: PriceSnap, slot = "top") {
+  const si = L.fromState(tw, snap.st0, snap.t0, snap.tilt);
+  const v: View = { Tb: L.tables(L.prepare(si.inst), snap.mu), si, t0: snap.t0, bound: snap.bound, id: ++VIEW_ID, tilt: snap.tilt, st0: snap.st0 };
+  const a = slotOf(cacheOf(tw), slot); a.cur = v; a.day = snap.day; a.ends = snap.ends;
+}
 
 // ---------------- values from the priced DPs ----------------
 function playProb(tw: E.TeamWeek, p: number, gi: number, lp: number) {
