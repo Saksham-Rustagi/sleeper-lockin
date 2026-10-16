@@ -50,8 +50,10 @@ let VIEW_ID = 0;
 export function priceStats(tw: E.TeamWeek) { const c = CACHE.get(tw); const w = c?.weeks.values().next().value; return c && w ? { solves: c.solves, solveMs: c.solveMs, weekBound: w.bound, memoHits: c.hits } : null; }
 // A warm re-solve is a pure function of (the prices it starts from, the state fromState reads, t, iterations, rate):
 // rollouts that reach the same state from the same prices (e.g. every continuation of one candidate at the later
-// tip-offs of the same night, before any game ends) share it. LRU per team-week, at most MEMO_MAX views.
-const MEMO_MAX = 1000;
+// tip-offs of the same night, before any game ends) share it. LRU per team-week, at most MEMO_MAX views (results never
+// depend on it; the race workers use 100: lib/live/racepool.ts).
+let MEMO_MAX = 1000;
+export function setMemoMax(n: number) { MEMO_MAX = Math.max(1, n); }
 function stateKey(st: E.State, t: number, iters: number, lr: number) {
   const f = (x: number) => (Object.is(x, -0) ? "-0" : String(x));
   let k = `${t}|${iters}|${lr}`;

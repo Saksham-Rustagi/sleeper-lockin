@@ -33,16 +33,17 @@ export const DEFAULT_ENGINE: EngineName = "p7h";
 
 export type Objective = "points" | "win";
 export const DEFAULT_OBJECTIVE: Objective = "points";
-let memo: { at: number; name: EngineName; objective: Objective } | null = null;
-function config(): { name: EngineName; objective: Objective } {
+let memo: { at: number; name: EngineName; objective: Objective; raceWorkers: boolean } | null = null;
+function config(): { name: EngineName; objective: Objective; raceWorkers: boolean } {
   if (memo && Date.now() - memo.at < 30e3) return memo;
-  let name = DEFAULT_ENGINE, objective = DEFAULT_OBJECTIVE;
+  let name = DEFAULT_ENGINE, objective = DEFAULT_OBJECTIVE, raceWorkers = true;
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(process.env.LOCKIN_CONFIG_DIR || path.join(os.homedir(), ".sleeper-lockin"), "config.json"), "utf8"));
     if (cfg?.engine) name = parseEngine(String(cfg.engine));
     if (cfg?.objective) objective = parseObjective(String(cfg.objective));
+    if (cfg?.raceWorkers !== undefined && Number(cfg.raceWorkers) === 0) raceWorkers = false;
   } catch { /* no config: default */ }
-  memo = { at: Date.now(), name, objective };
+  memo = { at: Date.now(), name, objective, raceWorkers };
   return memo;
 }
 // env wins over the config file; unknown values fall back to the default (with a warning). Re-read every 30 s.
@@ -57,6 +58,12 @@ export function objectiveName(): Objective {
   if (env) return parseObjective(env);
   if (typeof window !== "undefined") return DEFAULT_OBJECTIVE;
   return config().objective;
+}
+// The races (p10 / p10b) play their continuations on worker threads (lib/live/racepool.ts: same decisions, faster) unless
+// "raceWorkers": 0 in config.json (re-read every 30 s, no restart) or env LOCKIN_RACE_WORKERS=0 / LOCKIN_NO_WORKERS.
+export function raceOnWorkers(): boolean {
+  if (typeof window !== "undefined") return false;
+  return config().raceWorkers;
 }
 export function parseObjective(s: string): Objective {
   const v = s.trim().toLowerCase();
@@ -104,13 +111,17 @@ export function replayIsSlow(e: EngineName = engineName()): boolean { return RAC
 // number of rollouts is adaptive). The races' continuations run on worker threads when available (lib/live/racepool.ts;
 // identical decisions, about 8-10x faster), else on this thread.
 const raceBase = (e: EngineName): E.Policy => p8Race(e) ? { ...P8_POLICY, index: { ...P8_POLICY.index!, slot: "roll" } } : { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } };
+// Measurement knob (not for live use): env LOCKIN_RACE_KMAX = the race's maximum number of scenarios (default 256); when
+// set, the decision results get their own cache entries (engineTag "+kMax=N").
+const raceKMax = () => { const k = Number(process.env.LOCKIN_RACE_KMAX); return k > 0 ? k : undefined; };
+const raceOpts = () => { const k = raceKMax(); return k ? { kMax: k } : {}; };
 const p10 = (tw: E.TeamWeek, events: E.Ev[], seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName) =>
-  p10Hooks(tw, raceBase(e), events, seed, real, {}, undefined, { pool: liveRacePool });
+  p10Hooks(tw, raceBase(e), events, seed, real, raceOpts(), undefined, { pool: raceOnWorkers() ? liveRacePool : null });
 // Hooks for the start decisions of the plan: p7h start/sit simulations; p8 none (the index policy decides);
 // p9 rollouts over the index decision played by P8f; p10 / p10b / p10b-full raced complete decisions.
 // With objective "win" (race engines) and an opponent: P11 (the race plays for the win against the opponent's distribution).
 export function planHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName = engineName(), opp?: OppSource | null): E.Hooks | undefined {
-  if (opp && winActive(e)) return p11Hooks(tw, P8_POLICY, raceBase(e), events, seed, real, opp, WIN_OPTS, undefined, liveRacePool);
+  if (opp && winActive(e)) return p11Hooks(tw, P8_POLICY, raceBase(e), events, seed, real, opp, { ...WIN_OPTS, ...raceOpts() }, undefined, raceOnWorkers() ? liveRacePool : null);
   if (e === "p7h") return E.startRolloutHooks(tw, POLICY, events, K, seed, real);
   if (e === "p9") return indexRolloutHooks(tw, { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } }, events, K, seed, real);
   if (RACE.includes(e)) return p10(tw, events, seed, real, e);
@@ -128,7 +139,7 @@ export function replayHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: num
 // engineTag: for results that contain decisions (advise, replay). p10b's is "p10b+sim:p7h", never the "p10b" that the
 // old all-P8f p10b (now p10b-full, tag "p10b-full") wrote.
 export function engineTag(e: EngineName = engineName()): string | undefined {
-  const w = winActive(e); const id = e === "p10b" ? "p10b+sim:p7h" : e;
+  const w = winActive(e); const k = RACE.includes(e) ? raceKMax() : undefined; const id = (e === "p10b" ? "p10b+sim:p7h" : e) + (k ? `+kMax=${k}` : "");
   return e === DEFAULT_ENGINE && !w ? undefined : w ? `${id}+win` : id;
 }
 // simTag: for results of mass simulations only (projections, Waivers, Matchups/league, IR). They depend on simPolicy

@@ -11,7 +11,7 @@ import * as E from "../lib/engine/core";
 import { indexContext, exportPrices, importPrices, seedPrices } from "../lib/engine/p8";
 import { p10Hooks, decisionKey, type P10Opts, type RacePool } from "../lib/engine/p10";
 import { createRacePool, resetLiveRacePool, liveRaceWorkers, type RaceWorkerPool } from "../lib/live/racepool";
-import { planHooks, resetEngineCache, P8_POLICY } from "../lib/live/engine";
+import { planHooks, resetEngineCache, raceOnWorkers, P8_POLICY } from "../lib/live/engine";
 import { computeAdvice } from "../lib/live/advise";
 import type { LiveTeam } from "../lib/live/week";
 
@@ -41,8 +41,7 @@ const real = (t: E.TeamWeek) => ({ actual: Float64Array.from(t.games.map((g) => 
 const O: P10Opts = { batch: 8, kMin: 16, kMax: 64 };
 
 // a whole week on the real outcomes: every decision, the final state, the race statistics (all but wall time)
-function runWeek(seed: number, base: E.Policy, pool: RacePool | null, o: P10Opts = O) {
-  const t = randomWeek(seed); const ev = E.buildEvents(t, true); const re = real(t);
+function runWeek(seed: number, base: E.Policy, pool: RacePool | null, o: P10Opts = O, t = randomWeek(seed)) { const ev = E.buildEvents(t, true); const re = real(t);
   const h = p10Hooks(t, base, ev, seed, re, o, undefined, { pool });
   const log: string[] = [];
   const hk: E.Hooks = { decideIndex: (st, tt, i, ctx) => { const d = h.decideIndex!(st, tt, i, ctx); log.push(`${i}:${d ? decisionKey(d) : "-"}`); return d; } };
@@ -76,6 +75,13 @@ test("P10b and P10 races on 1, 3 and 12 workers = the single-thread race (decisi
   // the default racing settings (16 per round, up to 256) on one week
   const d1 = runWeek(104, B8, null, {}), d12 = runWeek(104, B8, pool(12), {});
   assert.deepEqual(d12, d1);
+});
+
+test("a pool serves many team-weeks in turn (workers keep the last two; returning to an older one re-sends it)", () => {
+  const p = createRacePool(bundle, 3)!; pools.set(-3, p);
+  const ws = [111, 112, 113].map((s) => randomWeek(s)); const one = [111, 112, 113].map((s) => runWeek(s, B8, null));
+  for (const i of [0, 1, 2, 0, 2]) assert.deepEqual(runWeek(111 + i, B8, p, O, ws[i]), one[i], `team-week ${i}`);
+  assert.ok(p.alive(), "no fallback");
 });
 
 test("fallbacks give the single-thread results: stale worker bundle, a failing pool", () => {
@@ -146,4 +152,10 @@ test("live path (engine p10b): plan hooks on the median path and the whole advic
   const advice = async () => { const a = await computeAdvice(ctx, 40, new Float64Array([1, 2, 3]), null); return JSON.stringify({ ...a, generatedAt: 0 }); };
   const a1 = await withEnv(ONE, advice), a12 = await withEnv(POOL(12), advice);
   assert.match(a1, /P10b \(complete decision/); assert.equal(a12, a1);
+  // the instant off-switch: "raceWorkers": 0 in config.json (re-read every 30 s) races on this thread
+  const cdir = fs.mkdtempSync(path.join(os.tmpdir(), "lockin-race-cfg-"));
+  assert.equal(await withEnv({ ...POOL(12), LOCKIN_CONFIG_DIR: cdir }, () => raceOnWorkers()), true);
+  fs.writeFileSync(path.join(cdir, "config.json"), JSON.stringify({ leagueId: "x", rosterId: 8, raceWorkers: 0 }));
+  assert.equal(await withEnv({ ...POOL(12), LOCKIN_CONFIG_DIR: cdir }, () => raceOnWorkers()), false);
+  assert.equal(await withEnv({ ...POOL(12), LOCKIN_CONFIG_DIR: cdir }, advice), a1);
 });

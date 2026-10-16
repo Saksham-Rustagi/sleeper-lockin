@@ -14,6 +14,9 @@ import { waiverAdvice } from "../lib/live/waivers";
 import { leagueWeek } from "../lib/live/league";
 import { irAdvice } from "../lib/live/ir";
 import { engineName } from "../lib/live/engine";
+import { liveRaceWorkers } from "../lib/live/racepool";
+// CPU time of the whole process (all threads, workers included), ms
+const cpu = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
 import { sleeper } from "../lib/live/sources";
 import os from "os";
 
@@ -67,9 +70,9 @@ function advance(T: LiveTeam, from: number, t: number, seed: number) {
     const asOf = view === "advise-tue" ? await tuesdayNoon() : undefined;
     let t = now(); const ctx = await buildWeek({ leagueId: LEAGUE, rosterId: ROSTER, asOf }); row.buildMs = now() - t; // network, fills the source caches
     const K = Number(process.env.K || 300);
-    t = now(); const a = await advise({ leagueId: LEAGUE, rosterId: ROSTER, asOf, K }); row.coldMs = now() - t; row.coldCached = a.cached;
+    let c = cpu(); t = now(); const a = await advise({ leagueId: LEAGUE, rosterId: ROSTER, asOf, K }); row.coldMs = now() - t; row.coldCpuMs = cpu() - c; row.coldCached = a.cached;
     t = now(); const b = await advise({ leagueId: LEAGUE, rosterId: ROSTER, asOf, K }); row.warmMs = now() - t; row.warmCached = b.cached;
-    row.result = { week: a.week, asOf: new Date(a.asOf).toISOString(), gamesLeft: ctx.me.games.filter((g) => g.status === "pre").length, decisions: a.decisions.length,
+    row.result = { week: a.week, asOf: new Date(a.asOf).toISOString(), gamesLeft: ctx.me.games.filter((g) => g.status === "pre").length, decisions: a.decisions.map((d) => `${d.player} ${d.recommended}${d.recommendedSlot ? "@" + d.recommendedSlot : ""}`),
       plan: a.plan.map((p) => ({ when: p.when, starts: p.starts.map((s) => `${s.player}@${s.slot}${s.lockIf !== null ? ` lock>=${s.lockIf}` : ""}`), benched: p.benched.map((x) => x.player) })),
       outlook: a.outlook, actions: a.actions };
   } else if (view === "tick") {
@@ -85,9 +88,9 @@ function advance(T: LiveTeam, from: number, t: number, seed: number) {
     ctx.asOf = t;
     row.state = { day, tick: new Date(t).toISOString(), held: ctx.me.pids.filter((_, p) => !Number.isNaN(ctx.me.st.pendingX[p]) && !ctx.me.st.isLocked[p]).map((pid) => ctx.me.names[ctx.me.pids.indexOf(pid)]),
       locked: Array.from(ctx.me.st.lockedBy).filter((p) => p >= 0).length, tipsIn30h: new Set(ctx.me.games.filter((g) => g.tip > t && g.tip < t + 30 * 3600e3).map((g) => g.tip)).size };
-    let t0 = now(); const [ms, os2] = await Promise.all([teamSims(ctx.me, ctx.week, t), ctx.opp ? teamSims(ctx.opp, ctx.week, t) : Promise.resolve(null)]); row.simsMs = now() - t0;
-    t0 = now(); const a = await computeAdvice(ctx, Number(process.env.K || 250), ms, os2); row.adviceMs = now() - t0;
-    row.coldMs = row.simsMs + row.adviceMs;
+    const c0 = cpu(); let t0 = now(); const [ms, os2] = await Promise.all([teamSims(ctx.me, ctx.week, t), ctx.opp ? teamSims(ctx.opp, ctx.week, t) : Promise.resolve(null)]); row.simsMs = now() - t0;
+    const c1 = cpu(); t0 = now(); const a = await computeAdvice(ctx, Number(process.env.K || 250), ms, os2); row.adviceMs = now() - t0; row.adviceCpuMs = cpu() - c1;
+    row.coldMs = row.simsMs + row.adviceMs; row.coldCpuMs = cpu() - c0;
     row.result = { decisions: a.decisions.map((d) => ({ player: d.player, score: d.score, rec: d.recommended, slot: d.recommendedSlot, reason: d.reason, options: d.options.map((o) => `${o.action}${o.slot ? "@" + o.slot : ""} ${o.expPoints.toFixed(1)}`) })),
       plan: a.plan.map((p) => ({ when: p.when, starts: p.starts.map((s) => `${s.player}@${s.slot}${s.lockIf !== null ? ` lock>=${s.lockIf}` : ""}`), holds: p.holds.map((h) => `${h.player} ${h.score.toFixed(1)}@${h.slot}`), forfeits: p.forfeits.map((f) => f.player) })),
       outlook: a.outlook };
@@ -106,12 +109,12 @@ function advance(T: LiveTeam, from: number, t: number, seed: number) {
   } else if (view === "replay") {
     const league = await sleeper.league(LEAGUE); const prev = process.env.REPLAY_LEAGUE || league.previous_league_id!;
     const week = Number(process.env.WEEK || 5);
-    let t = now(); const r = await replay({ leagueId: prev, rosterId: ROSTER, week }); row.coldMs = now() - t;
+    const c = cpu(); let t = now(); const r = await replay({ leagueId: prev, rosterId: ROSTER, week }); row.coldMs = now() - t; row.coldCpuMs = cpu() - c;
     t = now(); await replay({ leagueId: prev, rosterId: ROSTER, week }); row.warmMs = now() - t;
-    row.result = { league: prev, week, team: r.team, appTotal: r.appTotal, humanTotal: r.humanTotal, hindsight: r.hindsight, decisions: r.log.length };
+    row.result = { league: prev, week, team: r.team, appTotal: r.appTotal, humanTotal: r.humanTotal, hindsight: r.hindsight, decisions: r.log.length, log: r.log.map((x) => `${x.when} ${x.text}`) };
   } else throw new Error("unknown view " + view);
-  row.load1 = load();
+  row.load1 = load(); row.raceWorkers = liveRaceWorkers(); row.rssMB = Math.round(process.memoryUsage().rss / 1048576);
   fs.writeFileSync(out, JSON.stringify(row, null, 1));
-  console.log(JSON.stringify({ engine: row.engine, view, coldMs: Math.round(row.coldMs ?? 0), warmMs: row.warmMs !== undefined ? Math.round(row.warmMs) : undefined, coldCached: row.coldCached, warmCached: row.warmCached, load: row.load0 }));
+  console.log(JSON.stringify({ engine: row.engine, view, coldMs: Math.round(row.coldMs ?? 0), coldCpuMs: Math.round(row.coldCpuMs ?? 0), adviceMs: row.adviceMs && Math.round(row.adviceMs), raceWorkers: row.raceWorkers, rssMB: row.rssMB, warmMs: row.warmMs !== undefined ? Math.round(row.warmMs) : undefined, coldCached: row.coldCached, warmCached: row.warmCached, load: row.load0 }));
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
