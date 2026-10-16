@@ -3,6 +3,7 @@
 // (identical to research/p8exp.ts: same runner, same seeds) together with the rule / sanity report and, for P10, the
 // compute per decision. Optional NSC model scenarios (p8exp's seeds) per policy, unchecked.
 // usage: node research/dist/p10run.cjs <week> <rid> <out.json>
+// env DECLOG=1: also log every tip-off decision on the real outcomes (row.pols[p].dec = ["evIdx:decisionKey" or "evIdx:-" = P8's])
 // Output: row.pols[p] = { real, msFirst, stats, sc } (the format of research/summ_season.py / summ_s24.py / summ_pool.py)
 //         row[p] = { total, recount, rep, overrides, tipoffs, ms } (the format of research/summ_inv.py)
 import fs from "fs";
@@ -10,6 +11,7 @@ import * as E from "./engine";
 import { fitModel, teamWeek } from "./btcommon";
 import * as PL from "./policies";
 import { runChecked } from "./invariants";
+import { decisionKey } from "../lib/engine/p10";
 
 const [week, rid, out] = [Number(process.argv[2]), process.argv[3], process.argv[4]];
 const pols = (process.env.POLS || "P10").split(";"); const NSC = Number(process.env.NSC || 0);
@@ -17,9 +19,11 @@ const { tw, real } = teamWeek(week, rid, fitModel(week)); const seed = week * 10
 const row: any = { week, rid, pols: {} };
 for (const pn of pols) {
   const t0 = performance.now(); const ru = PL.runner(pn, tw, seed, real);
+  const dec: string[] = []; const hd = ru.hooks?.decideIndex;
+  if (process.env.DECLOG && hd) ru.hooks!.decideIndex = (st, t, i, ctx) => { const d = hd(st, t, i, ctx); dec.push(`${i}:${d ? decisionKey(d) : "-"}`); return d; };
   const r = runChecked(tw, ru.pol, ru.events, real.actual, real.played, ru.hooks, { label: `w${week} r${rid} ${pn} real` });
   const ms = performance.now() - t0;
-  row.pols[pn] = { real: r.total, msFirst: ms, stats: (ru.hooks as any)?.stats };
+  row.pols[pn] = { real: r.total, msFirst: ms, stats: (ru.hooks as any)?.stats, ...(process.env.DECLOG ? { dec } : {}) };
   row[pn] = { total: r.total, recount: r.trackerTotal, rep: r.rep, overrides: r.overrides, tipoffs: r.tipoffs, ms };
   if (NSC) {
     const sc = PL.scenarios(tw, NSC, seed * 17 + 3); const t1 = performance.now();

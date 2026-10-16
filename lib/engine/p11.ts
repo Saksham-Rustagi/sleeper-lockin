@@ -14,7 +14,7 @@
 // significantly better in U (P10's race rules), so with beta = 0 P11 is exactly P10.
 import * as E from "./core";
 import { indexContext, seedPrices, applyIndexDecision as applyDecision, type IndexDecision } from "./p8";
-import { p10Hooks, newStats, type P10Opts, type P10Stats } from "./p10";
+import { p10Hooks, newStats, type P10Opts, type P10Stats, type RacePool } from "./p10";
 import type { OppDist } from "./human";
 
 export interface P11Opts extends P10Opts {
@@ -67,12 +67,12 @@ export const winProbOf = (D: OppDist, totals: ArrayLike<number>) => { let w = 0;
 export interface P11Stats extends P10Stats { win: { decisions: number; tilt: number; absTilt: number; pwin: number; tiltCands: number; log: number[][]; vr: number[][] } }
 // top: the policy making the real decisions (P8; its prices are slot "top"); base: the continuations' (P8f or P8, slot "roll")
 export function p11Hooks(tw: E.TeamWeek, top: E.Policy, base: E.Policy, events: E.Ev[], seed: number,
-  realised: { actual: Float64Array; played: Uint8Array }, opp: OppSource | null, o: P11Opts = {}, r?: () => number): E.Hooks & { stats: P11Stats } {
+  realised: { actual: Float64Array; played: Uint8Array }, opp: OppSource | null, o: P11Opts = {}, r?: () => number, pool?: RacePool | null): E.Hooks & { stats: P11Stats } {
   const stats: P11Stats = { ...newStats(), win: { decisions: 0, tilt: 0, absTilt: 0, pwin: 0, tiltCands: 0, log: [], vr: [] } };
   const rp = E.rng(seed ^ 0x1b873593); const rv = E.rng(seed ^ 0x2f2d1a5b); const scratch = E.scratchState();
   const dial = o.dial ?? DEF.dial; const pilotK = o.pilot ?? DEF.pilot;
   return p10Hooks(tw, base, events, seed, realised, o, stats, {
-    r,
+    r, pool,
     prep: (st, t, evIdx, _ctx, cs) => {
       const beta = betaAt(tw, t, o); if (!(beta > 0) || !opp) return undefined;
       const D = opp.dist(t); if (!D) return undefined;

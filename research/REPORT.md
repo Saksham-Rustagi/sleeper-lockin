@@ -2045,3 +2045,268 @@ node research/scratch/g/extract_live.mjs && node research/scratch/runenv.cjs LOC
 node research/scratch/g/notify_e2e.mjs p10b 2     # needs research/dist/g/{notify,simworker}.cjs
 node research/scratch/g/rehearse.mjs /tmp/g_deploy2
 ```
+
+## Analysis H: lineup timing, where the points go, literature (overnight 2026-10-15, task H)
+Analysis only; no engine behaviour changed. **Full write-up: `research/ANALYSIS_H.md`**. Tables and charts are in
+`research/out/h/` (`part1.md`, `part2.md`, `part4.md`, `literature.md`, `h_scored_curve_*.png`, `h_fill_curve_*.png`).
+
+- **Tooling.**
+  - `research/htrace.ts` traces the physical lineup of any policy and splits (Lagrangian bound − week total) exactly
+    into per-decision losses against each player's priced DP, plus extra slot charges and empty priced slot-time. The
+    split is validated on model scenarios: the categories sum to the gap within 0.04 ± 0.70 pts.
+  - It also re-evaluates P10b's best rejected race candidate on fresh scenarios.
+  - `research/h_lagmed.ts` compares the bound with brute-force optima on medium random weeks.
+  - Every traced total equals the published season runs (1,070 runs checked, 0 rule violations). `research/invariants.ts`
+    only gained optional observe-only callbacks.
+- **Part 1 (timing).**
+  - Our engines count scores from the same games as perfect hindsight (scored-time curves coincide); they differ only in
+    when they commit (P10b ≈ 25 h after the game, P8 28 h, P7H 17 h). No sign of locking too early.
+  - "All 9 secured" always lands on the final day, hindsight included, so it is not a useful target.
+  - At game day 5, P10b still has 5.9 slots open (P7H 4.7, hindsight 3.4). Managers lose mainly to empty slots (20% of
+    their slots).
+- **Part 2 (gap to the bound).**
+  - P10b, 120 real 2025-26 team-weeks, categories total 9.2 ± 1.5 pts/wk: final games kept to week end 2.6, held scores
+    later given up 2.0, players sat because held scores filled their slots 1.75, start/sit 1.5, let-go regret 0.6, the
+    rest ≤ 0.5.
+  - The top three (6.4 pts) are hold-vs-play contention, where the fluid bound is loose. On medium brute-force weeks the
+    bound is 3–5% above the true optimum.
+  - Search: the race's rejected runner-up is worth +0.66 ± 0.44 pts/wk on fresh scenarios, nearly all "lock now"
+    alternatives (+0.17–0.22 each, 4–5/week). Race gains shrink ~70% on fresh scenarios (winner's curse).
+- **Part 3.** About 85 verified references.
+  - Key point: an ALP bound would not be tighter (Brown & Zhang 2023); information relaxations would be.
+  - Shortlist: lock-aware race acceptance with a fresh confirmation batch; a penalized information-relaxation bound;
+    P8 hold priorities for contested slots; one-player-at-a-time rollout; truncated rollouts.
+- **Part 4 (win objective).**
+  - Only ~13% of real weeks are decided by < 10 pts; the oracle ceiling is +17 pp.
+  - P11's P(win) is overconfident by 15–20 pp in its active range.
+  - Managers differ in activity (significant), not in lock thresholds (≈ +1.1 sd for all).
+  - Next: calibrate P(win), add a per-manager engagement prior.
+
+```
+python3 -E research/h_analyze.py && python3 -E research/h_part4.py     # tables + charts from research/out/h/*
+```
+
+## P10b on worker threads (overnight 2026-10-16, task "P10b decisions on worker threads")
+**Goal.** P10b's race (up to 8 candidate decisions × 16–256 continuations each, played by P8) ran on one thread:
+5–12 s per decision, up to ~45 s for a busy tip-off's advice, 3–5 min per replay. Move the continuations to worker
+threads, with **bit-identical decisions**.
+
+**Result.**
+- The race itself is **~7–7.5× faster**: replays 202–290 s → 28–39 s, and the Wednesday tip-off race ~34 s → ~4.5 s.
+- Whole views gain less, because work outside the race stays serial: Wednesday tip-off advice 38.4 → 8.7 s; the
+  Tuesday plan is unchanged at 8.4 s, since it has hardly any race.
+- **Identical decisions everywhere:**
+  - unit tests with 1, 3 and 12 workers (decisions, final states, every race statistic);
+  - the live advice path;
+  - 7 of 7 views on the real league, single thread vs workers.
+- Cost: +35–40% CPU time in total, and 1.2–2.2 GB RSS while racing.
+- Not deployed. `DEPLOY_P10B.md` §8 lists the files, build, restart and rollback.
+
+### Design (`lib/live/racepool.ts`, `lib/engine/p10.ts`, `lib/engine/p8.ts`)
+**Synchronous, not async.** `E.simulate` and the hooks stay synchronous. Each racing round works like this:
+1. The race draws the round's scenarios on the main thread, from its own random stream, exactly as before.
+2. It hands the round to the pool.
+3. The main thread posts the round to the workers, then plays continuations itself.
+4. It blocks on `Atomics.wait` until all of the round's results are in a `SharedArrayBuffer`.
+5. Only then does the race eliminate candidates, stop, or decide.
+
+Why this instead of precomputing races asynchronously before each `simulate` step, or an async plan builder:
+- **No API changes.** Every caller gets the speed-up with no plumbing: the plan, replay, the hold/lock/bench call, the
+  notifier, P11.
+- **Unchanged control flow.** The decision sequence is the same code path as the single-thread race, so the only
+  difference can be *who* computes a continuation.
+- **Blocking is no worse than before.** The main thread is busy anyway (as with the single-thread race, but ~7× shorter).
+  Node allows `Atomics.wait` on the main thread, and workers start and run while it is blocked (checked).
+- The asynchronous design needed stepping `simulate` event by event around every tip-off in `advise.ts`, plus a
+  precompute hook. It would have kept the event loop free during a race, but no view needs that today.
+
+**Determinism by construction.**
+- **Pure continuations.** A continuation (`continuation()` in p10.ts) is a pure function of the team-week, the base
+  policy, the decision state, the candidate, the scenario and the real decision's prices. Its price slot is seeded per
+  continuation; the stopValue and re-solve memos are pure (task C).
+- **Claiming and reduction.** Workers claim continuations from a shared counter and write each result at its own index
+  (candidate-major). The race reads them in scenario order, as before. Elimination happens per round, after all results
+  are in.
+- **Scenarios** are always drawn on the main thread, in the old order, so the race's random stream (and therefore the
+  next decisions) are untouched.
+- **Price state (task-F rules).** The main thread exports the "top" slot's view: the minimiser's prices, the state it
+  was solved from, t, tilt, day and ends (`exportPrices`). The worker rebuilds the view exactly (`importPrices`):
+  `tables(prepare(fromState(st0, t0, tilt)), mu)`. Each continuation then seeds its own slot from it, as in the main
+  thread.
+  - Tested: every priced weight and P8's decision from the rebuilt view equal the original's.
+- **Team-weeks** are sent once per worker. The main thread mirrors the workers' 2-entry list, so a team-week is resent
+  whenever a worker may have dropped it. Contexts are sent once per decision; rounds are small.
+
+**Fallbacks** (identical results, main thread):
+- browser, `LOCKIN_NO_WORKERS`, `LOCKIN_RACE_WORKERS=0`, or `"raceWorkers": 0` in config.json (re-read every 30 s);
+- no worker bundle, or a bundle without the race protocol (stale `simworker.cjs`), which is skipped up front;
+- workers that don't answer the start-up handshake within 20 s;
+- a worker exception, or no progress for 60 s. The round is replayed on the main thread and the pool is switched off.
+
+**Memory.**
+- The first version used 3.4–4.3 GB RSS: each worker held up to 1,000 memoised price views, the re-solve memo of task C.
+- Workers now keep 100 (`setMemoMax`). On a P10b week that brought RSS from 4.3 to 1.7 GB, with the same result and
+  speed (8.6–8.8 s vs 9.2 s).
+- The main thread and research keep 1,000.
+- The app's pool stops after 10 min unused and restarts in ~0.1 s.
+- Claiming continuations in chunks of 2 or 4, for memo locality, was measured and is no faster. The default stays 1.
+
+**Research is unchanged.** Backtests pass no pool, so they take the single-thread path. Its only change is that a
+round's scenarios are drawn before its continuations are played, which consumes the same stream (continuations never
+touch it).
+- Checked on 46 real team-weeks below: P10b totals are identical to the Phase-3 season run `s10`.
+
+### Tests (`tests/racepool.test.ts`; `npm test` 76/76, tsc clean)
+- **Exact price views.** Every candidate's priced weights, P8's decision and its score are identical after
+  export → structured clone → import.
+- **Worker-count independence.** On random 9-slot weeks, P10b (P8 continuations, warm re-solves) and P10 (P8f) with
+  1, 3 and 12 workers equal the single-thread race:
+  - every decision, the total, the final state, and all race statistics (decisions, raced, candidates, switches,
+    scenarios, continuations, per-race log);
+  - with test settings (8 per round, up to 64) and with the defaults (16, up to 256).
+- **Many team-weeks.** One pool serving several team-weeks in turn, returning to older ones: identical, and no fallback.
+- **Fallbacks.** A stale bundle is refused. A pool that fails mid-race (here, an uncloneable team-week) is switched off,
+  and the race finishes on the main thread with identical results.
+- **Live path (engine p10b).** `planHooks` driven tip-off by tip-off as the plan does, and the whole `computeAdvice`
+  JSON: identical with 1, 3 and 12 race workers and with none, and with the config off-switch.
+
+### Latency on the real league
+- **Setup.** League 1344387394811490304, roster 8, 2026-27 week 1. One process per view, empty disk cache, the app's
+  12 projection workers plus 12 race workers.
+- **Tip-off ticks.** The week was simulated forward to 10 min before that day's first tip-off, as in task G.
+- **"Before"** is the same build with `LOCKIN_RACE_WORKERS=0`, i.e. the shipped single-thread race. Its decisions equal
+  "after" in every row.
+- **CPU** is the whole process's (all threads). Run with no other heavy jobs; Spotlight was indexing in the background.
+- **Scripts.** `research/livecost_g.ts` (now with CPU, RSS and full decision output) and `research/livecost_w_run.mjs`.
+  Outputs are in `research/scratch/w/`.
+
+| view | before: wall (CPU) | **after: wall (CPU)** | speed-up | RSS after | decisions |
+|---|---|---|---|---|---|
+| /api/advise, Tue noon, cold (plan for Tue night + 2 × 20k projections) | 8.4 s (29.7 s) | **8.4 s** (39.4 s) | 1.0× (≈ no race) | 0.86 GB | identical¹ |
+| notifier tick, Wed 6:50 pm (3 held, 8 tip-offs in 30 h): total | 41.8 s (65.7 s) | **12.1 s** (86.0 s) | 3.5× | 1.9 GB | identical |
+| … of which advice (P10b plan + calls) | 38.4 s | **8.7 s** | 4.4× | | |
+| tick, Fri 6:50 pm (6 held, 3 locked, 9 tip-offs): total / advice | 8.4 / 6.8 s (15.0 s) | **5.4 / 3.9 s** (24.3 s) | 1.6× / 1.7× | 1.6 GB | identical |
+| tick, Sat 5:50 pm (4 held, 5 locked, 7 tip-offs): total / advice | 4.3 / 3.3 s (9.1 s) | **4.0 / 2.9 s** (15.2 s) | 1.1× | 1.2 GB | identical |
+| replay 2025-26 week 5, cold | 202.1 s (224 s) | **28.4 s** (316 s) | **7.1×** | 2.2 GB | identical (76 log lines) |
+| replay week 12 | 290.1 s (320 s) | **38.6 s** (448 s) | **7.5×** | 2.1 GB | identical (91) |
+| replay week 20 | 214.9 s (238 s) | **29.1 s** (329 s) | **7.4×** | 2.1 GB | identical (91) |
+
+¹ Two runs 30 min apart differ only in the clock-relative time label ("Tue, Oct 20, 9:30 PM" vs "Tue 9:30 PM"). The run
+pair made 9 s apart is byte-identical.
+
+**Where the remaining time goes** (main-thread profile of the Wednesday tick with workers, 13.4 s):
+- the race ~4.5 s (≈ 34 s single-threaded, ~7.5×): the main thread plays its share for ~4.0 s and waits ~2.4 s for
+  round tails;
+- the week-start price solve, 2.1 s (2 × 100k Adam iterations, sequential, once per team-week and process);
+- the projections' share on the main thread, the options' quick simulations (~0.7 s), P8's own decisions and price
+  re-solves at the plan's tip-offs.
+
+So views with little race (Tuesday, Saturday) barely change. Further gains would come from caching the week-start
+prices per team-week, which is pure, and from pipelining round tails.
+
+**Speed-up ceiling.** The race reaches ~7–7.5× with 13 threads on this 14-core Mac.
+- Total CPU is +35–40% (random-week check: 55 s single vs 83 s with 12 workers).
+- Causes: work that the single-thread memo shared is now done per worker, and threads land on slower cores.
+- Claim chunking didn't help.
+
+### More rollouts per decision: kMax 512 / 1024
+**Latency now** (with workers, same views; env `LOCKIN_RACE_KMAX`, a measurement knob with its own cache key; the
+default stays 256):
+
+| view | kMax 256 | 512 | 1024 |
+|---|---|---|---|
+| Tue plan, cold | 8.4 s | 8.5 s | 8.4 s |
+| Wed tick: total / advice (CPU) | 12.1 / 8.7 s (86 s) | 14.1 / 10.7 s (113 s) | 15.5 / 12.2 s (132 s) |
+| Fri tick | 5.4 / 3.9 s | 5.9 / 4.3 s | 6.3 / 4.7 s |
+| Sat tick | 4.0 / 2.9 s | 3.8 / 2.8 s | 3.8 / 2.8 s |
+| replay week 12 (CPU) | 38.6 s (448 s) | 43.0 s (502 s) | 64.0 s (771 s) |
+
+- **Cheap now.** kMax 1024 would cost the busiest tick ~3.5 s more, and a cold replay ~25 s more. Single-threaded, the
+  same would have been minutes.
+- **The extra scenarios are few.** Only races still undecided at 256 continue, and by then 1–3 candidates are left.
+- **Decisions on these live samples.** The first-tip-off calls (what the notifier says now) were the same at all three
+  budgets. Later, tentative plan steps changed:
+  - Wednesday: Thursday's slot arrangement;
+  - Friday (1024): one start on Saturday night;
+  - Saturday (512, 1024): a held 38.7 locked at a later tip-off instead of held on.
+- **Replay of week 12:** 313.5 (256) → 318.5 (512) / 318.0 (1024).
+
+**Does a bigger budget change decisions, and is it better?**
+- **Sample.** A paired backtest on real 2025-26 outcomes: 46 team-weeks, the Phase-2/3 model-study set (2 per week).
+  Same seeds as the season run `s10`. `research/p10run.ts` with `DECLOG=1`, one process per team-week, 14 in parallel.
+- **Noise baseline.** P10b with another race seed (`rseed=1`): the same race, the same budget, other scenarios.
+  Needed because a longer race draws more from the race's random stream, so every later race sees different scenarios.
+- **Research path is bit-identical.** P10b at the default budget reproduced `s10` on all 46 team-weeks.
+
+| policy | pts/wk | paired diff vs P10b (256) | 95% CI naive | 95% CI week-clustered | better / worse weeks | win% vs real opp. |
+|---|---|---|---|---|---|---|
+| P10b (kMax 256) | 293.65 | | | | | 70.9% |
+| P10b, another race seed (noise baseline) | 291.88 | −1.77 | ± 1.83 | ± 1.82 | 10/13 | 68.6% |
+| P10b, kMax 512 | 294.87 | +1.22 | ± 1.96 | ± 1.79 | 9/7 | 73.3% |
+| P10b, kMax 1024 | 291.82 | −1.84 | ± 2.21 | ± 2.35 | 10/12 | 70.9% |
+
+| policy | raced / wk | scenarios per race: mean (share at kMax) | continuations / race | switches from P8 / wk | s per raced decision (1 thread, 14 jobs) |
+|---|---|---|---|---|---|
+| P10b (256) | 25.2 | 168 (49%) | 912 | 2.35 | 12.2 |
+| another race seed | 25.3 | 162 (47%) | 896 | 2.41 | 9.7 |
+| kMax 512 | 25.2 | 270 (34%) | 1,353 | 2.74 | 19.0 |
+| kMax 1024 | 25.0 | 391 (20%) | 1,866 | 3.15 | 23.5 |
+
+**Decisions on identical states.**
+- On the real outcomes two runs face the same states until their first different decision. That decision was made on
+  an identical state.
+
+| vs P10b (256) | team-weeks with a different decision | decisions compared on identical states | different | at the first difference: the variant switches / keeps P8's |
+|---|---|---|---|---|
+| another race seed | 42/46 | 367 | 42 (11.4%) | 21 / 21 |
+| kMax 512 | 44/46 | 415 | 44 (10.6%) | 32 / 12 |
+| kMax 1024 | 45/46 | 405 | 45 (11.1%) | 34 / 11 |
+
+**Reading.**
+- **Monte-Carlo noise is as large as the budget effects.** One 256-scenario race re-run on other scenarios already
+  makes a different call in ~11% of decisions and moves the week by −1.8 ± 1.8 pts.
+  - kMax 512 / 1024 differ by the same amounts (10.6% / 11.1%, +1.2 / −1.8 pts), and not monotonically. On 46
+    team-weeks no budget effect is visible.
+- **What the budget does change: more switches from P8's decision** (2.35 → 2.74 → 3.15 per week).
+  - With more scenarios, the significance gate (gain > 0.5 pt and > 2 se) passes smaller gains.
+  - The noise baseline instead switches as often as it keeps (21 / 21 at the first difference).
+  - Task H found that race gains shrink ~70% on fresh scenarios (winner's curse). So extra switches at small estimated
+    gains are not clearly worth anything.
+- **Resolution needed.** The paired real-outcome SD is ~6 pts per team-week. Resolving a 0.5-pt effect would take
+  ~600 team-weeks: both seasons, ~11 h on 14 cores for kMax 1024.
+
+**Recommendation.**
+- **Ship the worker-thread race** (`DEPLOY_P10B.md` §8). Decisions are identical, so it carries no decision risk.
+  - Tip-off advice takes ≤ 13 s instead of up to ~45 s; a cold replay ~30–40 s instead of 3–5 min.
+  - Instant off-switch: `"raceWorkers": 0`.
+- **Keep kMax = 256** (default unchanged).
+  - With workers, 512 / 1024 cost little: +1.5–3.5 s at the busiest tick, +5–25 s per cold replay.
+  - But this sample shows no benefit beyond Monte-Carlo noise.
+  - A bigger budget mostly adds switches at small estimated gains, the kind task H found to shrink on fresh scenarios.
+- **If pursued, measure per decision, not per week.** Where 256 and 1024 disagree on an identical state, score both
+  choices with many fresh common-random-number continuations (as task H's runner-up re-evaluation did). That resolves
+  the value of the budget with far fewer runs than a season backtest.
+  - Better still for a budget increase: spend it on a confirmation batch for a switch (task H's "lock-aware race
+    acceptance with a fresh confirmation batch"), not on a longer race.
+
+**Not done.**
+- `next build` was not rehearsed. This worktree's `node_modules` is a symlink into the live checkout, and a build could
+  write caches there.
+- The web-side change is a static `worker_threads` import plus `Atomics` in a server-only module, the same pattern as
+  the existing `fs` / `os` imports and teamsim's worker pool.
+- `tsc` (which covers the whole repo) is clean.
+
+### Reproduce
+```
+npx esbuild scripts/simworker.ts --bundle --platform=node --format=cjs --outfile=research/dist/simworker_w.cjs --log-level=error
+npx esbuild research/livecost_g.ts --bundle --platform=node --format=cjs --outfile=research/dist/livecost_g.cjs --log-level=error
+node research/livecost_w_run.mjs p10b:tick:tww:DAY=2026-10-21 p10b:tick:t1w:LOCKIN_RACE_WORKERS=0,DAY=2026-10-21 \
+  p10b:replay:rw12:WEEK=12 p10b:replay:r1w12:LOCKIN_RACE_WORKERS=0,WEEK=12 p10b:tick:tk1024w:DAY=2026-10-21,LOCKIN_RACE_KMAX=1024 ...
+  # engine:view:cacheTag[:KEY=VAL,...] -> research/scratch/w/<engine>_<view>_<tag>.json (logs run1.log, run2.log)
+node research/dist/memdiag.cjs <abs path>/research/dist/simworker_w.cjs 12   # race-worker memory on a random week (0 = one thread)
+node research/scratch/w/chunks.mjs                                           # claim chunk 1 / 2 / 4
+npx esbuild research/p10run.ts --bundle --platform=node --format=cjs --outfile=research/dist/p10run_w.cjs --log-level=error
+node research/runtasks.mjs research/dist/p10run_w.cjs kmx "" "POLS=P10b;P10x:base=P8,kMax=512;P10x:base=P8,kMax=1024" DECLOG=1 PAR=14 TASKS=<the 46 gap4 team-weeks>  # 90 min
+node research/runtasks.mjs research/dist/p10run_w.cjs kmxn "" "POLS=P10x:base=P8,rseed=1" DECLOG=1 PAR=14 TASKS=<same>   # 16 min
+cd research/out && python3 ../summ_kmax.py kmx,kmxn P10b "P10x:base=P8,rseed=1;P10x:base=P8,kMax=512;P10x:base=P8,kMax=1024" s10
+```

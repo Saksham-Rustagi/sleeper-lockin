@@ -61,8 +61,10 @@ export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { a
   if (/^P10/.test(name)) {
     const o: any = {}; for (const kv of (name.match(/^P10x:(.*)$/)?.[1] ?? "").split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^[\d.]+$/.test(v) ? Number(v) : v === "false" ? false : v; }
     const b8 = (o.base ?? (name === "P10b" ? "P8" : "P8f")) === "P8"; delete o.base;
+    // rseed=N: the race's random stream rng(seed ^ N) instead of rng(seed ^ 0x3c6ef372) (Monte-Carlo noise baseline)
+    const rseed = o.rseed; delete o.rseed;
     const base: E.Policy = { ...POL.P8, name: "P10base", index: b8 ? { resolve: "tip", iters: 100, slot: "roll" } : { resolve: "info", iters: 30, slot: "roll" } };
-    hooks = p10Hooks(tw, base, events, seed, realised, o as P10Opts);
+    hooks = p10Hooks(tw, base, events, seed, realised, o as P10Opts, undefined, rseed !== undefined ? { r: E.rng(seed ^ Number(rseed)) } : undefined);
   }
   if (/^P11/.test(name)) hooks = p11Hooks(tw, P11_TOP, p11Base(/^P11b/.test(name)), events, seed, realised, opp ?? null, optsOf(name.match(/^P11b?:(.*)$/)?.[1] ?? "") as P11Opts, r);
   if (/^P7H/.test(name)) hooks = E.startRolloutHooks(tw, { ...POL.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, events, KS, seed, realised, hooks);

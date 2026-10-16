@@ -16,7 +16,7 @@
 // Locks are part of the same search (no separate lock rollout), and holding is an evaluated option, not a fallback.
 import * as E from "./core";
 import { reach, placeAll } from "./moves";
-import { assign, toDecision, fillIdle, reachable, applyIndexDecision, seedPrices, type Cand, type IndexContext, type IndexDecision } from "./p8";
+import { assign, toDecision, fillIdle, reachable, applyIndexDecision, seedPrices, exportPrices, type Cand, type IndexContext, type IndexDecision, type PriceSnap } from "./p8";
 
 export interface P10Opts {
   nCand?: number;   // candidates raced, P8's decision included (default 8)
@@ -168,6 +168,25 @@ export function race(nCand: number, run: (alive: number[], k0: number, n: number
   return { pick: L && accept(L) ? L : 0, k, sims, alive: alive.length, means, gain: r.m, se: r.se };
 }
 
+// ---------------- continuations ----------------
+// One continuation: candidate decision d applied at events[evIdx] from state st, the rest of the week played by base on
+// scenario scen, from the real decision's prices (slot "top" seeded into the base's own slot). A pure function of
+// (team-week, base, st, evIdx, d, scen, the "top" prices): the same in any thread and in any order (price slots are
+// seeded per continuation; the stopValue / re-solve memos are pure).
+export interface Scen { actual: Float64Array; played: Uint8Array }
+export function continuation(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], st: E.State, evIdx: number, d: IndexDecision, scen: Scen, scratch: (st: E.State) => E.State): number {
+  const s2 = scratch(st); applyIndexDecision(tw, s2, events[evIdx], d); seedPrices(tw, base.index?.slot ?? "roll");
+  return E.simulate(tw, base, events, scen.actual, scen.played, s2, evIdx + 1).total;
+}
+// Where a race's continuations are played. Default: this thread. A pool (worker threads: lib/live/racepool.ts) gets one
+// RaceCtx per raced decision (the same object for all its rounds) and returns, per alive candidate, the raw totals on
+// the round's scenarios (scenario order), i.e. exactly what this thread would compute; or null when it can't (no
+// workers, a failure): then this thread plays the round. Scenarios are always drawn here, from the race's own stream,
+// and a round's elimination / stopping happens only after all its results are in, so the decision and the stats do not
+// depend on how the work is split.
+export interface RaceCtx { tw: E.TeamWeek; base: E.Policy; events: E.Ev[]; st: E.State; evIdx: number; cands: IndexDecision[]; prices: PriceSnap | null }
+export interface RacePool { round(ctx: RaceCtx, alive: number[], scens: Scen[]): number[][] | null }
+
 // ---------------- the policy's hook ----------------
 // per raced decision (log): [candidates, scenarios used, continuations, candidates alive at the end, gain of the best challenger, its se, switched]
 export interface P10Stats { decisions: number; raced: number; cands: number; switched: number; scen: number; sims: number; ms: number; why: Record<string, number>; log: number[][] }
@@ -175,15 +194,17 @@ export const newStats = (): P10Stats => ({ decisions: 0, raced: 0, cands: 0, swi
 // Extension (ENGINE_V2 Phase 5, lib/engine/p11.ts): called at every tip-off decision with the candidates; may change how
 // a continuation's final total is scored, which policy plays the continuations, and add candidate decisions (inserted
 // after P8's, de-duplicated, legality-checked). Returning undefined leaves the decision exactly as P10's.
+// pool: play the continuations on worker threads (identical results, see RacePool).
 export interface P10Ext {
   r?: () => number; // the race's random stream (default rng(seed ^ 0x3c6ef372))
   prep?: (st: E.State, t: number, evIdx: number, ctx: IndexContext, cs: P10Cand[]) =>
     { score?: (total: number) => number; base?: E.Policy; extra?: { d: IndexDecision; why: string }[] } | undefined;
+  pool?: RacePool | null;
 }
 // base: the policy that plays the continuations (P8f or P8; its index.slot must be its own price state, e.g. "roll")
 export function p10Hooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], seed: number,
   realised: { actual: Float64Array; played: Uint8Array }, o: P10Opts = {}, stats: P10Stats = newStats(), ext?: P10Ext): E.Hooks & { stats: P10Stats } {
-  const r = ext?.r ?? E.rng(seed ^ 0x3c6ef372); const scratch = E.scratchState();
+  const r = ext?.r ?? E.rng(seed ^ 0x3c6ef372); const scratch = E.scratchState(); const pool = ext?.pool;
   return {
     stats,
     decideIndex: (st, t, evIdx, ctx) => {
@@ -201,17 +222,13 @@ export function p10Hooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], seed: n
       if (cs.length < 2) { stats.ms += performance.now() - t0; return undefined; }
       stats.raced++; stats.cands += cs.length;
       const B = px?.base ?? base; const score = px?.score;
+      let rc: RaceCtx | null = null;
       const res = race(cs.length, (alive, _k0, n) => {
-        const out = alive.map(() => [] as number[]);
-        for (let k = 0; k < n; k++) {
-          const scen = E.sampleScenario(tw, st, t, r, realised);
-          alive.forEach((c, j) => {
-            const s2 = scratch(st); applyIndexDecision(tw, s2, e, cs[c].d); seedPrices(tw, B.index?.slot ?? "roll");
-            const tot = E.simulate(tw, B, events, scen.actual, scen.played, s2, evIdx + 1).total;
-            out[j].push(score ? score(tot) : tot);
-          });
-        }
-        return out;
+        const scens: Scen[] = []; for (let k = 0; k < n; k++) scens.push(E.sampleScenario(tw, st, t, r, realised));
+        let tot: number[][] | null = null;
+        if (pool) { rc ??= { tw, base: B, events, st, evIdx, cands: cs.map((c) => c.d), prices: exportPrices(tw) }; tot = pool.round(rc, alive, scens); }
+        tot ??= alive.map((c) => scens.map((sc) => continuation(tw, B, events, st, evIdx, cs[c].d, sc, scratch)));
+        return score ? tot.map((row) => row.map(score)) : tot;
       }, o);
       stats.scen += res.k; stats.sims += res.sims; stats.ms += performance.now() - t0;
       stats.log.push([cs.length, res.k, res.sims, res.alive, Math.round(res.gain * 100) / 100, Math.round(res.se * 100) / 100, res.pick ? 1 : 0]);

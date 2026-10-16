@@ -20,7 +20,8 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
   `rolloutHooks` (Monte-Carlo lock decisions), `startRolloutHooks` (Monte-Carlo start/sit), `holdYield`.
 - `lib/engine/model.ts`: per-game score distribution / play probabilities.
 - `lib/live/*`: live app (uses `POLICY` from `lib/live/week.ts` = P2 + lockAware + holdYield, with start and lock rollouts
-  at decision time). `lib/live/teamsim.ts`: shared simulation + worker threads.
+  at decision time). `lib/live/teamsim.ts`: shared simulation + worker threads. `lib/live/racepool.ts`: P10/P10b race
+  continuations on their own worker threads (synchronous, bit-identical; research passes no pool = single thread).
 - `research/backtest.ts` + `research/btcommon.ts`: walk-forward backtest (no look-ahead; model fit on prior weeks only).
 - `tests/*.test.ts`: node:test unit tests.
 
