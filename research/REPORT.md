@@ -2397,3 +2397,56 @@ or live code changed.
 - **Ships only if** the pooled P10c − P10b gain (inverse-variance pooled, week-clustered CIs) has a 95% CI excluding 0
   **and** 0 rule violations. Also reported: per season, decisions changed per week, latency on the live path with
   workers, and task H's runner-up re-evaluation on P10c (96 fresh scenarios, `FRESH=96`), which should shrink toward 0.
+
+### Tuning result (model scenarios; `research/out/l/tune_summary.md`, `tune_diag.md`)
+138 model weeks (46 × 2 of 2025-26, 46 × 1 of 2024-25 league B): 25.1 raced decisions and 7.9 probe entries per week,
+512 fresh scenarios each. Truth = mean of fresh scenarios 256–511.
+
+What the race's best challenger is really worth, by race gain (fresh truth, mean ± 95% CI):
+
+| race switched? | kind | race gain 0.25–0.5 | 0.5–1.0 | 1.0–2.0 | > 2 |
+|---|---|---|---|---|---|
+| no | lock (4.3/wk) | +0.09 ± 0.08 | **+0.25 ± 0.10** | **+0.56 ± 0.22** | (n = 3) |
+| no | in (0.35/wk) | +0.05 ± 0.20 | +0.02 ± 0.44 | +0.75 ± 0.64 | |
+| no | out (0.76/wk) | −0.16 ± 0.15 | +0.23 ± 0.31 | +0.92 ± 0.66 | |
+| yes | lock (2.0/wk) | | +0.36 ± 0.12 | +0.54 ± 0.14 | +1.62 ± 0.44 |
+| yes | in / out (0.4/wk) | | +0.13 to +0.25 | +0.79 to +0.96 | +1.67 to +2.80 |
+
+- The model replicates task H: rejected "lock now" challengers at race gain 0.5–1.0 are worth +0.25 each (H: +0.22).
+  Race gains still shrink by 50–65%, but the race's best challenger is worth more than nothing in every bin above 0.5.
+- The race's own switches are worth +0.36 to +1.6 each. Confirming them as well (`confAll`) only loses: −0.06 to
+  −0.08 pts/wk in every otherwise equal rule.
+
+Top rules (of 144; full table in `tune_summary.md`):
+
+| confGate | kinds | M | confZ | confAll | gain vs P10b, pts/wk (one-step, 95% CI) | switches added/wk | confirmations/wk | extra continuations/wk |
+|---|---|---|---|---|---|---|---|---|
+| **0.25** | **any** | **128** | **0** | **no** | **+1.18 ± 0.29 (pick)** | 3.09 | 5.46 | 1,397 (+6%) |
+| 0.25 | any | 256 | 0 | no | +1.17 ± 0.28 | 3.29 | 5.46 | 2,794 |
+| 0.25 | any | 128 | 0 | yes | +1.10 ± 0.30 | 3.09 (0.56 vetoed) | 7.89 | 2,020 |
+| 0.25 | any | 64 | 0 | no | +1.08 ± 0.29 | 2.87 | 5.46 | 698 |
+| 0.25 | lock+in | 128 | 0 | no | +1.04 ± 0.28 | 2.64 | 4.62 | 1,182 |
+| 0.5 | any | 128 | 0 | no | +1.00 ± 0.27 | 1.83 | 3.17 | 813 |
+| 0.25 | any | 128 | 0.5 | no | +0.98 ± 0.26 | 2.12 | 5.46 | 1,397 |
+| 0.25 | lock | 128 | 0 | no | +0.98 ± 0.26 | 2.43 | 4.26 | 1,091 |
+
+**Pick (by the pre-registered rule): `P10C_OPTS = { confirm: 128, confGate: 0.25, confKinds: "" (any), confMin: 0,
+confZ: 0, confAll: false }`**, committed before any season run.
+- Every non-zero `confZ` loses. The challengers' true gains (~0.2–0.5) are below the confirmation's se (~0.75 at
+  M = 128), so a significance test throws away mostly good switches. "Mean > 0" is the posterior-mean rule under a
+  prior that is positive on average, which is what the table above shows.
+
+What the confirmation adds over simply lowering the race's threshold (same model weeks, `tune_diag.md`):
+
+| rule | switches added/wk | truth per added switch | gain vs P10b, pts/wk |
+|---|---|---|---|
+| no confirmation: switch to every best challenger with race gain > 0.25 | 5.46 | +0.20 | +1.11 ± 0.35 |
+| no confirmation, race gain > 0.5 | 3.17 | +0.32 | +1.01 ± 0.32 |
+| **P10c: race gain > 0.25 and confirmation mean > 0** | **3.09** | **+0.38** | **+1.18 ± 0.29** |
+| (the confirmation's rejects) | 2.36 | −0.03 | −0.07 ± 0.19 |
+
+- **The confirmation is calibrated.** Its mean predicts the truth monotonically: ≤ −1: −0.10; −1–0: 0.00;
+  0–0.5: +0.20; 0.5–1: +0.33; 1–2: +0.66; > 2: +0.93.
+- **It filters out the worthless switches.** It keeps the gain of a lower threshold with 43% fewer switches, because
+  the switches it rejects are worth nothing on average. That is the "without adding flukes" part.
+- **Most of the gain comes from switching more often.** The confirmation adds only a little on top of that.
