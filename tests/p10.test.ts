@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as E from "../lib/engine/core";
 import { indexContext, type IndexDecision } from "../lib/engine/p8";
-import { candidates, decisionProblem, repair, race, p10Hooks, decisionKey } from "../lib/engine/p10";
+import { candidates, decisionProblem, repair, race, p10Hooks, decisionKey, confirmTarget, confirmPasses, type P10Opts } from "../lib/engine/p10";
 import { runChecked } from "../research/invariants";
 
 const H = 3600e3, T0 = Date.parse("2026-10-26T23:00:00Z");
@@ -148,4 +148,59 @@ test("no 'let go at his own tip-off, then sat' while his slot would stay idle", 
   ]);
   const { st, e, ctx } = at(t, T0 + 72 * H);
   for (const c of candidates(t, st, e, ctx)) assert.ok(c.d.starts.has(0) || c.d.locks.has(0), `${c.why}: A neither plays nor locks`);
+});
+
+// ---------------- P10c: confirmation of the race's best challenger on a fresh batch (task L) ----------------
+test("confirmation: which challenger is confirmed, and the one-sided test", () => {
+  const res = { pick: 0, k: 256, sims: 0, alive: 3, means: [], gain: 0.7, se: 0.4, per: [{ n: 256, m: 0, se: 0 }, { n: 256, m: 0.7, se: 0.4 }, { n: 256, m: 0.3, se: 0.3 }, { n: 1, m: 5, se: Infinity }] };
+  const cs = [{ why: "P8" }, { why: "lock p1 in F" }, { why: "out p2" }, { why: "in p3" }];
+  assert.equal(confirmTarget(res, cs, {}), -1, "off by default (P10 / P10b)");
+  assert.equal(confirmTarget(res, cs, { confirm: 64 }), 1, "best challenger by race gain (a candidate with 1 scenario is ignored)");
+  assert.equal(confirmTarget(res, cs, { confirm: 64, confGate: 0.8 }), -1, "race gain below the gate");
+  assert.equal(confirmTarget(res, cs, { confirm: 64, confKinds: "out+in" }), -1, "kind not allowed");
+  assert.equal(confirmTarget(res, cs, { confirm: 64, confKinds: "" }), 1, "any kind");
+  const acc = { ...res, pick: 2 };
+  assert.equal(confirmTarget(acc, cs, { confirm: 64 }), -1, "the race's own switch stands");
+  assert.equal(confirmTarget(acc, cs, { confirm: 64, confAll: true }), 2, "... or is confirmed too");
+  assert.deepEqual(confirmPasses([1, 2, 3]), { pass: true, m: 2, se: Math.sqrt(1 / 3) });
+  assert.equal(confirmPasses([-1, -2, 0.5]).pass, false);
+  assert.equal(confirmPasses([3, -2.8, 0.1]).pass, true, "mean 0.1 > 0");
+  assert.equal(confirmPasses([3, -2.8, 0.1], { confZ: 1.645 }).pass, false, "mean 0.1 < 1.645 se");
+  assert.equal(confirmPasses([3, -2.8, 0.1], { confMin: 0.2 }).pass, false, "mean 0.1 < confMin");
+});
+
+test("P10c: the race is P10b's (own confirmation stream); it obeys every rule; a confirmation that never passes = P10b", () => {
+  const r = E.rng(23); const POS = [["PG"], ["SG"], ["PG", "SG"], ["SF"], ["PF"], ["SF", "PF"], ["C"], ["PF", "C"]];
+  let conf = 0, changed = 0;
+  for (let trial = 0; trial < 4; trial++) {
+    const t = tw(["PG", "SG", "G", "SF", "PF", "F", "C", "UTIL", "UTIL"], Array.from({ length: 12 }, () => ({
+      pos: POS[Math.floor(r() * POS.length)],
+      games: [0, 1, 2, 3, 4, 5].filter(() => r() < 0.55).map((d) => ({ tip: T0 + d * 24 * H + Math.floor(r() * 4) * H, mu: 10 + Math.round(r() * 30), actual: Math.round(r() * 55 - 3) })),
+    })));
+    const ev = E.buildEvents(t, true);
+    const go = (o: P10Opts) => {
+      const h = p10Hooks(t, BASE, ev, 7, real(t), { ...QUICK, ...o }); const dec: string[] = [];
+      const hk: E.Hooks = { decideIndex: (st, tt, i, ctx) => { const d = h.decideIndex!(st, tt, i, ctx); dec.push(`${i}:${d ? decisionKey(d) : "-"}`); return d; } };
+      const res = runChecked(t, P8, ev, real(t).actual, real(t).played, hk);
+      return { res, dec, stats: h.stats };
+    };
+    const b = go({}), never = go({ confirm: 16, confGate: 0, confKinds: "", confMin: Infinity, confAll: true });
+    const c = go({ confirm: 16, confGate: 0, confKinds: "", confAll: true });
+    // never passes: every race switch is vetoed, nothing else changes -> P10b's decisions with the switches undone
+    assert.equal(never.stats.switched, 0, "every race switch vetoed, no switch added"); assert.equal(never.stats.confSwitch, 0);
+    assert.deepEqual(go({ confirm: 16, confMin: Infinity }).dec, b.dec, "only non-switches confirmed, never passing: exactly P10b");
+    // P10c = P10b up to its first changed decision (the race's random stream is untouched by the confirmation)
+    const first = c.stats.log.findIndex((x) => x[11] === 1 || x[11] === 2);
+    const upTo = first < 0 ? c.stats.log.length : first;
+    assert.deepEqual(c.stats.log.slice(0, upTo).map((x) => x.slice(0, 7)), b.stats.log.slice(0, upTo), "same races until the first change");
+    if (first < 0) assert.equal(c.res.total, b.res.total);
+    conf += c.stats.conf; changed += c.stats.confSwitch + c.stats.confVeto;
+    assert.equal(c.stats.confSims, 2 * 16 * c.stats.conf);
+    for (const x of [c, never]) {
+      assert.deepEqual(Object.keys(x.res.rep.counts).filter((k) => k.startsWith("L_")), [], JSON.stringify(x.res.rep.examples));
+      for (const k of ["S_forfeit_unforced", "S_idle_bench_exante", "F_yield_idle"]) assert.equal(x.res.rep.counts[k] ?? 0, 0, k);
+      assert.equal(x.res.total, x.res.trackerTotal);
+    }
+  }
+  assert.ok(conf > 10 && changed > 0, `confirmations ran (${conf}) and changed decisions (${changed})`);
 });

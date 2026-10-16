@@ -8,6 +8,9 @@
 //         hold/lock/let-go at every tip-off, the hold/lock/bench calls (advise decisions, notifier) and replay. Mass
 //         simulations (projections, Waivers, Matchups/league, IR, lock cut-offs, the decision options' expected points)
 //         stay on POLICY exactly as with p7h (same numbers, shared cache entries).
+//   p10c: p10b + the race's acceptance fix (task L, REPORT "P10b acceptance fix"): the race's best challenger is
+//         re-scored against P8's decision on a fresh confirmation batch (P10C_OPTS in lib/engine/p10.ts); otherwise
+//         exactly p10b (decision-only, mass simulations on POLICY with p7h's cache entries)
 //   p10b-full: the old p10b - the same decisions in the plan and replay, every mass simulation on P8f (5-20x slower
 //         views), hold/lock/bench calls by the options' P8f simulations
 // Mass simulations (projections, waivers, league, IR, cut-offs, decision rollouts) use the fast variant of the engine's
@@ -22,13 +25,13 @@ import os from "os";
 import path from "path";
 import * as E from "../engine/core";
 import { indexRolloutHooks } from "../engine/p8";
-import { p10Hooks } from "../engine/p10";
+import { p10Hooks, P10C_OPTS, type P10Opts } from "../engine/p10";
 import { p11Hooks, type OppSource, type P11Opts } from "../engine/p11";
 import { POLICY } from "./week";
 import { liveRacePool } from "./racepool";
 
-export type EngineName = "p7h" | "p8" | "p9" | "p10" | "p10b" | "p10b-full";
-export const ENGINES: EngineName[] = ["p7h", "p8", "p9", "p10", "p10b", "p10b-full"];
+export type EngineName = "p7h" | "p8" | "p9" | "p10" | "p10b" | "p10c" | "p10b-full";
+export const ENGINES: EngineName[] = ["p7h", "p8", "p9", "p10", "p10b", "p10c", "p10b-full"];
 export const DEFAULT_ENGINE: EngineName = "p7h";
 
 export type Objective = "points" | "win";
@@ -71,9 +74,11 @@ export function parseObjective(s: string): Objective {
   console.warn(`[engine] unknown objective "${s}", using ${DEFAULT_OBJECTIVE}`);
   return DEFAULT_OBJECTIVE;
 }
-// the race engines (P10 complete decisions); p10b and p10b-full race with P8 continuations
-const RACE: EngineName[] = ["p10", "p10b", "p10b-full"];
-const p8Race = (e: EngineName) => e === "p10b" || e === "p10b-full";
+// the race engines (P10 complete decisions); p10b, p10c and p10b-full race with P8 continuations; p10c confirms
+const RACE: EngineName[] = ["p10", "p10b", "p10c", "p10b-full"];
+const p8Race = (e: EngineName) => e === "p10b" || e === "p10c" || e === "p10b-full";
+// the decision-only race engines: mass simulations stay on POLICY
+const split = (e: EngineName) => e === "p10b" || e === "p10c";
 // playing for the win needs a race engine
 export function winActive(e: EngineName = engineName(), o: Objective = objectiveName()): boolean {
   if (o !== "win") return false;
@@ -99,11 +104,11 @@ export const P8F_POLICY: E.Policy = { name: "P8f", matching: "exact", value: "st
 // the policy that makes the actual decisions (plan, replay)
 export function decisionPolicy(e: EngineName = engineName()): E.Policy { return e === "p7h" ? POLICY : P8_POLICY; }
 // the policy that plays out simulated weeks (projections, waivers, league, IR, cut-offs, decision rollouts)
-export function simPolicy(e: EngineName = engineName()): E.Policy { return e === "p7h" || e === "p10b" ? POLICY : { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "sim", fresh: true } }; }
+export function simPolicy(e: EngineName = engineName()): E.Policy { return e === "p7h" || split(e) ? POLICY : { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "sim", fresh: true } }; }
 // p10b: the advice's hold / lock / bench call for each held score is the engine's own decision at the next tip-off
 // (the plan's first step), not the best of the options' quick simulations (those play the rest of the week by POLICY
 // and are shown for information)
-export function engineDecidesHolds(e: EngineName = engineName()): boolean { return e === "p10b"; }
+export function engineDecidesHolds(e: EngineName = engineName()): boolean { return split(e); }
 // the race engines replay a week in minutes (a race at every tip-off): the notifier precomputes last week's replay
 export function replayIsSlow(e: EngineName = engineName()): boolean { return RACE.includes(e); }
 
@@ -114,14 +119,14 @@ const raceBase = (e: EngineName): E.Policy => p8Race(e) ? { ...P8_POLICY, index:
 // Measurement knob (not for live use): env LOCKIN_RACE_KMAX = the race's maximum number of scenarios (default 256); when
 // set, the decision results get their own cache entries (engineTag "+kMax=N").
 const raceKMax = () => { const k = Number(process.env.LOCKIN_RACE_KMAX); return k > 0 ? k : undefined; };
-const raceOpts = () => { const k = raceKMax(); return k ? { kMax: k } : {}; };
+const raceOpts = (e: EngineName): P10Opts => { const k = raceKMax(); return { ...(e === "p10c" ? P10C_OPTS : {}), ...(k ? { kMax: k } : {}) }; };
 const p10 = (tw: E.TeamWeek, events: E.Ev[], seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName) =>
-  p10Hooks(tw, raceBase(e), events, seed, real, raceOpts(), undefined, { pool: raceOnWorkers() ? liveRacePool : null });
+  p10Hooks(tw, raceBase(e), events, seed, real, raceOpts(e), undefined, { pool: raceOnWorkers() ? liveRacePool : null });
 // Hooks for the start decisions of the plan: p7h start/sit simulations; p8 none (the index policy decides);
 // p9 rollouts over the index decision played by P8f; p10 / p10b / p10b-full raced complete decisions.
 // With objective "win" (race engines) and an opponent: P11 (the race plays for the win against the opponent's distribution).
 export function planHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName = engineName(), opp?: OppSource | null): E.Hooks | undefined {
-  if (opp && winActive(e)) return p11Hooks(tw, P8_POLICY, raceBase(e), events, seed, real, opp, { ...WIN_OPTS, ...raceOpts() }, undefined, raceOnWorkers() ? liveRacePool : null);
+  if (opp && winActive(e)) return p11Hooks(tw, P8_POLICY, raceBase(e), events, seed, real, opp, { ...WIN_OPTS, ...raceOpts(e) }, undefined, raceOnWorkers() ? liveRacePool : null);
   if (e === "p7h") return E.startRolloutHooks(tw, POLICY, events, K, seed, real);
   if (e === "p9") return indexRolloutHooks(tw, { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } }, events, K, seed, real);
   if (RACE.includes(e)) return p10(tw, events, seed, real, e);
@@ -139,7 +144,7 @@ export function replayHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: num
 // engineTag: for results that contain decisions (advise, replay). p10b's is "p10b+sim:p7h", never the "p10b" that the
 // old all-P8f p10b (now p10b-full, tag "p10b-full") wrote.
 export function engineTag(e: EngineName = engineName()): string | undefined {
-  const w = winActive(e); const k = RACE.includes(e) ? raceKMax() : undefined; const id = (e === "p10b" ? "p10b+sim:p7h" : e) + (k ? `+kMax=${k}` : "");
+  const w = winActive(e); const k = RACE.includes(e) ? raceKMax() : undefined; const id = (split(e) ? `${e}+sim:p7h` : e) + (k ? `+kMax=${k}` : "");
   return e === DEFAULT_ENGINE && !w ? undefined : w ? `${id}+win` : id;
 }
 // simTag: for results of mass simulations only (projections, Waivers, Matchups/league, IR). They depend on simPolicy

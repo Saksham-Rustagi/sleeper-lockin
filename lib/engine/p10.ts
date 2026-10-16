@@ -28,8 +28,20 @@ export interface P10Opts {
   zAcc?: number;    // switch from P8's decision only if the gain is > zAcc * se ... (default 2)
   minGain?: number; // ... and > minGain points (default 0.5, the clear-gain threshold of P7H / P9)
   pairs?: boolean;  // local swaps (default true)
+  // Confirmation (P10c, research/REPORT.md "P10b acceptance fix"): after the race, its best challenger is re-scored
+  // against P8's decision on `confirm` FRESH scenarios (own random stream, independent of the race that selected it, so
+  // free of the race's winner's curse). Default 0 = off (P10 / P10b exactly).
+  confirm?: number;  // fresh scenarios in the confirmation batch (default 0 = no confirmation)
+  confGate?: number; // a challenger the race did not accept is confirmed if its race gain is > confGate (default 0.5)
+  confKinds?: string; // ... and its kind (first word of `why`, '+'-separated, e.g. "lock" or "lock+in"; "" = any; default "lock")
+  confMin?: number;  // switch if the confirmation's mean gain is > confMin ... (default 0)
+  confZ?: number;    // ... and > confZ * its se (one-sided test; default 0)
+  confAll?: boolean; // the race's own accepted switches must pass the confirmation too (default false: kept as P10b)
 }
-const DEF: Required<P10Opts> = { nCand: 8, margin: 15, batch: 16, kMin: 32, kMax: 256, zDrop: 2, zAcc: 2, minGain: 0.5, pairs: true };
+const DEF: Required<P10Opts> = { nCand: 8, margin: 15, batch: 16, kMin: 32, kMax: 256, zDrop: 2, zAcc: 2, minGain: 0.5, pairs: true,
+  confirm: 0, confGate: 0.5, confKinds: "lock", confMin: 0, confZ: 0, confAll: false };
+// P10c: P10b's race + the confirmation (fixed before the season backtests, from model-scenario tuning: REPORT "P10b acceptance fix")
+export const P10C_OPTS: P10Opts = { confirm: 128, confGate: 0.5, confKinds: "lock", confMin: 0, confZ: 0, confAll: false };
 const NEG = -Infinity;
 
 export const decisionKey = (d: IndexDecision) =>
@@ -136,7 +148,8 @@ export function candidates(tw: E.TeamWeek, st: E.State, e: E.Ev, ctx: IndexConte
 }
 
 // ---------------- racing ----------------
-export interface RaceResult { pick: number; k: number; sims: number; alive: number; means: number[]; gain: number; se: number }
+// per[i]: candidate i's paired gain over the incumbent on the scenarios both have (n, mean, se; per[0] = 0)
+export interface RaceResult { pick: number; k: number; sims: number; alive: number; means: number[]; gain: number; se: number; per: { n: number; m: number; se: number }[] }
 // Generic racing with common random numbers. run(alive, k0, n) returns, per alive candidate, its scores on scenarios
 // k0..k0+n-1 (the same scenarios for every candidate). Candidate 0 is the incumbent and is never dropped.
 export function race(nCand: number, run: (alive: number[], k0: number, n: number) => number[][], o: P10Opts = {}): RaceResult {
@@ -165,7 +178,26 @@ export function race(nCand: number, run: (alive: number[], k0: number, n: number
   const ch = alive.filter((i) => i !== 0); const means = sc.map((_, i) => mean(i));
   const L = ch.length ? ch.reduce((a, b) => (means[b] > means[a] ? b : a)) : 0;
   const r = L ? diff(L, 0) : { m: 0, se: 0 };
-  return { pick: L && accept(L) ? L : 0, k, sims, alive: alive.length, means, gain: r.m, se: r.se };
+  const per = sc.map((x, i) => (i ? { n: x.length, ...diff(i, 0) } : { n: x.length, m: 0, se: 0 }));
+  return { pick: L && accept(L) ? L : 0, k, sims, alive: alive.length, means, gain: r.m, se: r.se, per };
+}
+
+// Confirmation (P10c): which challenger to confirm after a race, or -1. The race's accepted switch (if confAll), else
+// its best challenger by race gain if that gain is > confGate and its kind is allowed. Fresh paired gains d (challenger -
+// P8's decision) then decide: switch iff mean(d) > confMin and mean(d) > confZ * se(d).
+export function confirmTarget(res: RaceResult, cs: { why: string }[], o: P10Opts = {}): number {
+  const O = { ...DEF, ...o };
+  if (!O.confirm) return -1;
+  if (res.pick) return O.confAll ? res.pick : -1;
+  let L = -1; for (let i = 1; i < res.per.length; i++) if (res.per[i].n > 1 && (L < 0 || res.per[i].m > res.per[L].m)) L = i;
+  if (L < 0 || !(res.per[L].m > O.confGate)) return -1;
+  const kinds = O.confKinds.split("+").filter(Boolean);
+  return !kinds.length || kinds.includes(cs[L].why.split(" ")[0]) ? L : -1;
+}
+export function confirmPasses(d: number[], o: P10Opts = {}): { pass: boolean; m: number; se: number } {
+  const O = { ...DEF, ...o }; const n = d.length;
+  const m = d.reduce((s, x) => s + x, 0) / n; const se = n > 1 ? Math.sqrt(d.reduce((s, x) => s + (x - m) ** 2, 0) / (n - 1) / n) : Infinity;
+  return { pass: m > O.confMin && m > O.confZ * se, m, se };
 }
 
 // ---------------- continuations ----------------
@@ -189,8 +221,14 @@ export interface RacePool { round(ctx: RaceCtx, alive: number[], scens: Scen[]):
 
 // ---------------- the policy's hook ----------------
 // per raced decision (log): [candidates, scenarios used, continuations, candidates alive at the end, gain of the best challenger, its se, switched]
-export interface P10Stats { decisions: number; raced: number; cands: number; switched: number; scen: number; sims: number; ms: number; why: Record<string, number>; log: number[][] }
-export const newStats = (): P10Stats => ({ decisions: 0, raced: 0, cands: 0, switched: 0, scen: 0, sims: 0, ms: 0, why: {}, log: [] });
+// with confirmation on, 4 more: [confirmed candidate (-1 none), its race gain, confirmation mean gain, its se,
+//   outcome: 0 none, 1 switched by the confirmation, 2 race switch vetoed, 3 race switch confirmed, 4 not confirmed]
+// conf: confirmations run; confSwitch / confVeto: decisions the confirmation changed vs P10b's rule; confSims: their continuations
+export interface P10Stats { decisions: number; raced: number; cands: number; switched: number; scen: number; sims: number; ms: number; why: Record<string, number>; log: number[][];
+  conf: number; confSwitch: number; confVeto: number; confSims: number }
+export const newStats = (): P10Stats => ({ decisions: 0, raced: 0, cands: 0, switched: 0, scen: 0, sims: 0, ms: 0, why: {}, log: [], conf: 0, confSwitch: 0, confVeto: 0, confSims: 0 });
+// what a research probe sees after every raced decision (the final choice `pick`, after any confirmation)
+export interface RaceInfo { st: E.State; t: number; evIdx: number; cands: P10Cand[]; res: RaceResult; pick: number; base: E.Policy; score?: (total: number) => number }
 // Extension (ENGINE_V2 Phase 5, lib/engine/p11.ts): called at every tip-off decision with the candidates; may change how
 // a continuation's final total is scored, which policy plays the continuations, and add candidate decisions (inserted
 // after P8's, de-duplicated, legality-checked). Returning undefined leaves the decision exactly as P10's.
@@ -200,11 +238,14 @@ export interface P10Ext {
   prep?: (st: E.State, t: number, evIdx: number, ctx: IndexContext, cs: P10Cand[]) =>
     { score?: (total: number) => number; base?: E.Policy; extra?: { d: IndexDecision; why: string }[] } | undefined;
   pool?: RacePool | null;
+  rc?: () => number; // the confirmation's random stream (default rng(seed ^ 0x2545f491)), separate from the race's
+  onRace?: (x: RaceInfo) => void; // research probe (observe only)
 }
 // base: the policy that plays the continuations (P8f or P8; its index.slot must be its own price state, e.g. "roll")
 export function p10Hooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], seed: number,
   realised: { actual: Float64Array; played: Uint8Array }, o: P10Opts = {}, stats: P10Stats = newStats(), ext?: P10Ext): E.Hooks & { stats: P10Stats } {
   const r = ext?.r ?? E.rng(seed ^ 0x3c6ef372); const scratch = E.scratchState(); const pool = ext?.pool;
+  const rc = ext?.rc ?? E.rng(seed ^ 0x2545f491); const nConf = o.confirm ?? 0;
   return {
     stats,
     decideIndex: (st, t, evIdx, ctx) => {
@@ -222,19 +263,37 @@ export function p10Hooks(tw: E.TeamWeek, base: E.Policy, events: E.Ev[], seed: n
       if (cs.length < 2) { stats.ms += performance.now() - t0; return undefined; }
       stats.raced++; stats.cands += cs.length;
       const B = px?.base ?? base; const score = px?.score;
-      let rc: RaceCtx | null = null;
-      const res = race(cs.length, (alive, _k0, n) => {
-        const scens: Scen[] = []; for (let k = 0; k < n; k++) scens.push(E.sampleScenario(tw, st, t, r, realised));
+      let ctx0: RaceCtx | null = null;
+      const play = (alive: number[], scens: Scen[]) => {
         let tot: number[][] | null = null;
-        if (pool) { rc ??= { tw, base: B, events, st, evIdx, cands: cs.map((c) => c.d), prices: exportPrices(tw) }; tot = pool.round(rc, alive, scens); }
+        if (pool) { ctx0 ??= { tw, base: B, events, st, evIdx, cands: cs.map((c) => c.d), prices: exportPrices(tw) }; tot = pool.round(ctx0, alive, scens); }
         tot ??= alive.map((c) => scens.map((sc) => continuation(tw, B, events, st, evIdx, cs[c].d, sc, scratch)));
         return score ? tot.map((row) => row.map(score)) : tot;
+      };
+      const res = race(cs.length, (alive, _k0, n) => {
+        const scens: Scen[] = []; for (let k = 0; k < n; k++) scens.push(E.sampleScenario(tw, st, t, r, realised));
+        return play(alive, scens);
       }, o);
-      stats.scen += res.k; stats.sims += res.sims; stats.ms += performance.now() - t0;
-      stats.log.push([cs.length, res.k, res.sims, res.alive, Math.round(res.gain * 100) / 100, Math.round(res.se * 100) / 100, res.pick ? 1 : 0]);
-      if (!res.pick) return undefined;
-      stats.switched++; const w = cs[res.pick].why.split(" ")[0]; stats.why[w] = (stats.why[w] || 0) + 1;
-      return cs[res.pick].d;
+      stats.scen += res.k; stats.sims += res.sims;
+      const row = [cs.length, res.k, res.sims, res.alive, Math.round(res.gain * 100) / 100, Math.round(res.se * 100) / 100, res.pick ? 1 : 0];
+      // confirmation (P10c): the challenger re-scored vs P8's decision on fresh scenarios from its own stream
+      let pick = res.pick;
+      if (nConf > 0) {
+        const L = confirmTarget(res, cs, o); let cm = 0, cse = 0, out = 0;
+        if (L > 0) {
+          const scens: Scen[] = []; for (let k = 0; k < nConf; k++) scens.push(E.sampleScenario(tw, st, t, rc, realised));
+          const [a, b] = play([0, L], scens); const c = confirmPasses(b.map((x, k) => x - a[k]), o);
+          stats.conf++; stats.confSims += 2 * nConf; cm = c.m; cse = c.se;
+          if (res.pick) { out = c.pass ? 3 : 2; if (!c.pass) { pick = 0; stats.confVeto++; } }
+          else { out = c.pass ? 1 : 4; if (c.pass) { pick = L; stats.confSwitch++; } }
+        }
+        row.push(L, L > 0 ? Math.round(res.per[L].m * 100) / 100 : 0, Math.round(cm * 100) / 100, Math.round(cse * 100) / 100, out);
+      }
+      row[6] = pick ? 1 : 0; stats.log.push(row); stats.ms += performance.now() - t0;
+      ext?.onRace?.({ st, t, evIdx, cands: cs, res, pick, base: B, score });
+      if (!pick) return undefined;
+      stats.switched++; const w = cs[pick].why.split(" ")[0]; stats.why[w] = (stats.why[w] || 0) + 1;
+      return cs[pick].d;
     },
   };
 }

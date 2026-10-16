@@ -2352,3 +2352,48 @@ or live code changed.
 
 **Exploratory, added after the results.** Capping play probability at the player's recent availability gave
 +8.0 ± 5.5 vs current on 2025-26 but −2.6 ± 3.8 on 2024-25. It did not replicate.
+
+## P10b acceptance fix: confirm the race's best challenger on fresh scenarios (overnight 2026-10-16, task L)
+
+### Problem (task H, `research/ANALYSIS_H.md` finding 7)
+- The race's best *rejected* challenger, re-scored on 96 fresh scenarios, would have gained +0.66 ± 0.44 pts/wk
+  (2024-25 +0.81 ± 0.64). Most of it is "lock now" alternatives the race scored 0.5–1.0 better: +0.22 ± 0.06 each,
+  ~2.6 per week. The 2-se rule rejects them.
+- Race gains shrink on fresh scenarios (+0.70 → +0.22): the race's estimate of its best challenger is biased upward
+  (winner's curse), so lowering its own threshold would admit flukes.
+
+### Design (`lib/engine/p10.ts`: `confirmTarget`, `confirmPasses`, options `confirm*`; policy P10c, engine `p10c`)
+- The race is unchanged (same candidates, rounds, elimination, stopping, random stream), so P10c makes exactly
+  P10b's decisions until the first decision the confirmation changes.
+- **After the race**, one challenger is re-scored against P8's decision on a **fresh confirmation batch** of
+  `confirm` scenarios, drawn from its own random stream (`rng(seed ^ 0x2545f491)`), so the estimate is independent of
+  the selection and free of the winner's curse:
+  - if the race did not switch: its best challenger by race gain, if that gain is > `confGate` and its kind (first
+    word of the candidate's label: `lock`, `in`, `out`, `hold`, `play`, swap) is in `confKinds`;
+  - if the race switched: the switch stands (P10b), or with `confAll` it must pass the confirmation too.
+- **Switch rule:** the confirmation's mean paired gain d̄ > `confMin` and d̄ > `confZ` · se (one-sided).
+- Only one challenger is confirmed per decision (no multiple testing). Default `confirm: 0` = P10 / P10b exactly.
+- **Cost:** 2 × `confirm` continuations per confirmed decision, as one more round on the race's worker pool live.
+
+### Pre-registration (written before any tuning or season result was seen)
+**Tuning (model scenarios only, no real outcomes)** — `research/l_tune.ts`, `research/l_pipeline_tune.mjs`:
+- P10b played on model worlds: the 46 gap-study team-weeks of 2025-26 × 2 worlds, and 46 team-weeks of 2024-25
+  league B (rids 13, 18, weeks 1–23) × 1 world (worlds from `scenarios(tw, NW, seed·29+5)`, not the gap seeds).
+- At every raced decision whose race switched or whose best challenger has race gain > 0.25: that challenger's paired
+  gain over P8's decision on 512 fresh scenarios (own stream), kept per scenario.
+- `research/l_tune.py` replays every rule offline: confirmation = the first M of the 512, truth = mean of the last
+  256 (independent of the confirmation). Gain vs P10b per model week = Σ (switch under the rule − P10b's switch) ×
+  truth; 95% CI clustered by model week.
+- Grid: confGate ∈ {0.25, 0.5}; confKinds ∈ {lock, lock+in, any}; M ∈ {64, 128, 256}; confZ ∈ {0, 0.5, 1, 1.645}
+  (confMin 0); confAll ∈ {no, yes}: 144 rules.
+- **Pick:** the best tuning gain; among rules within 0.05 pts/wk of it, the smallest M, then confAll = no, then the
+  fewest kinds, then confGate 0.5, then the largest confZ. These become `P10C_OPTS` before any season run.
+  (Caveat: one-step gains with P8 playing the rest of the week; the selected rule's tuning gain is optimistic.)
+
+**Validation gate (as Phase 3):**
+- P10c on the real outcomes of 2025-26 (230 team-weeks) and 2024-25 (690), `research/p10run.ts`, invariant checker.
+- Baseline: the published P10b runs `s10` / `s24p10b` (same runner and seeds; the research path is bit-identical,
+  re-checked: every team-week where the confirmation changed nothing must reproduce P10b's total exactly).
+- **Ships only if** the pooled P10c − P10b gain (inverse-variance pooled, week-clustered CIs) has a 95% CI excluding 0
+  **and** 0 rule violations. Also reported: per season, decisions changed per week, latency on the live path with
+  workers, and task H's runner-up re-evaluation on P10c (96 fresh scenarios, `FRESH=96`), which should shrink toward 0.

@@ -8,7 +8,7 @@ import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS, simCutoff } from "./teamsim";
-import { decisionPolicy, simPolicy, planHooks, replayHooks, winActive, engineDecidesHolds, WIN_OPTS } from "./engine";
+import { decisionPolicy, simPolicy, planHooks, replayHooks, winActive, engineDecidesHolds, engineName, WIN_OPTS } from "./engine";
 import { liveOppSource } from "./opponent";
 import { betaAt } from "../engine/p11";
 
@@ -200,8 +200,9 @@ function decisions(ctx: WeekContext, K: number, seed: number, eng?: { st: E.Stat
       const what = o.action === "LOCK" ? `lock ${x.toFixed(1)} now` : o.action === "BENCH" ? `let ${x.toFixed(1)} go (bench him)` : next ? `keep holding ${x.toFixed(1)} in a starting slot (don't bench!)` : `leave him in a starting slot - his last game counts automatically`;
       const q = options[quick]; const gap = q.expPoints - o.expPoints;
       const qa = q.action === "LOCK" ? "locking" : q.action === "BENCH" ? "benching" : "holding";
-      reason = `P10b (complete decision for the ${fmtTime(eng.tip)} tip-off, raced by simulation): ${what}.` + (alts[quick].action === o.action ? ""
-        : gap > 0.5 ? ` The quick simulations rate ${qa} ${gap.toFixed(1)} pts higher; P10b's search is the better-tested one (backtest +2.4 pts/wk).`
+      const en = engineName() === "p10c" ? "P10c" : "P10b";
+      reason = `${en} (complete decision for the ${fmtTime(eng.tip)} tip-off, raced by simulation): ${what}.` + (alts[quick].action === o.action ? ""
+        : gap > 0.5 ? ` The quick simulations rate ${qa} ${gap.toFixed(1)} pts higher; ${en}'s search is the better-tested one (backtest +2.4 pts/wk).`
         : ` The quick simulations call it a near-tie (${qa} ${gap >= 0 ? "+" : ""}${gap.toFixed(1)} pts).`);
     }
     const bestAlt = alts[best];
