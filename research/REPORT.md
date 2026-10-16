@@ -2045,3 +2045,43 @@ node research/scratch/g/extract_live.mjs && node research/scratch/runenv.cjs LOC
 node research/scratch/g/notify_e2e.mjs p10b 2     # needs research/dist/g/{notify,simworker}.cjs
 node research/scratch/g/rehearse.mjs /tmp/g_deploy2
 ```
+
+## Analysis H: lineup timing, where the points go, literature (overnight 2026-10-15, task H)
+Analysis only; no engine behaviour changed. **Full write-up: `research/ANALYSIS_H.md`**. Tables and charts are in
+`research/out/h/` (`part1.md`, `part2.md`, `part4.md`, `literature.md`, `h_scored_curve_*.png`, `h_fill_curve_*.png`).
+
+- **Tooling.**
+  - `research/htrace.ts` traces the physical lineup of any policy and splits (Lagrangian bound − week total) exactly
+    into per-decision losses against each player's priced DP, plus extra slot charges and empty priced slot-time. The
+    split is validated on model scenarios: the categories sum to the gap within 0.04 ± 0.70 pts.
+  - It also re-evaluates P10b's best rejected race candidate on fresh scenarios.
+  - `research/h_lagmed.ts` compares the bound with brute-force optima on medium random weeks.
+  - Every traced total equals the published season runs (1,070 runs checked, 0 rule violations). `research/invariants.ts`
+    only gained optional observe-only callbacks.
+- **Part 1 (timing).**
+  - Our engines count scores from the same games as perfect hindsight (scored-time curves coincide); they differ only in
+    when they commit (P10b ≈ 25 h after the game, P8 28 h, P7H 17 h). No sign of locking too early.
+  - "All 9 secured" always lands on the final day, hindsight included, so it is not a useful target.
+  - At game day 5, P10b still has 5.9 slots open (P7H 4.7, hindsight 3.4). Managers lose mainly to empty slots (20% of
+    their slots).
+- **Part 2 (gap to the bound).**
+  - P10b, 120 real 2025-26 team-weeks, categories total 9.2 ± 1.5 pts/wk: final games kept to week end 2.6, held scores
+    later given up 2.0, players sat because held scores filled their slots 1.75, start/sit 1.5, let-go regret 0.6, the
+    rest ≤ 0.5.
+  - The top three (6.4 pts) are hold-vs-play contention, where the fluid bound is loose. On medium brute-force weeks the
+    bound is 3–5% above the true optimum.
+  - Search: the race's rejected runner-up is worth +0.66 ± 0.44 pts/wk on fresh scenarios, nearly all "lock now"
+    alternatives (+0.17–0.22 each, 4–5/week). Race gains shrink ~70% on fresh scenarios (winner's curse).
+- **Part 3.** About 85 verified references.
+  - Key point: an ALP bound would not be tighter (Brown & Zhang 2023); information relaxations would be.
+  - Shortlist: lock-aware race acceptance with a fresh confirmation batch; a penalized information-relaxation bound;
+    P8 hold priorities for contested slots; one-player-at-a-time rollout; truncated rollouts.
+- **Part 4 (win objective).**
+  - Only ~13% of real weeks are decided by < 10 pts; the oracle ceiling is +17 pp.
+  - P11's P(win) is overconfident by 15–20 pp in its active range.
+  - Managers differ in activity (significant), not in lock thresholds (≈ +1.1 sd for all).
+  - Next: calibrate P(win), add a per-manager engagement prior.
+
+```
+python3 -E research/h_analyze.py && python3 -E research/h_part4.py     # tables + charts from research/out/h/*
+```
