@@ -91,7 +91,7 @@ test("plan / replay hooks follow the engine", () => {
   assert.ok(h7?.decideStarts && !h7.decideIndex); assert.equal(h8, undefined); assert.ok(h9?.decideIndex);
   assert.ok(withEngine(undefined, undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real))?.decideLock);
   assert.equal(withEngine("p8", undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real)), undefined);
-  for (const e of ["p10", "p10b", "p10b-full"]) {
+  for (const e of ["p10", "p10b", "p10c", "p10b-full"]) {
     assert.ok(withEngine(e, undefined, () => planHooks(T.tw, T.events, 10, 1, T.real))?.decideIndex, `${e} plan hooks`);
     assert.ok(withEngine(e, undefined, () => replayHooks(T.tw, T.events, 10, 1, T.real))?.decideIndex, `${e} replay hooks`);
     assert.equal(withEngine(e, undefined, engineName), e);
@@ -204,4 +204,27 @@ test("p10b advice: every hold / lock / bench call is P10b's decision at the firs
   // the default engine keeps its own rule (best quick-simulation option)
   const a7 = await computeAdvice(ctx, 40, ms, null);
   assert.doesNotMatch(a7.decisions[0].reason, /P10b/);
+});
+
+// p10c (task L): p10b + the race's confirmation batch; split like p10b, its own decision cache entries; default unchanged
+test("p10c: P10c decisions (race + confirmation), mass simulations on POLICY with p7h's entries, own decision entries", () => {
+  withEngine("p10c", undefined, () => {
+    assert.equal(engineName(), "p10c"); assert.equal(decisionPolicy(), P8_POLICY); assert.equal(simPolicy(), POLICY);
+    assert.ok(engineDecidesHolds()); assert.ok(replayIsSlow()); assert.equal(engineTag(), "p10c+sim:p7h"); assert.equal(simTag(), undefined);
+  });
+  const x = { v: 3, K: 20000, week: 7, team: { pids: ["1", "2"] } };
+  const raw = crypto.createHash("sha1").update(JSON.stringify(x)).digest("hex");
+  assert.equal(withEngine("p10c", undefined, () => fingerprint(x, "sim")), raw);
+  assert.notEqual(withEngine("p10c", undefined, () => fingerprint(x)), withEngine("p10b", undefined, () => fingerprint(x)));
+  assert.equal(withEngine("p10b", undefined, () => engineTag()), "p10b+sim:p7h", "p10b unchanged");
+  assert.equal(withEngine(undefined, "p10c", engineName), "p10c", "selectable in config.json");
+  // the plan's race confirms (P10C_OPTS) with p10c only
+  const T = liveTeam(); const old = process.env.LOCKIN_NO_WORKERS; process.env.LOCKIN_NO_WORKERS = "1";
+  try {
+    for (const [e, n] of [["p10c", 12], ["p10b", 7]] as const) {
+      const h = withEngine(e, undefined, () => planHooks(T.tw, T.events, 10, 1, T.real)) as any;
+      E.simulate(T.tw, P8_POLICY, T.events, T.real.actual, T.real.played, E.cloneState(T.st), T.evIdx, h);
+      assert.ok(h.stats.raced > 0, `${e} raced`); assert.ok(h.stats.log.every((r: number[]) => r.length === n), `${e}: log rows of ${n}`);
+    }
+  } finally { if (old === undefined) delete process.env.LOCKIN_NO_WORKERS; else process.env.LOCKIN_NO_WORKERS = old; }
 });

@@ -13,6 +13,9 @@ import { resolveWeek } from "../lib/live/week";
 import { collect, logAdvice } from "../lib/live/collector";
 import { waiverAdvice } from "../lib/live/waivers";
 import { irAdvice, type IrAction } from "../lib/live/ir";
+import { opportunityScan, reportAlerts } from "../lib/live/oppscan";
+import { updateSince, isFresh, newAlerts, type SinceState } from "../lib/live/opportunity";
+import { optionOn } from "../lib/live/override";
 
 const DIR = path.join(os.homedir(), ".sleeper-lockin");
 const CFG = path.join(DIR, "config.json");
@@ -148,6 +151,21 @@ async function main() {
     for (const m of irMessages(ir.actions)) if (!sent[m.key]) { remind(m.title, m.body); sent[m.key] = now; n++; }
     log(`IR: ${ir.actions.map((x) => (x.urgent ? "URGENT " : "") + x.kind).join(", ") || "nothing to do"}${ir.cached ? " (cached)" : ""}`);
   } catch (e: any) { log("IR ERROR", e?.message || e); }
+  // opportunity alerts ("opportunityAlerts": true in config.json; default off): a rotation player newly ruled out ->
+  // the free agents (and my players) who should absorb his minutes; minutes surges. Deduped by the sent-log.
+  if (optionOn("opportunityAlerts")) {
+    try {
+      const OPPST = path.join(DIR, "opportunity-state.json"); const first = !fs.existsSync(OPPST);
+      const prev: SinceState = first ? {} : JSON.parse(fs.readFileSync(OPPST, "utf8"));
+      const r = await opportunityScan({ leagueId: cfg.leagueId, rosterId: cfg.rosterId, since: Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, v.since])) });
+      const st = updateSince(prev, r.absences.map((a) => a.pid), now, first);
+      r.absences.forEach((a) => (a.since = st[a.pid]?.since ?? null));
+      const fresh = newAlerts(reportAlerts(r, (a) => isFresh(a.since, now)), sent);
+      for (const m of fresh) { remind(m.title, m.body); sent[m.key] = now; n++; }
+      if (!process.env.DRY_RUN) fs.writeFileSync(OPPST, JSON.stringify(st));
+      log(`opportunity: ${r.absences.length} rotation players out, ${r.surges.length} surges, ${fresh.length} new alerts${first ? " (first run: current absences marked as old)" : ""}; box scores ${r.box.games} (+${r.box.fetched})`);
+    } catch (e: any) { log("opportunity ERROR", e?.message || e); }
+  }
   for (const [k, t] of Object.entries(sent)) if (now - t > 10 * 86400e3) delete sent[k];
   if (!process.env.DRY_RUN) fs.writeFileSync(SENT, JSON.stringify(sent));
   log(`week ${a.week}: ${a.decisions.length} decisions, ${a.plan.length} tip-offs planned, win ${a.outlook.winProb === null ? "–" : Math.round(a.outlook.winProb * 100) + "%"}, ${n} new reminders`);

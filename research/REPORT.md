@@ -2310,3 +2310,454 @@ node research/runtasks.mjs research/dist/p10run_w.cjs kmx "" "POLS=P10b;P10x:bas
 node research/runtasks.mjs research/dist/p10run_w.cjs kmxn "" "POLS=P10x:base=P8,rseed=1" DECLOG=1 PAR=14 TASKS=<same>   # 16 min
 cd research/out && python3 ../summ_kmax.py kmx,kmxn P10b "P10x:base=P8,rseed=1;P10x:base=P8,kMax=512;P10x:base=P8,kMax=1024" s10
 ```
+
+## Waivers page method: season-long waiver backtest (overnight 2026-10-16, task W)
+**Full write-up: `research/WAIVERS_W.md`** (design pre-registered in commit d5b9b38 before any result). No engine
+or live code changed.
+
+**Design.**
+- Every week, each team's real roster (2025-26: our league, 220 team-week decisions; 2024-25: three synthetic
+  leagues, 660) gets at most one add/drop from that week's real free agents, chosen before the week by each method.
+- The edited and the unedited roster are played on the real games by P8 (live P10b's base policy) over the 2 target
+  weeks (H2) and over the rest of the season while the pickup is kept (ROS).
+- New dataset: every player's games with full team schedules (`research/w_build.py`). `season_all.json` alone omits
+  free agents' DNPs.
+
+**Results** (pooled method minus current; P8 metric):
+
+| method | 2 weeks | rest of season |
+|---|---|---|
+| P8f simulations | +0.9 ± 2.2 | +1.4 ± 4.7 |
+| ROS term | −0.1 ± 1.4 | −0.8 ± 5.9 |
+| naive | −1.0 ± 2.1 | −1.3 ± 6.0 |
+
+- Live N = 2000 vs N = 300: +0.8 ± 2.0 / +3.7 ± 6.7 (2025-26 only).
+- A low-noise perfect-hindsight evaluator agrees with all of these.
+- **The current method stays. No config option was added (nothing won).**
+- P8f would also need a variant-parallel implementation to fit the 2-minute budget: 476 s on one thread, 61 s on
+  12 workers; POLICY takes 7 s at N = 300 and 44 s at N = 2000.
+
+**The method's value vs no move.**
+- 2024-25 (unmanaged rosters, good free agents left): **+8.8 ± 3.7** over 2 weeks, **+32 ± 13** over the rest of
+  the season. Predictions are 75–80% realized.
+- Our real league: **−1.6 ± 3.6** / −0.9 ± 13.8 (hindsight +1.0 ± 1.8), against +8.4 predicted.
+- The free agents left in our league are rotation players: the page's adds played 59% of their games and scored
+  9.0 per game against a projected 23.9. The pre-week model has no injury or rotation information for them.
+
+**Valuation sanity.**
+- In 58–71% of the current method's picks, the drop by itself is valued as a gain. In 72–88%, the move is worth
+  more than the add alone: the search selects POLICY's non-monotonicity and noise.
+- At N = 2000, 4.3% of all drop evaluations show a significant gain.
+- P8f halves the nonsense, but not the real outcome.
+
+**Exploratory, added after the results.** Capping play probability at the player's recent availability gave
++8.0 ± 5.5 vs current on 2025-26 but −2.6 ± 3.8 on 2024-25. It did not replicate.
+
+## P10b acceptance fix: confirm the race's best challenger on fresh scenarios (overnight 2026-10-16, task L)
+
+### Problem (task H, `research/ANALYSIS_H.md` finding 7)
+- The race's best *rejected* challenger, re-scored on 96 fresh scenarios, would have gained +0.66 ± 0.44 pts/wk
+  (2024-25 +0.81 ± 0.64). Most of it is "lock now" alternatives the race scored 0.5–1.0 better: +0.22 ± 0.06 each,
+  ~2.6 per week. The 2-se rule rejects them.
+- Race gains shrink on fresh scenarios (+0.70 → +0.22): the race's estimate of its best challenger is biased upward
+  (winner's curse), so lowering its own threshold would admit flukes.
+
+### Design (`lib/engine/p10.ts`: `confirmTarget`, `confirmPasses`, options `confirm*`; policy P10c, engine `p10c`)
+- The race is unchanged (same candidates, rounds, elimination, stopping, random stream), so P10c makes exactly
+  P10b's decisions until the first decision the confirmation changes.
+- **After the race**, one challenger is re-scored against P8's decision on a **fresh confirmation batch** of
+  `confirm` scenarios, drawn from its own random stream (`rng(seed ^ 0x2545f491)`), so the estimate is independent of
+  the selection and free of the winner's curse:
+  - if the race did not switch: its best challenger by race gain, if that gain is > `confGate` and its kind (first
+    word of the candidate's label: `lock`, `in`, `out`, `hold`, `play`, swap) is in `confKinds`;
+  - if the race switched: the switch stands (P10b), or with `confAll` it must pass the confirmation too.
+- **Switch rule:** the confirmation's mean paired gain d̄ > `confMin` and d̄ > `confZ` · se (one-sided).
+- Only one challenger is confirmed per decision (no multiple testing). Default `confirm: 0` = P10 / P10b exactly.
+- **Cost:** 2 × `confirm` continuations per confirmed decision, as one more round on the race's worker pool live.
+
+### Pre-registration (written before any tuning or season result was seen)
+**Tuning (model scenarios only, no real outcomes)** — `research/l_tune.ts`, `research/l_pipeline_tune.mjs`:
+- P10b played on model worlds: the 46 gap-study team-weeks of 2025-26 × 2 worlds, and 46 team-weeks of 2024-25
+  league B (rids 13, 18, weeks 1–23) × 1 world (worlds from `scenarios(tw, NW, seed·29+5)`, not the gap seeds).
+- At every raced decision whose race switched or whose best challenger has race gain > 0.25: that challenger's paired
+  gain over P8's decision on 512 fresh scenarios (own stream), kept per scenario.
+- `research/l_tune.py` replays every rule offline: confirmation = the first M of the 512, truth = mean of the last
+  256 (independent of the confirmation). Gain vs P10b per model week = Σ (switch under the rule − P10b's switch) ×
+  truth; 95% CI clustered by model week.
+- Grid: confGate ∈ {0.25, 0.5}; confKinds ∈ {lock, lock+in, any}; M ∈ {64, 128, 256}; confZ ∈ {0, 0.5, 1, 1.645}
+  (confMin 0); confAll ∈ {no, yes}: 144 rules.
+- **Pick:** the best tuning gain; among rules within 0.05 pts/wk of it, the smallest M, then confAll = no, then the
+  fewest kinds, then confGate 0.5, then the largest confZ. These become `P10C_OPTS` before any season run.
+  (Caveat: one-step gains with P8 playing the rest of the week; the selected rule's tuning gain is optimistic.)
+
+**Validation gate (as Phase 3):**
+- P10c on the real outcomes of 2025-26 (230 team-weeks) and 2024-25 (690), `research/p10run.ts`, invariant checker.
+- Baseline: the published P10b runs `s10` / `s24p10b` (same runner and seeds; the research path is bit-identical,
+  re-checked: every team-week where the confirmation changed nothing must reproduce P10b's total exactly).
+- **Ships only if** the pooled P10c − P10b gain (inverse-variance pooled, week-clustered CIs) has a 95% CI excluding 0
+  **and** 0 rule violations. Also reported: per season, decisions changed per week, latency on the live path with
+  workers, and task H's runner-up re-evaluation on P10c (96 fresh scenarios, `FRESH=96`), which should shrink toward 0.
+
+### Tuning result (model scenarios; `research/out/l/tune_summary.md`, `tune_diag.md`)
+138 model weeks (46 × 2 of 2025-26, 46 × 1 of 2024-25 league B): 25.1 raced decisions and 7.9 probe entries per week,
+512 fresh scenarios each. Truth = mean of fresh scenarios 256–511.
+
+What the race's best challenger is really worth, by race gain (fresh truth, mean ± 95% CI):
+
+| race switched? | kind | race gain 0.25–0.5 | 0.5–1.0 | 1.0–2.0 | > 2 |
+|---|---|---|---|---|---|
+| no | lock (4.3/wk) | +0.09 ± 0.08 | **+0.25 ± 0.10** | **+0.56 ± 0.22** | (n = 3) |
+| no | in (0.35/wk) | +0.05 ± 0.20 | +0.02 ± 0.44 | +0.75 ± 0.64 | |
+| no | out (0.76/wk) | −0.16 ± 0.15 | +0.23 ± 0.31 | +0.92 ± 0.66 | |
+| yes | lock (2.0/wk) | | +0.36 ± 0.12 | +0.54 ± 0.14 | +1.62 ± 0.44 |
+| yes | in / out (0.4/wk) | | +0.13 to +0.25 | +0.79 to +0.96 | +1.67 to +2.80 |
+
+- The model replicates task H: rejected "lock now" challengers at race gain 0.5–1.0 are worth +0.25 each (H: +0.22).
+  Race gains still shrink by 50–65%, but the race's best challenger is worth more than nothing in every bin above 0.5.
+- The race's own switches are worth +0.36 to +1.6 each. Confirming them as well (`confAll`) only loses: −0.06 to
+  −0.08 pts/wk in every otherwise equal rule.
+
+Top rules (of 144; full table in `tune_summary.md`):
+
+| confGate | kinds | M | confZ | confAll | gain vs P10b, pts/wk (one-step, 95% CI) | switches added/wk | confirmations/wk | extra continuations/wk |
+|---|---|---|---|---|---|---|---|---|
+| **0.25** | **any** | **128** | **0** | **no** | **+1.18 ± 0.29 (pick)** | 3.09 | 5.46 | 1,397 (+6%) |
+| 0.25 | any | 256 | 0 | no | +1.17 ± 0.28 | 3.29 | 5.46 | 2,794 |
+| 0.25 | any | 128 | 0 | yes | +1.10 ± 0.30 | 3.09 (0.56 vetoed) | 7.89 | 2,020 |
+| 0.25 | any | 64 | 0 | no | +1.08 ± 0.29 | 2.87 | 5.46 | 698 |
+| 0.25 | lock+in | 128 | 0 | no | +1.04 ± 0.28 | 2.64 | 4.62 | 1,182 |
+| 0.5 | any | 128 | 0 | no | +1.00 ± 0.27 | 1.83 | 3.17 | 813 |
+| 0.25 | any | 128 | 0.5 | no | +0.98 ± 0.26 | 2.12 | 5.46 | 1,397 |
+| 0.25 | lock | 128 | 0 | no | +0.98 ± 0.26 | 2.43 | 4.26 | 1,091 |
+
+**Pick (by the pre-registered rule): `P10C_OPTS = { confirm: 128, confGate: 0.25, confKinds: "" (any), confMin: 0,
+confZ: 0, confAll: false }`**, committed before any season run.
+- Every non-zero `confZ` loses. The challengers' true gains (~0.2–0.5) are below the confirmation's se (~0.75 at
+  M = 128), so a significance test throws away mostly good switches. "Mean > 0" is the posterior-mean rule under a
+  prior that is positive on average, which is what the table above shows.
+
+What the confirmation adds over simply lowering the race's threshold (same model weeks, `tune_diag.md`):
+
+| rule | switches added/wk | truth per added switch | gain vs P10b, pts/wk |
+|---|---|---|---|
+| no confirmation: switch to every best challenger with race gain > 0.25 | 5.46 | +0.20 | +1.11 ± 0.35 |
+| no confirmation, race gain > 0.5 | 3.17 | +0.32 | +1.01 ± 0.32 |
+| **P10c: race gain > 0.25 and confirmation mean > 0** | **3.09** | **+0.38** | **+1.18 ± 0.29** |
+| (the confirmation's rejects) | 2.36 | −0.03 | −0.07 ± 0.19 |
+
+- **The confirmation is calibrated.** Its mean predicts the truth monotonically: ≤ −1: −0.10; −1–0: 0.00;
+  0–0.5: +0.20; 0.5–1: +0.33; 1–2: +0.66; > 2: +0.93.
+- **It filters out the worthless switches.** It keeps the gain of a lower threshold with 43% fewer switches, because
+  the switches it rejects are worth nothing on average. That is the "without adding flukes" part.
+- **Most of the gain comes from switching more often.** The confirmation adds only a little on top of that.
+
+### Validation: season backtests on real outcomes (prefixes `l/v25`, `l/v24`; baselines `s10`, `s24p10b`)
+**Result: the gate is not met. P10c does not ship.** The default engine and `p10b` are unchanged.
+
+| comparison | 2025-26 (230, real league) | 2024-25 (690, synthetic) | **pooled** (inverse variance, week-clustered) |
+|---|---|---|---|
+| P10c − P10b, pts/wk | +0.28 ± 1.50 (naive ± 1.16) | +0.10 ± 0.78 (naive ± 0.77) | **+0.14 ± 0.69** |
+
+| season | P10c pts/wk | P10b pts/wk | weeks 1–11 / 12–23 | better / worse team-weeks | league A / B / C | win% (P10b) |
+|---|---|---|---|---|---|---|
+| 2025-26 | 286.5 | 286.2 | −0.87 / +1.32 | 66 / 46 | | 68.2% vs the real opponents (68.2%) |
+| 2024-25 | 286.6 | 286.5 | −0.27 / +0.43 | 154 / 166 | +0.6 / +0.6 / −0.9 | 53.8% vs the live bot (53.1%) |
+
+- **Rules:** 0 L_ violations on all 920 team-weeks; recount = engine total everywhere. No dominated actions
+  (S_forfeit_unforced, S_idle_bench_exante 0). Final-game locks rise slightly (I_lock_final_game 0.16 → 0.21/wk,
+  0.17 → 0.20/wk), as expected from more lock switches.
+- **Reproducibility:** in the 9 + 47 team-weeks where the confirmation never changed a decision, P10c's total equals
+  P10b's (`s10` / `s24p10b`) exactly. The confirmation's stream leaves the race untouched, and the research path still
+  reproduces the published P10b runs.
+- **Run note:** one 2024-25 team-week (w6 r28) was missing after the pipeline, though the runner reported no failure. It
+  was rerun alone with the same command.
+
+**What the confirmation changed (per real week)**
+
+| season | confirmations | switches added | race switches vetoed | switches from P8's decision (P10b) | kinds switched | continuations: race + confirmation (P10b) |
+|---|---|---|---|---|---|---|
+| 2025-26 | 4.88 | **2.68** | 0 | 4.48 (2.30) | lock 3.43, out 0.71, in 0.30 | 21,450 + 1,250 (23,118) |
+| 2024-25 | 4.69 | **2.55** | 0 | 4.43 (2.28) | lock 3.38, out 0.71, in 0.29 | 19,211 + 1,200 (21,118) |
+
+- The confirmed candidates' race gain is +0.62 on average, their confirmation gain +0.06–0.07 (se 0.8). That is the
+  winner's curse again, now measured on real-season states.
+- **The confirmation's extra cost is +5–6% continuations.** The race itself needs slightly fewer, because the states
+  differ after earlier locks.
+- Decision time per week (single process, 12 jobs) was 236 / 181 s for P10c. It is not comparable with the P10b runs:
+  those predate task C's speed-ups and ran under 14 jobs.
+
+**Runner-up re-evaluation after the fix** (task H's statistic on P10c: the best challenger *not* chosen, when the
+race scored it > 0.25 better, re-scored against the chosen decision on 96 fresh scenarios; `FRESH=96`, own stream):
+
+| | task H (P10b) | **P10c 2025-26** | **P10c 2024-25** |
+|---|---|---|---|
+| decisions per week | 5.51 (2025-26) | 2.23 | 2.16 |
+| gain if always switched, pts/wk | +0.66 ± 0.44 (2024-25: +0.81 ± 0.64) | **−0.18 ± 0.23** | **−0.10 ± 0.12** |
+| "lock" runner-ups, per decision | +0.17 to +0.22 | −0.03 ± 0.12 | +0.02 ± 0.07 |
+| "out" runner-ups, per decision | −0.22 | −0.28 ± 0.22 | −0.26 ± 0.13 |
+
+- As intended, the one-step headroom the race leaves is gone: what remains is 0 or slightly negative, i.e. the race now
+  takes every one-step improvement the model can see.
+
+**Why the model's +1.18 did not materialise (exploratory, written after the results; `research/summ_l_diag.py`)**
+- Regress each team-week's P10c − P10b on its number of added switches. On real outcomes an added switch is worth
+  **+0.05 pts (95% CI −0.18 .. +0.28)**: 2025-26 −0.12, 2024-25 +0.10. The model's estimate, +0.38 per switch, lies
+  outside that CI.
+- At the first added switch both runs face identical states, but the week's difference shows no relation to the
+  confirmation's estimate at that switch (0–0.5: −0.30; 0.5–1: +1.27; 1–2: −0.51; > 2: +0.77; ± 1–4 each).
+- So the switches the model rates +0.2–0.4 each ("lock now" rather than keep holding) are worth about 0 on real
+  outcomes. Either the model's view of a held score's option value is off by that much (the model's week expectation
+  already runs 5–7 pts above real outcomes, Phase 3), or the one-step value (P8 continuations) does not carry over when
+  P10c also decides later. Real-outcome noise (paired SD ~6 pts per team-week) cannot separate a +0.1–0.2 pt/wk
+  effect: 920 team-weeks resolve ± 0.7.
+- Task H's "+0.5 pt/wk still on the table" was itself a model estimate (fresh *model* scenarios). This experiment
+  shows that it does not turn into real points, at least not resolvably.
+
+**Live path latency** (real league, 2026-27 week 1, 12 projection + 12 race workers, cold caches; `research/livecost_l_run.mjs`,
+outputs `research/scratch/l/`; run right after the backtests, load average ~3–16):
+
+| view | p10b | p10c | decisions |
+|---|---|---|---|
+| notifier tick Wed 6:50 pm (3 held, 8 tip-offs): total / advice (CPU) | 15.7 / 12.3 s (133 s) | 16.1 / 12.6 s (138 s) | first-tip-off calls identical; one later plan step differs |
+| tick Fri 6:50 pm | 6.0 / 4.3 s | 6.1 / 4.3 s | identical |
+| tick Sat 5:50 pm | 3.7 / 2.8 s | 3.6 / 2.7 s | identical |
+| replay 2025-26 week 12, cold (CPU) | 37.9 s (436 s) | 37.2 s (434 s) | differ (313.5 vs 325.5 pts; one week, anecdotal) |
+
+The confirmation costs ≤ 0.4 s per view on the worker pool. RSS is unchanged (1.1–2.2 GB).
+
+### Decision and recommendation
+- **Pre-registered gate:** a pooled 95% CI excluding 0 and 0 violations. Result: +0.14 ± 0.69 with 0 violations, so
+  **not met: keep `p10b` live.** No DEPLOY note was written. Nothing in the live app or its config was touched.
+- **Kept as an option:** `p10c` (engine option, `"engine": "p10c"`) and P10c (research policy), with the confirmation
+  options on `P10Opts`. They are safe: decisions are rule-clean, latency is the same, and P10c is at least not worse
+  (+0.14 ± 0.69). But they have no demonstrated gain.
+- **What this says about the race:** the 2-se acceptance rule was not leaving real points behind. The "rejected but
+  good" challengers were good under the model only.
+  - Further acceptance tuning should not be judged on model scenarios.
+  - Next, test the model's held-score option value against real outcomes. For example, compare its lock-now vs hold
+    valuations on real 2024-25 states with what happened (calibration of the hold option).
+  - This connects to ANALYSIS_H items 2–3: the bound gap, and hold priorities.
+
+### Reproduce
+```
+npx esbuild research/l_tune.ts --bundle --platform=node --format=cjs --outfile=research/dist/l_tune.cjs --log-level=error
+npx esbuild research/p10run.ts --bundle --platform=node --format=cjs --outfile=research/dist/p10run.cjs --log-level=error
+node research/launch_detached.mjs research/out/l/tune.log research/l_pipeline_tune.mjs     # 63 min, 12 processes
+python3 -E research/l_tune.py l/t25,l/t24 --top 30 > research/out/l/tune_summary.md && python3 -E research/l_tune_diag.py
+node research/launch_detached.mjs research/out/l/val.log research/l_pipeline_val.mjs v25 v24  # 1.3 h + 3.0 h, 12 processes
+cd research/out && python3 ../summ_pool.py s10,l/v25 s24p10b,l/v24 P10c:P10b && python3 ../summ_season.py s10,l/v25 P10c:P10b
+python3 ../summ_s24.py s24,s24p10b,l/v24 P10c:P10b && python3 ../summ_inv.py l/v25:P10c,s10:P10b,l/v24:P10c,s24p10b:P10b
+python3 -E ../summ_l.py && python3 -E ../summ_l_diag.py
+npx esbuild scripts/simworker.ts --bundle --platform=node --format=cjs --outfile=research/dist/simworker_l.cjs --log-level=error
+node research/livecost_l_run.mjs p10b:tick:bw:DAY=2026-10-21 p10c:tick:cw:DAY=2026-10-21 ... p10b:replay:br12:WEEK=12 p10c:replay:cr12:WEEK=12
+```
+
+## Opportunity alerts (overnight 2026-10-19, task O)
+Goal: catch bench players whose role grows (a rotation player goes out, or a minutes surge) before Sleeper's projections
+do, and tell the user to grab them. Code: `lib/live/opportunity.ts` (detector, surge watch, overrides, alert texts; pure
+functions shared by the live scan and this validation), `lib/live/boxscores.ts` (cached ESPN box scores),
+`lib/live/oppscan.ts` (live scan), the override plumbing in `lib/live/week.ts`, the notifier.
+
+### Data for the validation
+- Minutes: Sleeper's per-game stat rows carry seconds played (`sp`), one row per rostered NBA player per team game, DNPs
+  included (≈ 18-19 rows per team game). 2025-26 regular season + 2025 preseason fetched by `research/o_fetch.py`
+  (`research/data/o/`, not committed); 2024-25 from `research/data/raw2024`. Projected minutes = the projection rows'
+  `sp`. Tip-off times and Sleeper's pre-game fp projection per game (`proj_sleeper`) from `research/data/w/all20xx.json`.
+- No injury history exists, so an absence is read off the box scores (a run of missed team games), and "the detector
+  knows" at the run's first missed game. Sleeper's depth chart has no history either: the depth-chart term is live only
+  (+1.5 min for the player next behind the absent one at his depth position) and is **not validated**.
+- **Leak found and avoided:** Sleeper deletes the projection rows of games a player then sat out, so in stored data
+  "no projection for tonight" partly encodes the outcome (with it, the fitted minutes model put weight 0.46 on Sleeper's
+  projected minutes; without it, 0.08). The validation's "Sleeper view at time T" is the projection of the player's last
+  **played** game before T (no row for a game he played = Sleeper showed 0). For lead times (games the player played)
+  the stored row is the real pre-game projection.
+
+### Tuning (2024-25 only; 2025-26 untouched until the pre-registration below was committed)
+- Rotation player: >= 20 mpg over his last 5 played games. Absence: >= 2 consecutive missed regular-season team games
+  after playing the previous one, >= 5 played games before. 2024-25: 463 absences.
+- A teammate's expected minutes gain = 0.87 x prior + 0.5 x (last-3 mpg - baseline) + 0.2 x n/(n+8) x with/without
+  delta (least squares on 2024-25, `research/o_tune2.py`; R² 0.19). Baseline = his mean minutes (DNP = 0) over the
+  absent player's last 5 played team games. Prior = share x the absent player's mpg; the share table (by the teammate's
+  baseline minutes and position overlap) is the mean realized share in 2024-25 (`research/o_tune.py`): same-position
+  players at 3-14 min absorb most (0.18-0.23 of the absent minutes each), 26+ min teammates lose minutes (regression).
+- With/without delta: his minutes in team games the absent player missed vs played (this season; last season at weight
+  0.5). Its coefficient is small (0.13-0.27 for k = 2-16): that history is noisy (rest days, other injuries).
+- In-sample ranking quality on 2024-25 (P@1 = top-1 gains >= 4 min over the absence's first <= 5 games):
+
+  | ranking | P@1 | P@3 | recall@3 (gain >= 6) | top-1 gain | top-3 gain | minutes MAE |
+  |---|---|---|---|---|---|---|
+  | full model | 0.69 | 0.57 | 0.39 | +9.0 | +6.6 | 5.9 |
+  | prior only | 0.54 | 0.51 | 0.34 | +6.0 | +5.6 | 6.1 |
+  | trend only | 0.65 | 0.54 | 0.34 | +7.0 | +4.6 | 6.9 |
+
+- fp per minute: last 15 played games (+ last season at weight 0.5, <= 600 min) shrunk toward the league rate with 120
+  pseudo-minutes (30-240 all tie: MAE 3.68-3.74 fp/g given the minutes).
+- **Surge watch: recent minutes regress hard.** The first rule (expected minutes 0.7 x last-3 + 0.3 x last-10;
+  last-3 >= Sleeper's projected minutes + 8, estimate >= 20, edge >= 5) flagged 5 league-0 free agents in 2024-25 with
+  realized 16.3 fp/g vs an estimate of 22.5 (and Sleeper's next-5 projections 18.6): expected 30 min, realized 24.
+  Looser variants were worse (21-68 flags, realized 8-14 fp/g vs estimates 18-22). So the expected minutes were fitted
+  over all 19,391 free-agent evaluations of 2024-25 (`research/o_tune3.py`, next-5 team games, DNP = 0):
+  `0.479 last3 + 0.254 last10 + 0.075 Sleeper projected min + 0.499 [Sleeper has a projection] + 1.77` (R² 0.63).
+  The resulting estimate beats Sleeper's next-game projection over all evaluations (MAE 3.2 vs 4.6 fp/g, bias +0.2 vs
+  +2.3). With it, a surge flag (last-3 >= Sleeper min + 6 with all 3 played, estimate >= 15, estimate >= Sleeper fp + 5)
+  is rare: 1 league-0 free agent in 2024-25.
+
+### Pre-registration (fixed before any 2025-26 outcome was computed; parameters = `OPP` in lib/live/opportunity.ts)
+(a) **Detector, every 2025-26 absence** (definition above; the window = the absence's first <= 5 games; teammates with a
+row in >= half the window). Realized gain = mean minutes in the window (DNP = 0) - baseline. A top-1/top-3 candidate
+"gained" if realized gain >= +4 min; absorbers = teammates with realized gain >= +6. Reported: P@1, P@3, recall@3, mean
+realized minutes and fp/g gain of top-1 / top-3, against all teammates, the prior-only ranking and a naive ranking
+(same-position teammate with the most baseline minutes under 26); calibration of predicted vs realized minutes gain.
+(b) **Lead time**: cases = top-3 candidates with realized gain >= 4 min and realized fp gain >= 3 fp/g. Sleeper caught up
+at the first absence game j (up to 10) he played whose `proj_sleeper` (0 if none) - his baseline projection >= half the
+realized fp gain; same in minutes with the projected minutes. Lead = j games and the days from game 0 to game j;
+never within the absence = censored. The detector's own estimate at game 0 catches up if its fp gain >= half the
+realized one.
+(c) **Value** (task-W framework, our league, 2025-26 weeks 1-22): at each week start (1 h before the week's first tip),
+alerts = top-3 replacement candidates with expected gain >= 4 min and estimate >= 15 fp/g, plus flagged surges, that
+are free agents in our league that week. An absence is known at T if its run covers the team's first game after T
+(proxy for an Out tag). In every week with an alert, every team adds the top alert (highest estimate) and drops the
+page's cheapest unprotected player (task W's policy drop values; never age <= 23 / dynasty ADP <= 120). Primary metric:
+paired real P8 points (edited - real roster), H2 = weeks w and w+1 while kept (task W's rule); also H1 = week w, the
+hindsight and POLICY evaluators. 95% CI = the wider of week-clustered and team-clustered. "Value" only if the H2 P8 CI
+excludes 0. **Calibration:** the Waivers page's search (task W's method "policy", N = 300) re-run with the override
+(every player flagged at the decision time gets the minutes-based estimate as his projection in weeks w, w+1) vs the
+same search with Sleeper's projections (task W's existing run). Better calibrated = realized minus predicted gain closer
+to 0 and the realized-on-predicted slope closer to 1, for the picks (P8 and hindsight H2) and for all 18 evaluated moves
+per team-week (hindsight H2).
+(d) **Surge watch**, 2025-26 free agents of our league, first flag per player per 7 days, evaluated before each game
+day: realized fp/g over the next 5 team games (DNP = 0) vs the estimate and Sleeper's projections; hit = realized >= 15.
+
+### Results (2025-26; `research/out/o/v25_summary.md`, `v25_value.md`)
+**In plain English:**
+- The detector is right about *minutes*.
+- But in our league, grabbing the alerted free agents gained about nothing: +1.4 ± 3.6 real points over two weeks,
+  CI includes 0.
+- Sleeper's projections are often already caught up by the first game of the absence.
+- The minutes override did not make the Waivers page's predictions better calibrated.
+- Ship it as an off-by-default information feed; keep the override off.
+
+**(a) Detector, 469 absences (out of sample; the model was fitted on 2024-25):**
+
+| ranking | P@1 (gain >= 4 min) | P@3 | recall@3 (absorbers >= 6) | top-1 min gain | top-1 fp/g gain | top-3 min gain | top-3 fp/g gain |
+|---|---|---|---|---|---|---|---|
+| **detector** | **66%** | 56% | 37% | **+8.13 ± 0.78** | **+4.75 ± 0.65** | +6.22 ± 0.44 | +3.72 ± 0.34 |
+| prior only | 59% | 50% | 32% | +6.83 ± 0.80 | +4.15 ± 0.60 | +5.16 ± 0.45 | +2.98 ± 0.32 |
+| naive (same position, most minutes < 26) | 44% | 47% | 27% | +1.39 ± 0.79 | +1.38 ± 0.67 | +2.81 ± 0.48 | +2.09 ± 0.39 |
+| every teammate (mean) | | | | +1.50 ± 0.19 | +1.03 ± 0.15 | | |
+
+- **The predicted minutes gain is well calibrated** (detector top-3):
+
+  | predicted gain | n | predicted | realized min | realized fp/g |
+  |---|---|---|---|---|
+  | 2-4 | 247 | +3.4 | +3.6 ± 1.0 | +2.4 ± 0.8 |
+  | 4-7 | 709 | +5.4 | +5.5 ± 0.6 | +3.2 ± 0.5 |
+  | 7-10 | 364 | +8.0 | +8.0 ± 0.9 | +4.9 ± 0.7 |
+  | 10+ | 87 | +11.7 | +12.4 ± 1.8 | +6.6 ± 1.5 |
+
+- Absent stars (>= 30 mpg, 151 absences): top-1 +8.3 min, +4.7 fp/g.
+- Alert-grade candidates (top-3, expected gain >= 4 min and estimate >= 15 fp/g, any roster status) are rare: 62
+  in a season. They were estimated at 18.8 fp/g and realized 20.5 fp/g.
+- **Caveat:** part of every gain is regression to the mean. Low-minute players can only go up; that is the "every
+  teammate +1.5" row. The detector's lead over that baseline (+6.6 min for top-1) is the real signal.
+
+**(b) Lead time** (594 cases: top-3 candidates who really gained >= 4 min and >= 3 fp/g):
+- Sleeper's per-game projection already showed half the realized fp gain **at the first game of the absence in 37%**
+  of cases.
+- It got there later in 30% of cases: mean 0.9 games / 1.9 days among the cases it reached; median 0, p75 1 game /
+  3 days.
+- It never got there within the absence in 33%.
+- Paired with the detector's own estimate at game 0 (fp):
+
+  | | Sleeper at game 0 | Sleeper later | Sleeper never |
+  |---|---|---|---|
+  | detector at half the realized gain at game 0 (228) | 106 | 70 (lead 2.0 games) | 52 |
+  | detector not there (366) | 113 | 107 | 146 |
+
+- So the detector beats Sleeper by about 2 games in 31% of the cases where it fires early, and in 23% Sleeper never
+  catches up.
+- In minutes the detector is at half the realized gain at game 0 in 51% of cases (Sleeper's projected minutes: 37%).
+
+**(c) Value of acting on the alerts** (pre-registered; 140 team-week decisions in the 14 weeks with a free-agent alert;
+all are replacement alerts, no surge reached the top of a week):
+
+| evaluator | H1 (week w) | H2 (weeks w, w+1) |
+|---|---|---|
+| **P8 real outcomes (pre-registered)** | +2.13 ± 2.62 | **+1.41 ± 3.61** |
+| hindsight lineup ceiling | +0.09 ± 1.57 | +1.03 ± 3.34 |
+| POLICY on real outcomes | +0.12 ± 2.18 | +0.26 ± 4.41 |
+
+- **The CI includes 0: no demonstrated value.**
+- The weekly top alerts were backups at 15-20 fp/g estimates: Daniss Jenkins, Luke Kornet, Dominick Barlow, Al
+  Horford ×2, Jaylon Tyson, ... One week (Al Horford, week 17) gave +18 / +21 pts. The rest were scattered around 0.
+- Reference, not pre-registered: the Waivers page's own pick in the same team-weeks realized −4.5 ± 3.3 (P8 H2).
+  Following the alert instead of the page would not have lost points, but neither gains significantly.
+- This is task W's finding again: our league's free agents are part-time players, and the gap between a replacement
+  backup and the cheapest droppable player is small.
+
+**(c) Calibration of the Waivers page** (task W's search, policy, N = 300, re-run with the override; picks and all 18
+evaluated moves per team-week, realized = H2):
+
+| search | picks | predicted | realized P8 | realized hindsight | P8 − predicted | hindsight − predicted | slope (hindsight) |
+|---|---|---|---|---|---|---|---|
+| Sleeper projections (task W) | 190 | 8.42 | −1.83 ± 4.21 | +1.17 ± 2.11 | −10.25 ± 4.54 | −7.25 ± 3.02 | −0.12 ± 0.27 |
+| minutes override (pre-registered: every flagged player) | 203 | 8.91 | −1.77 ± 4.09 | +0.84 ± 2.16 | −10.68 ± 5.07 | −8.07 ± 3.39 | −0.19 ± 0.24 |
+| override only above Sleeper's stale view (exploratory) | 190 | 8.40 | −2.92 ± 3.39 | +0.61 ± 1.91 | −11.32 ± 3.86 | −7.80 ± 2.79 | −0.04 ± 0.25 |
+| per game max(Sleeper, override) (exploratory, = the shipped rule) | 191 | 8.37 | −1.83 ± 3.88 | +1.05 ± 2.03 | −10.20 ± 4.21 | −7.31 ± 2.94 | −0.09 ± 0.26 |
+
+| all moves (hindsight H2) | moves | predicted | realized | realized − predicted | slope | flagged adds: predicted → realized |
+|---|---|---|---|---|---|---|
+| Sleeper projections | 3,954 | 2.57 | 0.67 | −1.89 ± 0.79 | 0.34 ± 0.08 | 1,233: 2.68 → 1.18 |
+| minutes override (pre-registered) | 3,954 | 3.08 | 0.26 | −2.82 ± 0.91 | 0.22 ± 0.07 | 105: 2.29 → −1.94 |
+| override only above Sleeper's stale view (exploratory) | 3,954 | 2.54 | 0.77 | −1.77 ± 0.81 | 0.31 ± 0.08 | 15: 0.63 → 1.80 |
+| per game max(Sleeper, override) (exploratory, = the shipped rule) | 3,954 | 2.57 | 0.54 | −2.03 ± 0.79 | 0.36 ± 0.08 | 1,320: 2.66 → 0.79 |
+
+- **The pre-registered override makes calibration worse:** all moves −2.82 vs −1.89, slope 0.22 vs 0.34.
+- Why: it replaced projections that Sleeper had already raised for the injury news. 31% of the page's evaluated adds
+  were flagged backups, and Sleeper already projected them higher than our estimate.
+- Both "only raise" variants are neutral, including the per-game maximum that ships: picks −10.20 vs −10.25, all
+  moves −2.03 vs −1.89, slope 0.36 vs 0.34.
+- **The page's overconfidence (task W: predicted +8.4, realized ≈ 0) does not come from stale free-agent projections
+  that minutes would fix.**
+
+**(d) Surge watch:**
+- 1 flag in 2025-26: Jaylin Williams (OKC), estimate 16.5, realized 12.4 fp/g, Sleeper 12.5. A miss.
+- Calibrated on 2024-25 (recent minutes regress strongly), the surge watch almost never fires on regular-season free
+  agents. No conclusion is possible from one flag.
+- Live 2026-10-19 (preseason minutes): it flags Aday Mara (OKC, rostered): 24.3 mpg vs Sleeper 10 min, ~17 fp/g.
+- The manager's example, Leonard Miller (CHI): 20.7 mpg last 3, 30.6 fp/36 shrunk, no Sleeper week-1 projection.
+  The model expects 16.7 min, about 14.2 fp/g, just under the 15 floor, so no alert. That floor was pre-registered
+  and is not changed post hoc.
+
+### Changes after the pre-registration
+- **Only raise.** A live check (2026-10-19, preseason) gave Keegan Murray, who rested in preseason, a replacement
+  override of 6.2 fp/g against Sleeper's 19.5. So the shipped override only ever raises a game's projection: per game,
+  max(Sleeper, override); the Waivers pool does the same.
+  - Validated only as exploratory variants: "only above Sleeper's stale view" (above) and the per-game maximum (below).
+- **The ESPN parser** was checked against Sleeper's own preseason stat rows: 1,952 player-games, minutes ±0.24, fp
+  exact 97.5%. The rest differ by technical fouls, which ESPN's box doesn't list.
+
+### Recommendation
+- **`opportunityAlerts`:** fine to enable as an information feed. Alerts are rare (about 40 free-agent alerts all
+  2025-26, at most one top alert a week), and each carries the "why" and the expected minutes.
+  - Tell the user: the minutes call is reliable (+8 min on average), but the fantasy gain of acting on it has been ≈ 0
+    in our league. Treat it like a waiver hint.
+  - Most valuable for their own players ("Role up ... start him"): start/sit is free, an add costs a drop.
+- **`minutesOverride`: keep off.** It didn't improve calibration in any variant, and the pre-registered version made
+  it worse.
+- Both are off by default, so the merge changes nothing until the config says so. Files, config, rollback:
+  `DEPLOY_OPPORTUNITY.md`.
+
+### Reproduce
+```
+python3 -I research/o_fetch.py                                   # Sleeper minutes data (curl), research/data/o/
+npx esbuild research/o_val.ts --bundle --platform=node --format=cjs --outfile=research/dist/o_val.cjs --log-level=error
+npx esbuild research/o_value.ts --bundle --platform=node --format=cjs --outfile=research/dist/o_value.cjs --log-level=error
+npx esbuild research/waivers_bt.ts --bundle --platform=node --format=cjs --outfile=research/dist/waivers_bt.cjs --log-level=error
+node research/o_run.mjs tune; python3 -I research/o_tune.py research/out/o/tune24_rk60.json   # 2024-25 tuning (o_tune2/3.py)
+node research/dist/o_val.cjs absences 2025 research/out/o/v25_abs.json; node research/dist/o_val.cjs surges 2025 research/out/o/v25_surges.json
+node research/dist/o_val.cjs alerts 2025 research/out/o/v25_alerts.json            # + ONLYRAISE=1 -> v25_alerts_or.json
+node research/o_pipeline.mjs; node research/o_pipeline2.mjs o25ovr; node research/o_pipeline2.mjs o25ovx   # ~7 + 6 + 6 min, 10 processes
+python3 -I research/o_summ.py research/out/o/v25_abs.json research/out/o/v25_surges.json; python3 -I research/o_vsumm.py
+node research/dist/o_live.cjs <leagueId> [rosterId] [out.json] [names]             # live scan + parser check (own cache dir)
+```

@@ -2,7 +2,7 @@
 // seeds for real outcomes), so instrumented runs reproduce the backtest numbers.
 import * as E from "./engine";
 import { indexRolloutHooks } from "../lib/engine/p8";
-import { p10Hooks, type P10Opts } from "../lib/engine/p10";
+import { p10Hooks, P10C_OPTS, type P10Opts, type RaceInfo } from "../lib/engine/p10";
 import { p11Hooks, type P11Opts, type OppSource } from "../lib/engine/p11";
 
 const K = Number(process.env.K || 200), KS = Number(process.env.KS || K);
@@ -24,6 +24,8 @@ POL.P9b = { ...POL.P8, name: "P9b" };
 // numbers, adaptive sampling); continuations played by P8f (P10) or P8 (P10b). P10x:base=P8|P8f,<P10Opts key>=val,...
 POL.P10 = { ...POL.P8, name: "P10" };
 POL.P10b = { ...POL.P8, name: "P10b" };
+// P10c = P10b + the confirmation of the race's best challenger on a fresh batch (task L, P10C_OPTS in lib/engine/p10.ts)
+POL.P10c = { ...POL.P8, name: "P10c" };
 // P11 = P10 playing for the win (lib/engine/p11.ts): P11:key=val,... (P11Opts, e.g. beta=300,sched=late), continuations by
 // P8f; P11b:... the same on P10b (continuations by P8). Needs the opponent (runner's opp argument).
 export const P11_TOP: E.Policy = { ...POL.P8, name: "P11top" };
@@ -47,7 +49,9 @@ export interface Runner { pol: E.Policy; events: E.Ev[]; hooks?: E.Hooks }
 // realised = the "world" the policy lives in (real outcomes, or a model scenario): rollouts keep its finished games.
 export const optsOf = (spec: string) => { const o: any = {}; for (const kv of spec.split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^-?[\d.]+$/.test(v) ? Number(v) : v === "false" ? false : v === "true" ? true : v; } return o; };
 export const p11Base = (b8: boolean): E.Policy => ({ ...POL.P8, name: "P10base", index: b8 ? { resolve: "tip", iters: 100, slot: "roll" } : { resolve: "info", iters: 30, slot: "roll" } });
-export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { actual: Float64Array; played: Uint8Array }, opp?: OppSource | null, r?: () => number): Runner {
+// onRace: research probe on P10 races (research/lprobe.ts; observe only)
+export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { actual: Float64Array; played: Uint8Array }, opp?: OppSource | null, r?: () => number,
+  onRace?: (x: RaceInfo) => void): Runner {
   const pol = policy(name);
   const events = E.buildEvents(tw, pol.chain);
   let hooks: E.Hooks | undefined;
@@ -59,12 +63,15 @@ export function runner(name: string, tw: E.TeamWeek, seed: number, realised: { a
   if (name === "P9b") hooks = indexRolloutHooks(tw, { ...pol, name: "P8base", index: { ...pol.index!, slot: "roll" } }, events, Number(process.env.KB || 50), seed, realised);
   else if (/^P9/.test(name)) hooks = indexRolloutHooks(tw, { ...pol, name: "P8base", index: { ...pol.index!, resolve: "never", ...baseOpts(), slot: "roll" } }, events, KS, seed, realised);
   if (/^P10/.test(name)) {
-    const o: any = {}; for (const kv of (name.match(/^P10x:(.*)$/)?.[1] ?? "").split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^[\d.]+$/.test(v) ? Number(v) : v === "false" ? false : v; }
-    const b8 = (o.base ?? (name === "P10b" ? "P8" : "P8f")) === "P8"; delete o.base;
-    // rseed=N: the race's random stream rng(seed ^ N) instead of rng(seed ^ 0x3c6ef372) (Monte-Carlo noise baseline)
-    const rseed = o.rseed; delete o.rseed;
+    const o: any = name === "P10c" ? { ...P10C_OPTS } : {};
+    for (const kv of (name.match(/^P10x:(.*)$/)?.[1] ?? "").split(",").filter(Boolean)) { const [k, v] = kv.split("="); o[k] = /^-?[\d.]+$/.test(v) ? Number(v) : v === "false" ? false : v === "true" ? true : v; }
+    const b8 = (o.base ?? (name === "P10b" || name === "P10c" ? "P8" : "P8f")) === "P8"; delete o.base;
+    // rseed=N: the race's random stream rng(seed ^ N) instead of rng(seed ^ 0x3c6ef372) (Monte-Carlo noise baseline);
+    // cseed=N: the confirmation's stream rng(seed ^ N) instead of rng(seed ^ 0x2545f491)
+    const rseed = o.rseed, cseed = o.cseed; delete o.rseed; delete o.cseed;
     const base: E.Policy = { ...POL.P8, name: "P10base", index: b8 ? { resolve: "tip", iters: 100, slot: "roll" } : { resolve: "info", iters: 30, slot: "roll" } };
-    hooks = p10Hooks(tw, base, events, seed, realised, o as P10Opts, undefined, rseed !== undefined ? { r: E.rng(seed ^ Number(rseed)) } : undefined);
+    hooks = p10Hooks(tw, base, events, seed, realised, o as P10Opts, undefined, {
+      ...(rseed !== undefined ? { r: E.rng(seed ^ Number(rseed)) } : {}), ...(cseed !== undefined ? { rc: E.rng(seed ^ Number(cseed)) } : {}), onRace });
   }
   if (/^P11/.test(name)) hooks = p11Hooks(tw, P11_TOP, p11Base(/^P11b/.test(name)), events, seed, realised, opp ?? null, optsOf(name.match(/^P11b?:(.*)$/)?.[1] ?? "") as P11Opts, r);
   if (/^P7H/.test(name)) hooks = E.startRolloutHooks(tw, { ...POL.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, events, KS, seed, realised, hooks);

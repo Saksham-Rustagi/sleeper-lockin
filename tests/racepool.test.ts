@@ -77,6 +77,15 @@ test("P10b and P10 races on 1, 3 and 12 workers = the single-thread race (decisi
   assert.deepEqual(d12, d1);
 });
 
+test("P10c (race + confirmation batch) on 1 and 3 workers = the single-thread run", () => {
+  const C: P10Opts = { ...O, confirm: 16, confGate: 0, confKinds: "", confAll: true };
+  for (const seed of [101, 106]) {
+    const one = runWeek(seed, B8, null, C);
+    assert.ok(one.stats.conf > 0, `week ${seed}: confirmations ran (${one.stats.conf})`);
+    for (const n of [1, 3]) assert.deepEqual(runWeek(seed, B8, pool(n), C), one, `week ${seed}, ${n} workers`);
+  }
+});
+
 test("a pool serves many team-weeks in turn (workers keep the last two; returning to an older one re-sends it)", () => {
   const p = createRacePool(bundle, 3)!; pools.set(-3, p);
   const ws = [111, 112, 113].map((s) => randomWeek(s)); const one = [111, 112, 113].map((s) => runWeek(s, B8, null));

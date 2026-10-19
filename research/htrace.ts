@@ -43,7 +43,7 @@ const muSB = (s: number, b: number) => mu[s * B + b];
 const elig = (p: number, s: number) => (tw.slots[s] & tw.pmask[p]) !== 0;
 
 // ---------------- P10 with candidate logging (decisions identical to lib/engine/p10.ts p10Hooks) ----------------
-const DEF: Required<P10Opts> = { nCand: 8, margin: 15, batch: 16, kMin: 32, kMax: 256, zDrop: 2, zAcc: 2, minGain: 0.5, pairs: true };
+const DEF: Required<P10Opts> = { nCand: 8, margin: 15, batch: 16, kMin: 32, kMax: 256, zDrop: 2, zAcc: 2, minGain: 0.5, pairs: true, confirm: 0, confGate: 0.5, confKinds: "lock", confMin: 0, confZ: 0, confAll: false };
 function raceLog(nCand: number, run: (alive: number[], k0: number, n: number) => number[][], o: P10Opts = {}) {
   const O = { ...DEF, ...o };
   const sc: number[][] = Array.from({ length: nCand }, () => []);

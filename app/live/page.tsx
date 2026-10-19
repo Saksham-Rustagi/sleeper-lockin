@@ -12,6 +12,7 @@ import type { Advice, Replay } from "@/lib/live/advise";
 import type { WaiverAdvice, WaiverPlayer } from "@/lib/live/waivers";
 import type { IrAdvice } from "@/lib/live/ir";
 import type { LeagueWeek, LeagueTeam } from "@/lib/live/league";
+import type { OppReport } from "@/lib/live/oppscan";
 
 type LeagueOpt = { league_id: string; name: string; season: string; status: string; roster_id: number | null };
 const CFG_KEY = "lockin-live-config";
@@ -202,10 +203,10 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
             <thead><tr className="text-left text-gray-500"><th>Player</th>{a.dates.map((d) => <th key={d} className="px-2">{d.slice(5)}</th>)}</tr></thead>
             <tbody>{a.me.players.map((p) => (
               <tr key={p.pid} className={p.locked ? "bg-purple-50 dark:bg-purple-900/20" : ""}>
-                <td className="py-1 pr-2 whitespace-nowrap">{p.name} <span className="text-xs text-gray-500">{p.pos}</span> {p.injury && <Badge variant="outline" className="text-xs">{p.injury}</Badge>}</td>
+                <td className="py-1 pr-2 whitespace-nowrap">{p.name} <span className="text-xs text-gray-500">{p.pos}</span> {p.injury && <Badge variant="outline" className="text-xs">{p.injury}</Badge>}{p.projOverride && <Badge variant="outline" className="text-xs ml-1 border-amber-500 text-amber-700" title={p.projOverride}>minutes override</Badge>}</td>
                 {a.dates.map((d) => { const g = p.games.find((x) => x.date === d); return (
-                  <td key={d} className={`px-2 ${g?.status === "post" ? "text-gray-500" : g?.status === "in" ? "text-blue-600 font-semibold" : ""}`}>
-                    {g ? (g.actual !== null ? fmt(g.actual) : fmt(g.proj)) : ""}<div className="text-[10px] text-gray-400">{g ? `${g.opp} ${tipTime(g.tip).split(" ").slice(1).join(" ")}` : ""}</div>
+                  <td key={d} className={`px-2 ${g?.status === "post" ? "text-gray-500" : g?.status === "in" ? "text-blue-600 font-semibold" : ""}`} title={g?.projOverride}>
+                    {g ? (g.actual !== null ? fmt(g.actual) : fmt(g.proj)) : ""}{g?.projOverride && g.actual === null ? <span className="text-amber-600">*</span> : null}<div className="text-[10px] text-gray-400">{g ? `${g.opp} ${tipTime(g.tip).split(" ").slice(1).join(" ")}` : ""}</div>
                   </td>); })}
               </tr>))}</tbody>
           </table>
@@ -313,6 +314,7 @@ function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: numbe
   return (
     <div className="space-y-6">
       <IrCard leagueId={leagueId} rosterId={rosterId} protect={protect} />
+      <OpportunityCard leagueId={leagueId} rosterId={rosterId} />
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div><CardTitle>Best waiver moves</CardTitle><CardDescription>Week {w.week}{w.nextWeek ? ` + week ${w.nextWeek}` : ""} · {w.rosterFull ? "roster full: each add needs a drop" : `${w.openSpots} open spot(s)`} · {w.cached ? `no changes since ${tipTime(w.generatedAt)}` : `recalculated ${tipTime(w.generatedAt)}`}</CardDescription></div>
@@ -323,7 +325,7 @@ function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: numbe
             <thead><tr className="text-left text-gray-500"><th>Add</th><th>Drop</th><th>Games (this/next)</th><th>This wk</th><th>Next wk</th><th>Total</th><th></th></tr></thead>
             <tbody>{w.moves.map((m, i) => (
               <tr key={i} className={m.confident ? "font-semibold" : "text-gray-500"}>
-                <td>{pl(m.add)}{m.add.injury && <Badge variant="outline" className="ml-1 text-xs">{m.add.injury}</Badge>}<div className="text-[11px] font-normal text-gray-500">{m.add.projPerGame ?? "–"} pts/g · {m.add.note}</div></td>
+                <td>{pl(m.add)}{m.add.injury && <Badge variant="outline" className="ml-1 text-xs">{m.add.injury}</Badge>}<div className="text-[11px] font-normal text-gray-500">{m.add.projPerGame ?? "–"} pts/g · {m.add.note}</div>{m.add.projOverride && <div className="text-[11px] font-normal text-amber-700">{m.add.projOverride}</div>}</td>
                 <td>{m.drop ? pl(m.drop) : "—"}</td><td>{m.add.gamesThisWeek}/{m.add.gamesNextWeek}</td>
                 <td>{sign(m.gainThisWeek)}</td><td>{sign(m.gainNextWeek)}</td><td>{sign(m.total)} <span className="text-xs font-normal">±{(2 * m.se).toFixed(1)}</span></td>
                 <td>{m.confident ? <Badge>worth it</Badge> : <span className="text-xs">within noise</span>}</td>
@@ -342,7 +344,7 @@ function WaiversView({ leagueId, rosterId }: { leagueId: string; rosterId: numbe
         <Card>
           <CardHeader><CardTitle className="text-lg">Top free agents</CardTitle><CardDescription>Value if added without dropping anyone.</CardDescription></CardHeader>
           <CardContent><table className="w-full text-sm"><tbody>{w.candidates.map((c) => (
-            <tr key={c.pid}><td>{pl(c)}</td><td>{c.gamesThisWeek}/{c.gamesNextWeek} g</td><td>{c.projPerGame ?? "–"}/g</td><td>{sign(c.gainNoDrop)}</td><td className="text-xs text-gray-500">{c.age ? `age ${c.age}` : ""}{c.dynastyAdp ? ` · ADP ${Math.round(c.dynastyAdp)}` : ""}</td></tr>))}</tbody></table></CardContent>
+            <tr key={c.pid}><td>{pl(c)}</td><td>{c.gamesThisWeek}/{c.gamesNextWeek} g</td><td title={c.projOverride}>{c.projPerGame ?? "–"}/g{c.projOverride && <span className="text-amber-600">*</span>}</td><td>{sign(c.gainNoDrop)}</td><td className="text-xs text-gray-500">{c.age ? `age ${c.age}` : ""}{c.dynastyAdp ? ` · ADP ${Math.round(c.dynastyAdp)}` : ""}</td></tr>))}</tbody></table></CardContent>
         </Card>
       </div>
     </div>
@@ -365,6 +367,29 @@ function IrCard({ leagueId, rosterId, protect }: { leagueId: string; rosterId: n
             <div className="font-semibold">{x.urgent ? "⚠️ " : ""}{x.title}</div><div className="text-gray-600 dark:text-gray-300">{x.detail}</div>
             {x.dropOptions && <div className="text-xs text-gray-500 mt-1">Drop options (points lost over two weeks): {x.dropOptions.map((d) => `${d.name} ${d.loss < 0.5 ? "≈0" : "−" + d.loss.toFixed(1)}${d.protected ? ` (${d.reason})` : ""}`).join(" · ")}</div>}
           </div>))}
+      </CardContent>
+    </Card>
+  );
+}
+
+// task O: rotation players out -> who absorbs the minutes; minutes surges (lib/live/oppscan.ts)
+function OpportunityCard({ leagueId, rosterId }: { leagueId: string; rosterId: number }) {
+  const [r, setR] = useState<OppReport | null>(null); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { (async () => { try { const x = await fetch(`/api/opportunity?league=${leagueId}&roster=${rosterId}`); const j = await x.json(); if (!x.ok) throw new Error(j.error); setR(j); } catch (e: any) { setErr(e.message); } })(); }, [leagueId, rosterId]);
+  if (err) return <div className="p-3 rounded bg-red-50 text-red-700 text-sm">Opportunities: {err}</div>;
+  if (!r) return <Card><CardContent className="py-4 text-gray-500 text-sm">Checking minutes (box scores)…</CardContent></Card>;
+  const tag = (s: string) => s === "fa" ? <Badge className="text-xs">free agent</Badge> : s === "mine" ? <Badge variant="outline" className="text-xs">yours</Badge> : null;
+  const abs = r.absences.filter((a) => a.candidates.some((c) => c.gain >= 4 && c.status !== "rostered"));
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-lg">Opportunities (minutes)</CardTitle><CardDescription>Rotation players ruled out and the teammates expected to absorb their minutes; free agents whose recent minutes run well above their projection. Estimates = shrunk recent fp/min × expected minutes. Backtest: the minutes calls are right (top pick +8 min on average), but adding these free agents gained ≈0 real points in our league. Minutes override in simulations: {r.enabled.minutesOverride ? "on" : "off"}.</CardDescription></CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {abs.length === 0 && r.surges.length === 0 && <div className="text-gray-500">Nothing notable right now.</div>}
+        {abs.slice(0, 8).map((a) => (
+          <div key={a.pid}><b>{a.name}</b> ({a.team}, {a.mpg} mpg) {a.injury}: {a.candidates.filter((c) => c.gain >= 4).slice(0, 3).map((c) => (
+            <span key={c.pid} className="mr-3" title={c.why}>{c.name} {tag(c.status)} {c.expMin} min (+{c.gain}), ~{c.est} fp/g{c.sleeperProj !== null ? ` (Sleeper ${fmt(c.sleeperProj)})` : " (Sleeper: none)"}</span>))}</div>))}
+        {r.surges.filter((s) => s.status !== "rostered").map((s) => <div key={s.pid}><b>{s.name}</b> {tag(s.status)} minutes surge: {s.why}</div>)}
+        <div className="text-xs text-gray-500">{r.box.games} box scores ({r.box.preseasonGames} preseason){r.notes.length ? ` · ${r.notes.join(" · ")}` : ""}</div>
       </CardContent>
     </Card>
   );

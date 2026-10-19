@@ -5,7 +5,7 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 `launchctl`, never `git push`. Commit your work on `engine-v2` in small, described commits.
 
 ## Commands
-- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 25 tests today)
+- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 91 tests today)
 - Bundle a research script: `npx esbuild research/X.ts --bundle --platform=node --format=cjs --outfile=research/dist/X.cjs --log-level=error`
 - Season backtest (2025-26, 23 weeks x 10 teams = 230 team-weeks), parallel over the 14 cores:
   `node research/runpar.mjs research/dist/backtest.cjs <outPrefix> <POLICY,POLICY,...> 200 KS=200`
@@ -23,6 +23,18 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
   at decision time). `lib/live/teamsim.ts`: shared simulation + worker threads. `lib/live/racepool.ts`: P10/P10b race
   continuations on their own worker threads (synchronous, bit-identical; research passes no pool = single thread).
 - `research/backtest.ts` + `research/btcommon.ts`: walk-forward backtest (no look-ahead; model fit on prior weeks only).
+- `research/waivers_bt.ts` + `research/wcommon.ts` + `research/w_run.mjs`: season-long waiver backtest of the Waivers
+  page's valuation (task W, `research/WAIVERS_W.md`; datasets from `research/w_build.py`).
+- P10c / engine option `p10c` (task L, REPORT "P10b acceptance fix"; not shipped, gate not met): P10b + a fresh
+  confirmation batch for the race's best challenger (`confirm*` in `P10Opts`, `P10C_OPTS`). Probes on races:
+  `research/lprobe.ts` (tuning data `research/l_tune.ts`/`.py`; task H's runner-up statistic via `p10run` env FRESH=96).
+- Opportunity alerts (task O, REPORT "Opportunity alerts", `DEPLOY_OPPORTUNITY.md`; both switches default off):
+  `lib/live/opportunity.ts` (pure: replacement detector, surge watch, overrides, alert texts, `OPP` parameters fitted on
+  2024-25), `lib/live/boxscores.ts` (ESPN box-score store), `lib/live/oppscan.ts` (live scan, `minutesOverrides`),
+  `lib/live/override.ts` (config `"opportunityAlerts"` / `"minutesOverride"`, override hash in fingerprints). Research:
+  `research/o_fetch.py` (Sleeper minutes data -> `research/data/o/`), `o_common.ts`, `o_val.ts` (absences / surges /
+  week-start alerts), `o_value.ts` + `o_pipeline*.mjs` (value + calibration via the task-W framework; `waivers_bt.ts`
+  env OVR / OVR_MAX), `o_summ.py`, `o_vsumm.py`, `o_tune*.py`, `o_live.ts` (live scan + ESPN parser check).
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)
