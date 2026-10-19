@@ -181,3 +181,16 @@ test("config switches default off; fingerprints unchanged when off, include the 
   assert.equal(overrideHashOf(ov), overrideHashOf({ B: { ...ov.B, label: "y" } })); assert.notEqual(overrideHashOf(ov), overrideHashOf({ B: { ...ov.B, perGame: 19 } }));
   assert.equal(overrideHashOf(null), null);
 });
+
+test("no-projection estimate (task O2): >= 3 of the team's last 5 games, surge minutes with projected minutes = last-10 mpg", () => {
+  const h = hist(); const T = T0 + 11 * 2 * DAY; const P = O.OPP;
+  assert.equal(O.noProjection(h, "D", T), null, "deep bench: played 2 of the last 5 team games");
+  const w = O.noProjection(h, "W", T)!;
+  assert.equal(w.playedN, 5); assert.equal(w.window, 5);
+  const exp = Math.min(P.maxMin, P.sA * 30 + (P.sB + P.sC) * 30 + P.sD + P.s0);
+  assert.ok(Math.abs(w.expMin - exp) < 0.06, `${w.expMin} vs ${exp}`);
+  assert.ok(Math.abs(w.est - w.rate * w.expMin) < 0.2);
+  assert.ok(w.expMin > O.surge(h, "W", T, { min: null, fp: null })!.expMin, "a data gap is not 'Sleeper expects nothing'");
+  const ov = O.noProjectionOverrides([w]).W;
+  assert.equal(ov.source, "noProjection"); assert.equal(ov.perGame, w.est); assert.match(ov.label, /^projection override: Sleeper has no game projection; based on last \d+ games/);
+});

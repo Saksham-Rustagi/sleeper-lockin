@@ -50,7 +50,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
     const thisW = rows.filter((r) => wkOf(r.date) === week && Date.parse(r.date + "T23:59:00Z") > asOf).length;
     const nextW = rows.filter((r) => wkOf(r.date) === nextWeek).length;
     const sp = rows.length ? rows.reduce((a, r) => a + fantasyPoints(r.stats, S), 0) / rows.length : null;
-    const o2 = ov?.[pid] && ov[pid].perGame > (sp ?? 0) ? ov[pid] : null; // the override only raises (as in buildWeek)
+    const o2 = ov?.[pid] && ov[pid].perGame > (sp ?? 0) && (ov[pid].source !== "noProjection" || !rows.length) ? ov[pid] : null; // the override only raises (as in buildWeek); no-projection: only without rows
     const pp = o2 ? o2.perGame : sp;
     const tg = !rows.length && o2 ? teamGames(p?.team ?? null) : null; // flagged without Sleeper rows: his team's games
     return { pid, name: p?.full_name || pid, pos: (p?.fantasy_positions || []).join("/"), team: p?.team ?? null, age: p?.age ?? null, injury: p?.injury_status ?? null,
@@ -69,7 +69,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
     if (Date.parse(r.date + "T23:59:00Z") < asOf) continue;
     const p = players[r.player_id]; if (!p?.team) continue;
     const pk = injuryPlayProb(p.injury_status) ?? 0.91;
-    byPid.set(r.player_id, (byPid.get(r.player_id) || 0) + pk * Math.max(0, gameDist(Math.max(ov?.[r.player_id]?.perGame ?? -Infinity, fantasyPoints(r.stats, S))).mu));
+    byPid.set(r.player_id, (byPid.get(r.player_id) || 0) + pk * Math.max(0, gameDist(Math.max(ov?.[r.player_id]?.source !== "noProjection" ? ov?.[r.player_id]?.perGame ?? -Infinity : -Infinity, fantasyPoints(r.stats, S))).mu));
   }
   // flagged free agents without a Sleeper projection row (Sleeper shows 0): valued at the override over his team's games
   for (const [pid, x] of Object.entries(ov || {})) {

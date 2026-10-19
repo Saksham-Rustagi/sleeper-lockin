@@ -114,8 +114,9 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
         const tip = ek?.tip ?? Date.parse(g.date + "T23:30:00Z");
         let status: LiveGame["status"] = ek?.state ?? "pre";
         if (mode === "replay") status = tip + GAME_LEN <= asOf ? "post" : tip <= asOf ? "in" : "pre";
-        // the override only ever raises a game's projection (Sleeper may already have reacted to the news)
-        const ov = status === "pre" && ovAll?.[pid] && ovAll[pid].perGame > proj ? ovAll[pid] : undefined;
+        // the override only ever raises a game's projection (Sleeper may already have reacted to the news); a
+        // no-projection override (task O2) only replaces the fallback of a game without a Sleeper projection row
+        const ov = status === "pre" && ovAll?.[pid] && ovAll[pid].perGame > proj && (ovAll[pid].source !== "noProjection" || !(pr?.stats && Object.keys(pr.stats).length)) ? ovAll[pid] : undefined;
         if (ov) proj = ov.perGame;
         const played = srow?.stats ? !!(srow.stats.gp || srow.stats.sp) : status === "post" ? false : null;
         const actual = status === "post" ? (played ? fantasyPoints(srow!.stats, S) : 0) : null;
