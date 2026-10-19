@@ -25,6 +25,13 @@ const key = (e: Edit) => `${e.add ?? "-"}/${e.drop ?? "-"}`;
 function decideWeek(w: number, league: string) {
   const Wk = W.S.weeks.find((x: any) => x.week === w); const model = W.fitModel(w); const T = W.weekStart(w);
   const weeks = [w, w + 1].filter((x) => x <= W.LAST_WEEK);
+  // task O (research/REPORT.md "Opportunity alerts"): OVR = research/o_val.ts alerts output; the minutes-based override
+  // of every player flagged at this week's decision time replaces his projection in weeks w, w+1 (one process decides one
+  // week, so changing the shared game rows is safe)
+  if (process.env.OVR) {
+    const ov: Record<string, number> = JSON.parse(fs.readFileSync(process.env.OVR, "utf8")).weeks.find((x: any) => x.week === w)?.overrides || {};
+    for (const [pid, v] of Object.entries(ov)) for (const x of weeks) for (const g of W.gamesOf(pid, x)) g.pre = v;
+  }
   const out: any[] = [];
   const rids = Object.keys(Wk.teams).filter((r) => (league === "all" || W.A.leagueOf[r] === league) && (!process.env.TEAMS || process.env.TEAMS.split(",").includes(r)));
   for (const rid of rids) {

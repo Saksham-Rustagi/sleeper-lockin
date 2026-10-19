@@ -2551,3 +2551,79 @@ python3 -E ../summ_l.py && python3 -E ../summ_l_diag.py
 npx esbuild scripts/simworker.ts --bundle --platform=node --format=cjs --outfile=research/dist/simworker_l.cjs --log-level=error
 node research/livecost_l_run.mjs p10b:tick:bw:DAY=2026-10-21 p10c:tick:cw:DAY=2026-10-21 ... p10b:replay:br12:WEEK=12 p10c:replay:cr12:WEEK=12
 ```
+
+## Opportunity alerts (overnight 2026-10-19, task O)
+Goal: catch bench players whose role grows (a rotation player goes out, or a minutes surge) before Sleeper's projections
+do, and tell the user to grab them. Code: `lib/live/opportunity.ts` (detector, surge watch, overrides, alert texts; pure
+functions shared by the live scan and this validation), `lib/live/boxscores.ts` (cached ESPN box scores),
+`lib/live/oppscan.ts` (live scan), the override plumbing in `lib/live/week.ts`, the notifier.
+
+### Data for the validation
+- Minutes: Sleeper's per-game stat rows carry seconds played (`sp`), one row per rostered NBA player per team game, DNPs
+  included (≈ 18-19 rows per team game). 2025-26 regular season + 2025 preseason fetched by `research/o_fetch.py`
+  (`research/data/o/`, not committed); 2024-25 from `research/data/raw2024`. Projected minutes = the projection rows'
+  `sp`. Tip-off times and Sleeper's pre-game fp projection per game (`proj_sleeper`) from `research/data/w/all20xx.json`.
+- No injury history exists, so an absence is read off the box scores (a run of missed team games), and "the detector
+  knows" at the run's first missed game. Sleeper's depth chart has no history either: the depth-chart term is live only
+  (+1.5 min for the player next behind the absent one at his depth position) and is **not validated**.
+- **Leak found and avoided:** Sleeper deletes the projection rows of games a player then sat out, so in stored data
+  "no projection for tonight" partly encodes the outcome (with it, the fitted minutes model put weight 0.46 on Sleeper's
+  projected minutes; without it, 0.08). The validation's "Sleeper view at time T" is the projection of the player's last
+  **played** game before T (no row for a game he played = Sleeper showed 0). For lead times (games the player played)
+  the stored row is the real pre-game projection.
+
+### Tuning (2024-25 only; 2025-26 untouched until the pre-registration below was committed)
+- Rotation player: >= 20 mpg over his last 5 played games. Absence: >= 2 consecutive missed regular-season team games
+  after playing the previous one, >= 5 played games before. 2024-25: 463 absences.
+- A teammate's expected minutes gain = 0.87 x prior + 0.5 x (last-3 mpg - baseline) + 0.2 x n/(n+8) x with/without
+  delta (least squares on 2024-25, `research/o_tune2.py`; R² 0.19). Baseline = his mean minutes (DNP = 0) over the
+  absent player's last 5 played team games. Prior = share x the absent player's mpg; the share table (by the teammate's
+  baseline minutes and position overlap) is the mean realized share in 2024-25 (`research/o_tune.py`): same-position
+  players at 3-14 min absorb most (0.18-0.23 of the absent minutes each), 26+ min teammates lose minutes (regression).
+- With/without delta: his minutes in team games the absent player missed vs played (this season; last season at weight
+  0.5). Its coefficient is small (0.13-0.27 for k = 2-16): that history is noisy (rest days, other injuries).
+- In-sample ranking quality on 2024-25 (P@1 = top-1 gains >= 4 min over the absence's first <= 5 games):
+
+  | ranking | P@1 | P@3 | recall@3 (gain >= 6) | top-1 gain | top-3 gain | minutes MAE |
+  |---|---|---|---|---|---|---|
+  | full model | 0.69 | 0.57 | 0.39 | +9.0 | +6.6 | 5.9 |
+  | prior only | 0.54 | 0.51 | 0.34 | +6.0 | +5.6 | 6.1 |
+  | trend only | 0.65 | 0.54 | 0.34 | +7.0 | +4.6 | 6.9 |
+
+- fp per minute: last 15 played games (+ last season at weight 0.5, <= 600 min) shrunk toward the league rate with 120
+  pseudo-minutes (30-240 all tie: MAE 3.68-3.74 fp/g given the minutes).
+- **Surge watch: recent minutes regress hard.** The first rule (expected minutes 0.7 x last-3 + 0.3 x last-10;
+  last-3 >= Sleeper's projected minutes + 8, estimate >= 20, edge >= 5) flagged 5 league-0 free agents in 2024-25 with
+  realized 16.3 fp/g vs an estimate of 22.5 (and Sleeper's next-5 projections 18.6): expected 30 min, realized 24.
+  Looser variants were worse (21-68 flags, realized 8-14 fp/g vs estimates 18-22). So the expected minutes were fitted
+  over all 19,391 free-agent evaluations of 2024-25 (`research/o_tune3.py`, next-5 team games, DNP = 0):
+  `0.479 last3 + 0.254 last10 + 0.075 Sleeper projected min + 0.499 [Sleeper has a projection] + 1.77` (R² 0.63).
+  The resulting estimate beats Sleeper's next-game projection over all evaluations (MAE 3.2 vs 4.6 fp/g, bias +0.2 vs
+  +2.3). With it, a surge flag (last-3 >= Sleeper min + 6 with all 3 played, estimate >= 15, estimate >= Sleeper fp + 5)
+  is rare: 1 league-0 free agent in 2024-25.
+
+### Pre-registration (fixed before any 2025-26 outcome was computed; parameters = `OPP` in lib/live/opportunity.ts)
+(a) **Detector, every 2025-26 absence** (definition above; the window = the absence's first <= 5 games; teammates with a
+row in >= half the window). Realized gain = mean minutes in the window (DNP = 0) - baseline. A top-1/top-3 candidate
+"gained" if realized gain >= +4 min; absorbers = teammates with realized gain >= +6. Reported: P@1, P@3, recall@3, mean
+realized minutes and fp/g gain of top-1 / top-3, against all teammates, the prior-only ranking and a naive ranking
+(same-position teammate with the most baseline minutes under 26); calibration of predicted vs realized minutes gain.
+(b) **Lead time**: cases = top-3 candidates with realized gain >= 4 min and realized fp gain >= 3 fp/g. Sleeper caught up
+at the first absence game j (up to 10) he played whose `proj_sleeper` (0 if none) - his baseline projection >= half the
+realized fp gain; same in minutes with the projected minutes. Lead = j games and the days from game 0 to game j;
+never within the absence = censored. The detector's own estimate at game 0 catches up if its fp gain >= half the
+realized one.
+(c) **Value** (task-W framework, our league, 2025-26 weeks 1-22): at each week start (1 h before the week's first tip),
+alerts = top-3 replacement candidates with expected gain >= 4 min and estimate >= 15 fp/g, plus flagged surges, that
+are free agents in our league that week. An absence is known at T if its run covers the team's first game after T
+(proxy for an Out tag). In every week with an alert, every team adds the top alert (highest estimate) and drops the
+page's cheapest unprotected player (task W's policy drop values; never age <= 23 / dynasty ADP <= 120). Primary metric:
+paired real P8 points (edited - real roster), H2 = weeks w and w+1 while kept (task W's rule); also H1 = week w, the
+hindsight and POLICY evaluators. 95% CI = the wider of week-clustered and team-clustered. "Value" only if the H2 P8 CI
+excludes 0. **Calibration:** the Waivers page's search (task W's method "policy", N = 300) re-run with the override
+(every player flagged at the decision time gets the minutes-based estimate as his projection in weeks w, w+1) vs the
+same search with Sleeper's projections (task W's existing run). Better calibrated = realized minus predicted gain closer
+to 0 and the realized-on-predicted slope closer to 1, for the picks (P8 and hindsight H2) and for all 18 evaluated moves
+per team-week (hindsight H2).
+(d) **Surge watch**, 2025-26 free agents of our league, first flag per player per 7 days, evaluated before each game
+day: realized fp/g over the next 5 team games (DNP = 0) vs the estimate and Sleeper's projections; hit = realized >= 15.
