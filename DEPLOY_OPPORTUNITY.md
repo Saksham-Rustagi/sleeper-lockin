@@ -79,3 +79,29 @@ Env overrides for testing: `LOCKIN_OPPORTUNITY_ALERTS=1|0`, `LOCKIN_MINUTES_OVER
   - The calibrated surge model expects 16.7 min, about 14.2 fp/g. That is just under the pre-registered 15 fp/g floor,
     so there is no alert yet.
   - Recent minutes regress strongly in the 2024-25 data the model was fitted on; see the REPORT.
+
+## 7. Follow-up O2: "no projection" override (2026-10-19)
+- **Gap:** Sleeper's per-game projection rows sometimes leave out an active rotation player (Leonard Miller, CHI,
+  week 1). buildWeek then uses a stale fallback (his season projection, 8.8 fp/g).
+- **Rule:** behind the same `"minutesOverride"` switch, no new config. A player qualifies if:
+  - he is rostered in the league (any team), or he is a free agent the scan already shows (replacement candidate or
+    surge);
+  - his team plays in the next 7 days, but Sleeper has no projection row for any of those games;
+  - he is not tagged Out, and has no replacement/surge override (those win; they are unchanged);
+  - he played >= 3 of his team's last 5 games (preseason counts while the regular season has < 3 games).
+- **Estimate:** the surge estimator, treating the missing projection as a data gap. Sleeper's projected minutes are
+  imputed by his last-10 mpg, and the "has a projection" term is kept:
+  `expMin = 0.479 x last3 + (0.254 + 0.075) x last10 + 0.499 + 1.768` (cap 38). Then `est = shrunk fp/min x expMin`.
+- **Where it applies:**
+  - buildWeek: only to games without a Sleeper projection row, and only if it raises the fallback projection.
+  - Waivers: only for players with no projection rows at all.
+- **Label and source:** labelled "projection override: Sleeper has no game projection; based on last N games
+  (...)", source `noProjection`. It is part of the override hash, so fingerprints change only while the switch is on.
+- **Live check, 2026-10-19 (`research/o2_live.ts`, own cache/config dir).** Three players qualify:
+  - Miller (mine): 18.7 min x 26.5 fp/36 = **13.7 fp/g** in all 3 week-1 games (was 8.8).
+  - Bennett Stirtz (rostered elsewhere): 13.5 fp/g, not applied because his fallback is higher.
+  - Amari Williams (a surfaced free agent): 3.8 fp/g.
+  - Without the rostered/surfaced restriction, 128 players would qualify, mostly deep free agents.
+- **Steps:** merge `engine-v2` into `lockin-live`, then run `npm test` (93 tests) and `npm run build` (plus
+  `npm run build:notify`), and restart the web app. **Rollback:** revert the merge; `"minutesOverride": false` turns
+  off every override, including this one.

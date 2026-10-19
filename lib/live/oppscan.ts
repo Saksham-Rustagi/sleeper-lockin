@@ -15,6 +15,7 @@ export interface OppReport {
   generatedAt: number; season: string; asOf: number; enabled: { minutesOverride: boolean; opportunityAlerts: boolean };
   absences: OppAbsence[]; surges: (O.Surge & { name: string; status: "fa" | "mine" | "rostered"; sleeperProj: number | null; nextTip: number | null })[];
   overrides: Record<string, O.Override>; alerts: O.OppAlert[];
+  noProjection: (O.NoProj & { name: string; status: "fa" | "mine" | "rostered" })[]; // task O2: active players Sleeper has no game projection for
   box: { games: number; preseasonGames: number; lastDate: string | null; fetched: number; pending: number; unmatched: number; prevSeasonRows: number };
   notes: string[];
 }
@@ -104,13 +105,28 @@ export async function opportunityScan(o: { leagueId: string; rosterId?: number; 
   surges.sort((x, y) => y.est - x.est);
 
   const names = Object.fromEntries([...absences.flatMap((a) => [[a.pid, a.name], ...a.candidates.map((c) => [c.pid, c.name])]), ...surges.map((s) => [s.pid, s.name])]);
-  const overrides = O.buildOverrides(absences, surges, names, O.OPP, (pid) => nextProj.get(pid)?.fp ?? null);
+  const flagged = O.buildOverrides(absences, surges, names, O.OPP, (pid) => nextProj.get(pid)?.fp ?? null);
+  // task O2: players whose team plays in the next 7 days but Sleeper has no projection row for any of those games (a
+  // flagged override wins; buildWeek applies these only to games without a projection row and only if they raise it).
+  // Rostered players (any team) and the free agents this scan already surfaces (shown replacement candidates, surges):
+  // most deep free agents have no projection row, and valuing them all would flood the Waivers pool.
+  const playing = new Set(sched.filter((g) => g.date >= today && g.date <= etDate(asOf + 7 * 86400e3)).flatMap((g) => [g.home.team, g.away.team]));
+  const surfaced = new Set([...absences.flatMap((a) => a.candidates.map((c) => c.pid)), ...surges.map((s) => s.pid)]);
+  const noProjection: OppReport["noProjection"] = [];
+  for (const pid of hist.byPid.keys()) {
+    const p = players[pid]; if (!p?.team || OUT(p.injury_status) || nextProj.has(pid) || flagged[pid] || !playing.has(p.team)) continue;
+    if (!rostered.has(pid) && !surfaced.has(pid)) continue;
+    const s = O.noProjection(hist, pid, asOf, prev);
+    if (s && s.team === p.team) noProjection.push({ ...s, name: name(pid), status: status(pid) });
+  }
+  noProjection.sort((x, y) => y.est - x.est);
+  const overrides = { ...O.noProjectionOverrides(noProjection), ...flagged };
   const alerts = reportAlerts({ absences, surges });
   const games = Object.values(bx.store.games);
   if (!games.some((g) => !g.preseason)) notes.push("no regular-season box scores yet: minutes come from the preseason (flagged)");
   return {
     generatedAt: Date.now(), season, asOf, enabled: { minutesOverride: optionOn("minutesOverride"), opportunityAlerts: optionOn("opportunityAlerts") },
-    absences, surges, overrides, alerts,
+    absences, surges, overrides, alerts, noProjection,
     box: { games: games.length, preseasonGames: games.filter((g) => g.preseason).length, lastDate: games.map((g) => g.date).sort().pop() ?? null, fetched: bx.fetched, pending: bx.pending, unmatched: unmatched.length, prevSeasonRows: prev?.rows ?? 0 },
     notes,
   };

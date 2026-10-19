@@ -2761,3 +2761,23 @@ node research/o_pipeline.mjs; node research/o_pipeline2.mjs o25ovr; node researc
 python3 -I research/o_summ.py research/out/o/v25_abs.json research/out/o/v25_surges.json; python3 -I research/o_vsumm.py
 node research/dist/o_live.cjs <leagueId> [rosterId] [out.json] [names]             # live scan + parser check (own cache dir)
 ```
+
+## Opportunity alerts follow-up: no-projection override (task O2, 2026-10-19)
+Live gap: Leonard Miller (CHI, the user's roster) has no Sleeper per-game projection rows for week 1, so buildWeek used
+his stale season projection (8.8 fp/g). The scan's replacement/surge overrides did not cover him (he is not flagged).
+New in `lib/live/opportunity.ts` (`noProjection`, `noProjectionOverrides`, `OPP.npPlayed/npWindow`) and
+`lib/live/oppscan.ts`, behind the same `"minutesOverride"` switch.
+- **Who qualifies:** rostered players, plus free agents the scan already surfaces. A player needs an upcoming game in
+  the next 7 days with no projection row for any of them, must not be Out or already flagged, and must have played
+  >= 3 of his team's last 5 games (preseason while the regular season has < 3).
+- **Estimate:** the surge estimator with the missing projection treated as a data gap, not as "Sleeper expects 0 min".
+  `expMin = sA·last3 + (sB+sC)·last10 + sD + s0`, i.e. projected minutes imputed by the last-10 mpg. Then `est` = shrunk
+  fp/min × expMin.
+- **Where it applies:** buildWeek uses it only for games without a projection row, and only where it raises the
+  fallback. Existing thresholds, overrides and alerts are unchanged.
+- **Not validated in a backtest:** stored projections leak DNPs (see "Data for the validation"), so "no row" can't be
+  replayed honestly. Treat it as a data-gap fix, not a model improvement.
+- **Live, 2026-10-19:** the list is Miller 13.7 fp/g (applied, 3/3 week-1 games), Bennett Stirtz 13.5 (rostered
+  elsewhere; not applied, his fallback is higher) and Amari Williams 3.8 (a surfaced free agent). Unrestricted, 128
+  players lack projection rows, almost all deep free agents.
+- Tests: 93/93 green, tsc clean. Deploy: `DEPLOY_OPPORTUNITY.md` §7.

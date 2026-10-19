@@ -50,6 +50,8 @@ export const OPP = {
   surgeMin: 6,           // last-3 mean minutes >= Sleeper's projected minutes + 6, all 3 games played
   surgeFp: 15,           // and the minutes-based estimate >= 15 fp/g (league scoring)
   surgeEdge: 5,          // and >= Sleeper's projected fp + 5
+  // no-projection override (task O2): played >= npPlayed of his team's last npWindow games
+  npPlayed: 3, npWindow: 5,
   // alerts (replacement candidates)
   alertGainMin: 4,       // expected +4 min or more
   alertFp: 15,           // and an estimate >= 15 fp/g (free agents); rostered players of mine: estimate >= projection + 5
@@ -229,8 +231,26 @@ export function surge(h: Hist, pid: string, T: number, sleeperNext: { min: numbe
   return { pid, team, last3: r1(last3), last10: r1(last10), played3, projMin: r1(projMin), projFp: r1(projFp), expMin: r1(expMin), rate: Math.round(rt.rate * 1000) / 1000, est: r1(est), flagged, why, nGames: rt.games, preseason: pre };
 }
 
+// No Sleeper projection (task O2, REPORT "Opportunity alerts: no-projection override"): Sleeper's per-game projection
+// rows sometimes leave out an active rotation player (Rotowire's list), and buildWeek then falls back to a stale season
+// projection. A player who played >= npPlayed of his team's last npWindow games (regular season preferred, preseason
+// while it has < 3 games) gets the surge estimator's minutes with the missing projection treated as a data gap, not as
+// "Sleeper expects nothing": Sleeper's projected minutes imputed by his last-10 team-game mpg (DNP = 0), sD included:
+//   expMin = sA x last3 + (sB + sC) x last10 + sD + s0 (<= maxMin);  est = shrunk fp/min (perMinRate) x expMin
+export interface NoProj extends Surge { playedN: number; window: number }
+export function noProjection(h: Hist, pid: string, T: number, prev?: Hist | null, p: OppParams = OPP): NoProj | null {
+  const s0 = surge(h, pid, T, { min: null, fp: null }, prev, p); if (!s0) return null;
+  const tAll = (h.teamGames.get(s0.team!) || []).filter((g) => g.tip < T); const tReg = tAll.filter((g) => !g.pre);
+  const tg = (tReg.length >= 3 ? tReg : tAll).slice(-p.npWindow);
+  const mine = new Map((h.byPid.get(pid) || []).map((g) => [g.key, g]));
+  const playedN = tg.filter((g) => mine.get(g.key)?.played).length;
+  if (playedN < p.npPlayed) return null;
+  const s = surge(h, pid, T, { min: s0.last10, fp: null }, prev, p)!;
+  return { ...s, flagged: false, playedN, window: tg.length };
+}
+
 // ---------- overrides (minutes-based projection for flagged players only) ----------
-export interface Override { pid: string; perGame: number; expMin: number; rate: number; n: number; source: "replacement" | "surge"; label: string; because?: string }
+export interface Override { pid: string; perGame: number; expMin: number; rate: number; n: number; source: "replacement" | "surge" | "noProjection"; label: string; because?: string }
 export function overrideLabel(n: number, expMin: number, rate: number, because?: string) {
   return `projection override: based on last ${n} games (${r1(expMin)} min x ${r1(rate * 36)} fp/36${because ? `, ${because}` : ""})`;
 }
@@ -250,6 +270,14 @@ export function buildOverrides(absences: Absence[], surges: Surge[], names: Reco
     const because = `${names[a.pid] || a.pid} out`;
     out[c.pid] = { pid: c.pid, perGame: c.est, expMin: c.expMin, rate: c.rate, n: OPP.baseN, source: "replacement", label: overrideLabel(OPP.baseN, c.expMin, c.rate, because), because };
   }
+  return out;
+}
+// no-projection overrides (lib/live/oppscan.ts adds them for players without a flagged override). In buildWeek they apply
+// only to games without a Sleeper projection row, and only where they raise the fallback projection (onlyRaise).
+export function noProjectionOverrides(list: NoProj[]): Record<string, Override> {
+  const out: Record<string, Override> = {};
+  for (const s of list) out[s.pid] = { pid: s.pid, perGame: s.est, expMin: s.expMin, rate: s.rate, n: s.nGames, source: "noProjection",
+    label: `projection override: Sleeper has no game projection; based on last ${s.nGames} games (${s.expMin} min x ${r1(s.rate * 36)} fp/36, played ${s.playedN} of the team's last ${s.window}${s.preseason ? ", incl. preseason" : ""})` };
   return out;
 }
 
