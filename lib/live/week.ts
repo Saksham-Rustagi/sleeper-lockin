@@ -2,6 +2,8 @@
 import * as E from "../engine/core";
 import { gameDist, injuryPlayProb, fantasyPoints, MODEL } from "../engine/model";
 import { sleeper, espnDay, type League, type GameRow, type SleeperPlayer, type Matchup } from "./sources";
+import { minutesOverrides } from "./oppscan";
+import type { Override } from "./opportunity";
 
 // holdYield: a held score never blocks a player tipping off - it must be locked or let go (backtest +2.2 pts/wk live;
 // fixes "dropping a bench player gains points", which a sound rule can't do).
@@ -14,12 +16,14 @@ const GAME_LEN = 2.5 * 3600e3;
 export interface LiveGame {
   gi: number; pid: string; date: string; tip: number; end: number; team: string; opp: string;
   proj: number; mu: number; sd: number; status: "pre" | "in" | "post"; actual: number | null; played: boolean | null;
+  projOverride?: string; // "projection override: based on last N games (...)" when the minutes override replaced Sleeper's projection
 }
 export interface LiveTeam {
   rosterId: number; ownerId: string; teamName: string; pids: string[]; names: string[]; positions: string[][];
   injury: (string | null)[]; tw: E.TeamWeek; games: LiveGame[]; real: { actual: Float64Array; played: Uint8Array };
   st: E.State; events: E.Ev[]; evIdx: number; lineup: (string | null)[]; lockSource: ("sleeper" | "override" | "sim" | null)[];
   sleeperPoints: number | null;
+  overrides?: Record<string, Override>; // minutes-based projection overrides applied to this team's players (option "minutesOverride")
 }
 export interface WeekContext {
   league: League; season: string; week: number; dates: string[]; asOf: number; mode: "live" | "replay";
@@ -72,6 +76,8 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   const notes: string[] = [];
   const S = league.scoring_settings;
   const projRow = new Map(wproj.map((r) => [`${r.player_id}|${r.date}`, r]));
+  // task O: flagged players' minutes-based projections (live only; null unless "minutesOverride" is on)
+  const ovAll = mode === "live" ? await minutesOverrides(o.leagueId, asOf0) : null;
   const statRow = new Map(wstats.map((r) => [`${r.player_id}|${r.date}`, r]));
 
   const build = (rosterId: number): LiveTeam => {
@@ -108,13 +114,16 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
         const tip = ek?.tip ?? Date.parse(g.date + "T23:30:00Z");
         let status: LiveGame["status"] = ek?.state ?? "pre";
         if (mode === "replay") status = tip + GAME_LEN <= asOf ? "post" : tip <= asOf ? "in" : "pre";
+        // the override only ever raises a game's projection (Sleeper may already have reacted to the news)
+        const ov = status === "pre" && ovAll?.[pid] && ovAll[pid].perGame > proj ? ovAll[pid] : undefined;
+        if (ov) proj = ov.perGame;
         const played = srow?.stats ? !!(srow.stats.gp || srow.stats.sp) : status === "post" ? false : null;
         const actual = status === "post" ? (played ? fantasyPoints(srow!.stats, S) : 0) : null;
         let end = tip + GAME_LEN;
         if (status === "post" && end > asOf) end = asOf - 1;
         if (status === "in" && end <= asOf) end = asOf + 15 * 60e3;
         const d = gameDist(proj);
-        games.push({ gi: -1, pid, date: g.date, tip, end, team, opp: g.home.team === team ? g.away.team : g.home.team, proj, mu: d.mu, sd: d.sd, status, actual, played });
+        games.push({ gi: -1, pid, date: g.date, tip, end, team, opp: g.home.team === team ? g.away.team : g.home.team, proj, mu: d.mu, sd: d.sd, status, actual, played, ...(ov ? { projOverride: ov.label } : {}) });
       }
     });
     games.sort((a, b) => a.tip - b.tip); games.forEach((g, i) => (g.gi = i));
@@ -172,6 +181,7 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
       rosterId, ownerId: roster.owner_id, teamName: owner?.metadata?.team_name || owner?.display_name || `Team ${rosterId}`, pids,
       names: tw.names, positions: pids.map((p) => pl(p).fantasy_positions || []), injury: pids.map((p) => pl(p).injury_status ?? null),
       tw, games, real, st, events, evIdx, lineup, lockSource, sleeperPoints: mu?.points ?? null,
+      ...(games.some((g) => g.projOverride) ? { overrides: Object.fromEntries([...new Set(games.filter((g) => g.projOverride).map((g) => g.pid))].map((p) => [p, ovAll![p]])) } : {}),
     };
   };
 

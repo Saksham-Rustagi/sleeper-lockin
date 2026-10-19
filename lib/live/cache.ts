@@ -2,6 +2,7 @@
 // Memory cache (per process) + optional disk cache (LOCKIN_CACHE_DIR) shared by the web app and the notifier.
 import crypto from "crypto";
 import { engineTag, simTag } from "./engine";
+import { overrideTag } from "./override";
 
 const mem = new Map<string, { fp: string; v: unknown }>();
 
@@ -9,8 +10,11 @@ const mem = new Map<string, { fp: string; v: unknown }>();
 // fingerprints are unchanged, so switching engines never serves another engine's numbers). scope "sim": a result of
 // mass simulations only (projections, Waivers, league, IR) - keyed by the simulation engine, so engines that simulate
 // alike (p7h and p10b both use POLICY) share entries; "decision" (default): anything containing decisions.
+// The minutes override (option "minutesOverride", lib/live/override.ts) adds the hash of the overrides in force; with
+// the option off fingerprints are unchanged.
 export function fingerprint(x: unknown, scope: "decision" | "sim" = "decision"): string {
   const tag = scope === "sim" ? simTag() : engineTag(); if (tag) x = { engine: tag, x };
+  const mo = overrideTag(); if (mo) x = { minutesOverride: mo, x };
   return crypto.createHash("sha1").update(JSON.stringify(x, (_k, v) => (v instanceof Float64Array || v instanceof Int32Array || v instanceof Uint8Array ? Array.from(v as ArrayLike<number>).map((n) => (Number.isNaN(n) ? "NaN" : Math.round(n * 100) / 100)) : v))).digest("hex");
 }
 

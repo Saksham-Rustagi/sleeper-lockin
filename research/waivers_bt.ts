@@ -30,7 +30,8 @@ function decideWeek(w: number, league: string) {
   // week, so changing the shared game rows is safe)
   if (process.env.OVR) {
     const ov: Record<string, number> = JSON.parse(fs.readFileSync(process.env.OVR, "utf8")).weeks.find((x: any) => x.week === w)?.overrides || {};
-    for (const [pid, v] of Object.entries(ov)) for (const x of weeks) for (const g of W.gamesOf(pid, x)) g.pre = v;
+    // OVR_MAX=1 (exploratory, = the live rule): the override only raises a game's projection
+    for (const [pid, v] of Object.entries(ov)) for (const x of weeks) for (const g of W.gamesOf(pid, x)) g.pre = process.env.OVR_MAX ? Math.max(g.pre!, v) : v;
   }
   const out: any[] = [];
   const rids = Object.keys(Wk.teams).filter((r) => (league === "all" || W.A.leagueOf[r] === league) && (!process.env.TEAMS || process.env.TEAMS.split(",").includes(r)));

@@ -36,7 +36,8 @@ export interface Advice {
 export interface TeamView {
   rosterId: number; name: string; lockedTotal: number;
   slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string; injury?: string | null }[];
-  players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null }[] }[];
+  // projOverride: the minutes override replaced Sleeper's projection for this player (option "minutesOverride")
+  players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; projOverride?: string; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null; projOverride?: string }[] }[];
 }
 export interface Outlook { myMean: number; myP10: number; myP90: number; oppMean: number | null; oppP10: number | null; oppP90: number | null; winProb: number | null; sims: number }
 
@@ -52,8 +53,8 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
   return {
     rosterId: T.rosterId, name: T.teamName, lockedTotal: Array.from(st.lockedBy).reduce((a, p, s) => a + (p >= 0 ? st.lockedPts[s] : 0), 0), slots,
     players: T.pids.map((pid, i) => ({
-      pid, name: T.names[i], pos: T.positions[i].join("/"), injury: T.injury[i], locked: !!st.isLocked[i],
-      games: T.games.filter((g) => g.pid === pid).map((g) => ({ date: g.date, opp: g.opp, tip: g.tip, status: g.status, proj: Math.round(g.proj * 10) / 10, actual: g.actual })),
+      pid, name: T.names[i], pos: T.positions[i].join("/"), injury: T.injury[i], locked: !!st.isLocked[i], ...(T.overrides?.[pid] ? { projOverride: T.overrides[pid].label } : {}),
+      games: T.games.filter((g) => g.pid === pid).map((g) => ({ date: g.date, opp: g.opp, tip: g.tip, status: g.status, proj: Math.round(g.proj * 10) / 10, actual: g.actual, ...(g.projOverride ? { projOverride: g.projOverride } : {}) })),
     })),
   };
 }

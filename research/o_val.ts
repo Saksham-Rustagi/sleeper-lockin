@@ -66,7 +66,8 @@ if (mode === "alerts") {
       const pr = gs.filter((g) => g.tip < T); if (!pr.length || !teamsPlaying.has(pr[pr.length - 1].team)) continue;
       const s = surge(h, pid, T, sleeperView(pid, T), PREV, P); if (s?.flagged) surges.push(s);
     }
-    const ov = buildOverrides(open, surges, D.names, P);
+    // pre-registered: every flagged player; ONLYRAISE=1 (exploratory, the live default): only above Sleeper's view at T
+    const ov = buildOverrides(open, surges, D.names, P, process.env.ONLYRAISE ? (pid) => sleeperView(pid, T).fp : undefined);
     const alerts: any[] = [];
     for (const a of open) for (const c of a.candidates.slice(0, P.topK)) if (c.gain >= P.alertGainMin && c.est >= P.alertFp && !rostered.has(c.pid)) alerts.push({ pid: c.pid, est: c.est, source: "replacement", absent: a.pid, gain: c.gain, expMin: c.expMin });
     for (const s of surges) if (!rostered.has(s.pid) && !alerts.some((x) => x.pid === s.pid)) alerts.push({ pid: s.pid, est: s.est, source: "surge", expMin: s.expMin });
@@ -127,7 +128,7 @@ if (mode === "alerts") {
       const team = s.team!; const byKey = new Map(gs.filter((g) => g.team === team).map((g) => [g.key, g]));
       const next = (h.teamGames.get(team) || []).filter((g) => g.tip >= T && !g.pre).slice(0, 10);
       const seq = next.map((g) => { const x = byKey.get(g.key); return x ? [g.date, D.projFp.get(`${pid}|${g.date}`) ?? null, D.projMin.has(`${pid}|${g.date}`) ? r2(D.projMin.get(`${pid}|${g.date}`)!) : null, x.played ? 1 : 0, r2(x.min), r2(x.fp)] : null; });
-      rows.push({ pid, name: D.names[pid], date: d, week: w, ...s, seq });
+      rows.push({ name: D.names[pid], date: d, week: w, ...s, seq });
     }
   }
   if (mode === "surgefeat") { fs.writeFileSync(outFile, JSON.stringify({ year, cols: ["last3", "last10", "projMin", "hasProj", "projFp", "rate", "played3", "nextMin", "nextFp"], feats })); process.exit(0); }

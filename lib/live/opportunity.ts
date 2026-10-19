@@ -236,11 +236,15 @@ export function overrideLabel(n: number, expMin: number, rate: number, because?:
 }
 // Which players get an override: top-3 replacement candidates of an absence with an expected gain >= alertGainMin
 // minutes, and every flagged surge. A replacement override wins over a surge one (more specific).
-export function buildOverrides(absences: Absence[], surges: Surge[], names: Record<string, string> = {}, p: OppParams = OPP): Record<string, Override> {
+// onlyRaise (sleeperProj given): the override never lowers a projection - a player is skipped unless the estimate is
+// above Sleeper's current projection for him (no projection = 0). Live default; added after the pre-registration (a
+// starter resting in preseason got a replacement override far below his projection), validated as a variant.
+export function buildOverrides(absences: Absence[], surges: Surge[], names: Record<string, string> = {}, p: OppParams = OPP, sleeperProj?: (pid: string) => number | null): Record<string, Override> {
   const out: Record<string, Override> = {};
-  for (const s of surges) if (s.flagged) out[s.pid] = { pid: s.pid, perGame: s.est, expMin: s.expMin, rate: s.rate, n: 3, source: "surge", label: overrideLabel(3, s.expMin, s.rate, "minutes surge") };
+  const raises = (pid: string, est: number) => !sleeperProj || est > (sleeperProj(pid) ?? 0);
+  for (const s of surges) if (s.flagged && raises(s.pid, s.est)) out[s.pid] = { pid: s.pid, perGame: s.est, expMin: s.expMin, rate: s.rate, n: 3, source: "surge", label: overrideLabel(3, s.expMin, s.rate, "minutes surge") };
   for (const a of absences) for (const c of a.candidates.slice(0, p.topK)) {
-    if (c.gain < p.alertGainMin) continue;
+    if (c.gain < p.alertGainMin || !raises(c.pid, c.est)) continue;
     const prevO = out[c.pid];
     if (prevO?.source === "replacement" && prevO.perGame >= c.est) continue;
     const because = `${names[a.pid] || a.pid} out`;
@@ -281,6 +285,19 @@ export function opportunityAlerts(absences: (Absence & { since?: number })[], su
   }
   return out;
 }
+// "Newly out" bookkeeping for the notifier: pid -> { since: first seen out, seen: last seen out }. A player out again
+// within 36 h keeps his `since` (status flapping doesn't re-alert); on the first run every current absence gets since 0
+// (= old: no alerts for absences that started before the alerts were switched on).
+export type SinceState = Record<string, { since: number; seen: number }>;
+export function updateSince(prev: SinceState, outNow: string[], now: number, first = false): SinceState {
+  const out: SinceState = {};
+  for (const [pid, v] of Object.entries(prev)) if (now - v.seen < 36 * 3600e3) out[pid] = v;
+  for (const pid of outNow) out[pid] = { since: out[pid]?.since ?? (first ? 0 : now), seen: now };
+  return out;
+}
+// absences fresh enough to alert on (started within maxAgeMs)
+export const isFresh = (since: number | null | undefined, now: number, maxAgeMs = 3 * 86400e3) => since !== null && since !== undefined && since > 0 && now - since <= maxAgeMs;
+
 // dedupe against the notifier's sent-log (key -> time sent)
 export function newAlerts(alerts: OppAlert[], sent: Record<string, number>): OppAlert[] {
   const s = new Set<string>(); return alerts.filter((a) => !sent[a.key] && !s.has(a.key) && (s.add(a.key), true));
