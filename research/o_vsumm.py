@@ -95,7 +95,8 @@ print("| search | picks | predicted | realized P8 | realized hindsight | P8 - pr
 print("|---|---|---|---|---|---|---|---|---|")
 allm = {}
 for label, pref, fl in (("Sleeper projections (task W policy)", "w25", flag), ("minutes override (pre-registered)", "o25ov", flag), ("override, only raise (exploratory, live default)", "o25ovr", flag_or),
-                        ("Sleeper projections; flagged = only-raise set", "w25", flag_or)):
+                        ("Sleeper projections; flagged = only-raise set", "w25", flag_or),
+                        ("override, per-game max(Sleeper, override) (exploratory, = live rule)", "o25ovx", flag)):
     R = rows_of(pref)
     if not R: continue
     pk = []

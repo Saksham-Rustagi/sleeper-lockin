@@ -2627,3 +2627,137 @@ to 0 and the realized-on-predicted slope closer to 1, for the picks (P8 and hind
 per team-week (hindsight H2).
 (d) **Surge watch**, 2025-26 free agents of our league, first flag per player per 7 days, evaluated before each game
 day: realized fp/g over the next 5 team games (DNP = 0) vs the estimate and Sleeper's projections; hit = realized >= 15.
+
+### Results (2025-26; `research/out/o/v25_summary.md`, `v25_value.md`)
+**In plain English:**
+- The detector is right about *minutes*.
+- But in our league, grabbing the alerted free agents gained about nothing: +1.4 ± 3.6 real points over two weeks,
+  CI includes 0.
+- Sleeper's projections are often already caught up by the first game of the absence.
+- The minutes override did not make the Waivers page's predictions better calibrated.
+- Ship it as an off-by-default information feed; keep the override off.
+
+**(a) Detector, 469 absences (out of sample; the model was fitted on 2024-25):**
+
+| ranking | P@1 (gain >= 4 min) | P@3 | recall@3 (absorbers >= 6) | top-1 min gain | top-1 fp/g gain | top-3 min gain | top-3 fp/g gain |
+|---|---|---|---|---|---|---|---|
+| **detector** | **66%** | 56% | 37% | **+8.13 ± 0.78** | **+4.75 ± 0.65** | +6.22 ± 0.44 | +3.72 ± 0.34 |
+| prior only | 59% | 50% | 32% | +6.83 ± 0.80 | +4.15 ± 0.60 | +5.16 ± 0.45 | +2.98 ± 0.32 |
+| naive (same position, most minutes < 26) | 44% | 47% | 27% | +1.39 ± 0.79 | +1.38 ± 0.67 | +2.81 ± 0.48 | +2.09 ± 0.39 |
+| every teammate (mean) | | | | +1.50 ± 0.19 | +1.03 ± 0.15 | | |
+
+- **The predicted minutes gain is well calibrated** (detector top-3):
+
+  | predicted gain | n | predicted | realized min | realized fp/g |
+  |---|---|---|---|---|
+  | 2-4 | 247 | +3.4 | +3.6 ± 1.0 | +2.4 ± 0.8 |
+  | 4-7 | 709 | +5.4 | +5.5 ± 0.6 | +3.2 ± 0.5 |
+  | 7-10 | 364 | +8.0 | +8.0 ± 0.9 | +4.9 ± 0.7 |
+  | 10+ | 87 | +11.7 | +12.4 ± 1.8 | +6.6 ± 1.5 |
+
+- Absent stars (>= 30 mpg, 151 absences): top-1 +8.3 min, +4.7 fp/g.
+- Alert-grade candidates (top-3, expected gain >= 4 min and estimate >= 15 fp/g, any roster status) are rare: 62
+  in a season. They were estimated at 18.8 fp/g and realized 20.5 fp/g.
+- **Caveat:** part of every gain is regression to the mean. Low-minute players can only go up; that is the "every
+  teammate +1.5" row. The detector's lead over that baseline (+6.6 min for top-1) is the real signal.
+
+**(b) Lead time** (594 cases: top-3 candidates who really gained >= 4 min and >= 3 fp/g):
+- Sleeper's per-game projection already showed half the realized fp gain **at the first game of the absence in 37%**
+  of cases.
+- It got there later in 30% of cases: mean 0.9 games / 1.9 days among the cases it reached; median 0, p75 1 game /
+  3 days.
+- It never got there within the absence in 33%.
+- Paired with the detector's own estimate at game 0 (fp):
+
+  | | Sleeper at game 0 | Sleeper later | Sleeper never |
+  |---|---|---|---|
+  | detector at half the realized gain at game 0 (228) | 106 | 70 (lead 2.0 games) | 52 |
+  | detector not there (366) | 113 | 107 | 146 |
+
+- So the detector beats Sleeper by about 2 games in 31% of the cases where it fires early, and in 23% Sleeper never
+  catches up.
+- In minutes the detector is at half the realized gain at game 0 in 51% of cases (Sleeper's projected minutes: 37%).
+
+**(c) Value of acting on the alerts** (pre-registered; 140 team-week decisions in the 14 weeks with a free-agent alert;
+all are replacement alerts, no surge reached the top of a week):
+
+| evaluator | H1 (week w) | H2 (weeks w, w+1) |
+|---|---|---|
+| **P8 real outcomes (pre-registered)** | +2.13 ± 2.62 | **+1.41 ± 3.61** |
+| hindsight lineup ceiling | +0.09 ± 1.57 | +1.03 ± 3.34 |
+| POLICY on real outcomes | +0.12 ± 2.18 | +0.26 ± 4.41 |
+
+- **The CI includes 0: no demonstrated value.**
+- The weekly top alerts were backups at 15-20 fp/g estimates: Daniss Jenkins, Luke Kornet, Dominick Barlow, Al
+  Horford ×2, Jaylon Tyson, ... One week (Al Horford, week 17) gave +18 / +21 pts. The rest were scattered around 0.
+- Reference, not pre-registered: the Waivers page's own pick in the same team-weeks realized −4.5 ± 3.3 (P8 H2).
+  Following the alert instead of the page would not have lost points, but neither gains significantly.
+- This is task W's finding again: our league's free agents are part-time players, and the gap between a replacement
+  backup and the cheapest droppable player is small.
+
+**(c) Calibration of the Waivers page** (task W's search, policy, N = 300, re-run with the override; picks and all 18
+evaluated moves per team-week, realized = H2):
+
+| search | picks | predicted | realized P8 | realized hindsight | P8 − predicted | hindsight − predicted | slope (hindsight) |
+|---|---|---|---|---|---|---|---|
+| Sleeper projections (task W) | 190 | 8.42 | −1.83 ± 4.21 | +1.17 ± 2.11 | −10.25 ± 4.54 | −7.25 ± 3.02 | −0.12 ± 0.27 |
+| minutes override (pre-registered: every flagged player) | 203 | 8.91 | −1.77 ± 4.09 | +0.84 ± 2.16 | −10.68 ± 5.07 | −8.07 ± 3.39 | −0.19 ± 0.24 |
+| override only above Sleeper's stale view (exploratory) | 190 | 8.40 | −2.92 ± 3.39 | +0.61 ± 1.91 | −11.32 ± 3.86 | −7.80 ± 2.79 | −0.04 ± 0.25 |
+| per game max(Sleeper, override) (exploratory, = the shipped rule) | 191 | 8.37 | −1.83 ± 3.88 | +1.05 ± 2.03 | −10.20 ± 4.21 | −7.31 ± 2.94 | −0.09 ± 0.26 |
+
+| all moves (hindsight H2) | moves | predicted | realized | realized − predicted | slope | flagged adds: predicted → realized |
+|---|---|---|---|---|---|---|
+| Sleeper projections | 3,954 | 2.57 | 0.67 | −1.89 ± 0.79 | 0.34 ± 0.08 | 1,233: 2.68 → 1.18 |
+| minutes override (pre-registered) | 3,954 | 3.08 | 0.26 | −2.82 ± 0.91 | 0.22 ± 0.07 | 105: 2.29 → −1.94 |
+| override only above Sleeper's stale view (exploratory) | 3,954 | 2.54 | 0.77 | −1.77 ± 0.81 | 0.31 ± 0.08 | 15: 0.63 → 1.80 |
+| per game max(Sleeper, override) (exploratory, = the shipped rule) | 3,954 | 2.57 | 0.54 | −2.03 ± 0.79 | 0.36 ± 0.08 | 1,320: 2.66 → 0.79 |
+
+- **The pre-registered override makes calibration worse:** all moves −2.82 vs −1.89, slope 0.22 vs 0.34.
+- Why: it replaced projections that Sleeper had already raised for the injury news. 31% of the page's evaluated adds
+  were flagged backups, and Sleeper already projected them higher than our estimate.
+- Both "only raise" variants are neutral, including the per-game maximum that ships: picks −10.20 vs −10.25, all
+  moves −2.03 vs −1.89, slope 0.36 vs 0.34.
+- **The page's overconfidence (task W: predicted +8.4, realized ≈ 0) does not come from stale free-agent projections
+  that minutes would fix.**
+
+**(d) Surge watch:**
+- 1 flag in 2025-26: Jaylin Williams (OKC), estimate 16.5, realized 12.4 fp/g, Sleeper 12.5. A miss.
+- Calibrated on 2024-25 (recent minutes regress strongly), the surge watch almost never fires on regular-season free
+  agents. No conclusion is possible from one flag.
+- Live 2026-10-19 (preseason minutes): it flags Aday Mara (OKC, rostered): 24.3 mpg vs Sleeper 10 min, ~17 fp/g.
+- The manager's example, Leonard Miller (CHI): 20.7 mpg last 3, 30.6 fp/36 shrunk, no Sleeper week-1 projection.
+  The model expects 16.7 min, about 14.2 fp/g, just under the 15 floor, so no alert. That floor was pre-registered
+  and is not changed post hoc.
+
+### Changes after the pre-registration
+- **Only raise.** A live check (2026-10-19, preseason) gave Keegan Murray, who rested in preseason, a replacement
+  override of 6.2 fp/g against Sleeper's 19.5. So the shipped override only ever raises a game's projection: per game,
+  max(Sleeper, override); the Waivers pool does the same.
+  - Validated only as exploratory variants: "only above Sleeper's stale view" (above) and the per-game maximum (below).
+- **The ESPN parser** was checked against Sleeper's own preseason stat rows: 1,952 player-games, minutes ±0.24, fp
+  exact 97.5%. The rest differ by technical fouls, which ESPN's box doesn't list.
+
+### Recommendation
+- **`opportunityAlerts`:** fine to enable as an information feed. Alerts are rare (about 40 free-agent alerts all
+  2025-26, at most one top alert a week), and each carries the "why" and the expected minutes.
+  - Tell the user: the minutes call is reliable (+8 min on average), but the fantasy gain of acting on it has been ≈ 0
+    in our league. Treat it like a waiver hint.
+  - Most valuable for their own players ("Role up ... start him"): start/sit is free, an add costs a drop.
+- **`minutesOverride`: keep off.** It didn't improve calibration in any variant, and the pre-registered version made
+  it worse.
+- Both are off by default, so the merge changes nothing until the config says so. Files, config, rollback:
+  `DEPLOY_OPPORTUNITY.md`.
+
+### Reproduce
+```
+python3 -I research/o_fetch.py                                   # Sleeper minutes data (curl), research/data/o/
+npx esbuild research/o_val.ts --bundle --platform=node --format=cjs --outfile=research/dist/o_val.cjs --log-level=error
+npx esbuild research/o_value.ts --bundle --platform=node --format=cjs --outfile=research/dist/o_value.cjs --log-level=error
+npx esbuild research/waivers_bt.ts --bundle --platform=node --format=cjs --outfile=research/dist/waivers_bt.cjs --log-level=error
+node research/o_run.mjs tune; python3 -I research/o_tune.py research/out/o/tune24_rk60.json   # 2024-25 tuning (o_tune2/3.py)
+node research/dist/o_val.cjs absences 2025 research/out/o/v25_abs.json; node research/dist/o_val.cjs surges 2025 research/out/o/v25_surges.json
+node research/dist/o_val.cjs alerts 2025 research/out/o/v25_alerts.json            # + ONLYRAISE=1 -> v25_alerts_or.json
+node research/o_pipeline.mjs; node research/o_pipeline2.mjs o25ovr; node research/o_pipeline2.mjs o25ovx   # ~7 + 6 + 6 min, 10 processes
+python3 -I research/o_summ.py research/out/o/v25_abs.json research/out/o/v25_surges.json; python3 -I research/o_vsumm.py
+node research/dist/o_live.cjs <leagueId> [rosterId] [out.json] [names]             # live scan + parser check (own cache dir)
+```

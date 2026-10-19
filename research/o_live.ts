@@ -3,7 +3,8 @@
 //   LOCKIN_CACHE_DIR=research/scratch/o/cache node research/dist/o_live.cjs <leagueId> [rosterId] [out.json]
 import fs from "fs";
 import { opportunityScan } from "../lib/live/oppscan";
-import { collectBoxScores, pidMatcher } from "../lib/live/boxscores";
+import { collectBoxScores, pidMatcher, boxRows } from "../lib/live/boxscores";
+import { histFrom, surge } from "../lib/live/opportunity";
 import { sleeper } from "../lib/live/sources";
 import { fantasyPoints } from "../lib/engine/model";
 
@@ -33,5 +34,14 @@ process.env.LOCKIN_CACHE_DIR ??= "research/scratch/o/cache"; // never the live a
   console.log(`parser check: ${n} player-games matched to Sleeper rows (${miss} without a Sleeper row); mean |minutes diff| ${(dMin / n).toFixed(2)}, mean |fp diff| ${(dFp / n).toFixed(3)}, exact fp ${(100 * exact / n).toFixed(1)}%`);
   for (const w of worst) console.log("  differs:", w);
   if (outFile) fs.writeFileSync(outFile, JSON.stringify(r, null, 1));
+  // 4th arg: player names to explain (surge inputs)
+  for (const nm of (process.argv[5] || "").split(",").filter(Boolean)) {
+    const pid = Object.keys(players).find((k) => players[k].full_name === nm); if (!pid) { console.log(nm, "not found"); continue; }
+    const { rows } = boxRows(store, players, S); const h = histFrom(rows);
+    const gs = (h.byPid.get(pid) || []).map((g) => `${g.date} ${g.min.toFixed(1)}m ${g.fp}fp${g.pre ? " (pre)" : ""}`);
+    const wk = await sleeper.weekProjections(league.season, 1).catch(() => []); const pr = wk.filter((x) => x.player_id === pid).sort((a, b) => a.date.localeCompare(b.date))[0];
+    const s = surge(h, pid, Date.now(), { min: pr?.stats?.sp ? pr.stats.sp / 60 : null, fp: pr ? fantasyPoints(pr.stats, S) : null });
+    console.log(`${nm} (${pid}, ${players[pid].team}, ${r.absences.length ? "" : ""}injury ${players[pid].injury_status ?? "-"}): games ${gs.join(", ")}\n  Sleeper next: ${pr ? `${pr.date} ${fantasyPoints(pr.stats, S)} fp, ${(pr.stats.sp || 0) / 60} min` : "no projection row"}\n  surge: ${JSON.stringify(s)}`);
+  }
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
