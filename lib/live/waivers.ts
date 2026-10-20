@@ -8,9 +8,10 @@ import { buildWeek, resolveWeek, POLICY, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, weekValues, parallelWeekValues } from "./teamsim";
 import { minutesOverrides } from "./oppscan";
+import { nbaRosters, rosterCheck, effectiveTeam } from "./nbarosters";
 
 // projOverride: the minutes-based projection replaced Sleeper's (option "minutesOverride"; projPerGame is then the override)
-export interface WaiverPlayer { pid: string; name: string; pos: string; team: string | null; age: number | null; injury: string | null; dynastyAdp: number | null; gamesThisWeek: number; gamesNextWeek: number; projPerGame: number | null; note?: string; projOverride?: string }
+export interface WaiverPlayer { pid: string; name: string; pos: string; team: string | null; age: number | null; injury: string | null; dynastyAdp: number | null; gamesThisWeek: number; gamesNextWeek: number; projPerGame: number | null; note?: string; projOverride?: string; rosterNote?: string }
 export interface WaiverMove { add: WaiverPlayer; drop: WaiverPlayer | null; gainThisWeek: number; gainNextWeek: number; total: number; se: number; confident: boolean }
 export interface WaiverAdvice {
   generatedAt: number; week: number; nextWeek: number | null; rosterFull: boolean; openSpots: number;
@@ -37,6 +38,9 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   ];
   const ov = await minutesOverrides(o.leagueId, asOf); // task O: null unless "minutesOverride" is on
   const me = rosters.find((r) => r.roster_id === o.rosterId)!;
+  // task R: players whose Sleeper team's current NBA roster doesn't list them (waived: no games; signed elsewhere: his new team's)
+  const fixes = rosterCheck(players, [...projRows.map((r) => r.player_id), ...Object.keys(ov || {}), ...(me.players || [])], await nbaRosters());
+  const offRow = (r: GameRow) => !!fixes[r.player_id] && r.team === fixes[r.player_id].from;
   const rostered = new Set(rosters.flatMap((r) => [...(r.players || []), ...(r.taxi || []), ...(r.reserve || [])]));
   const benchSlots = league.roster_positions.filter((s) => s === "BN").length;
   const startSlots = league.roster_positions.filter((s) => !["BN", "IR", "TAXI"].includes(s)).length;
@@ -46,16 +50,17 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
 
   const wkOf = (date: string) => sched.find((g) => g.date === date)?.week;
   const info = (pid: string, extra?: Partial<WaiverPlayer>): WaiverPlayer => {
-    const p = players[pid] as any; const rows = projRows.filter((r) => r.player_id === pid && r.stats && Object.keys(r.stats).length);
+    const p = players[pid] as any; const rows = projRows.filter((r) => r.player_id === pid && r.stats && Object.keys(r.stats).length && !offRow(r));
+    const fx = fixes[pid]; const team = effectiveTeam(players, fixes, pid);
     const thisW = rows.filter((r) => wkOf(r.date) === week && Date.parse(r.date + "T23:59:00Z") > asOf).length;
     const nextW = rows.filter((r) => wkOf(r.date) === nextWeek).length;
     const sp = rows.length ? rows.reduce((a, r) => a + fantasyPoints(r.stats, S), 0) / rows.length : null;
     const o2 = ov?.[pid] && ov[pid].perGame > (sp ?? 0) && (ov[pid].source !== "noProjection" || !rows.length) ? ov[pid] : null; // the override only raises (as in buildWeek); no-projection: only without rows
     const pp = o2 ? o2.perGame : sp;
-    const tg = !rows.length && o2 ? teamGames(p?.team ?? null) : null; // flagged without Sleeper rows: his team's games
-    return { pid, name: p?.full_name || pid, pos: (p?.fantasy_positions || []).join("/"), team: p?.team ?? null, age: p?.age ?? null, injury: p?.injury_status ?? null,
+    const tg = !rows.length && (o2 || fx) ? teamGames(team) : null; // flagged or roster-fixed without Sleeper rows: his team's games
+    return { pid, name: p?.full_name || pid, pos: (p?.fantasy_positions || []).join("/"), team, age: p?.age ?? null, injury: p?.injury_status ?? null,
       dynastyAdp: sproj[pid]?.adp_dynasty ?? null, gamesThisWeek: tg ? tg.thisW : thisW, gamesNextWeek: tg ? tg.nextW : nextW, projPerGame: pp === null ? null : Math.round(pp * 10) / 10,
-      ...(o2 ? { projOverride: o2.label } : {}), ...extra };
+      ...(o2 ? { projOverride: o2.label } : {}), ...(fx ? { rosterNote: fx.label } : {}), ...extra };
   };
   const teamGames = (team: string | null) => {
     const gs = team ? sched.filter((g) => [g.home.team, g.away.team].includes(team)) : [];
@@ -67,14 +72,14 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   for (const r of projRows) {
     if (rostered.has(r.player_id) || !r.stats || !Object.keys(r.stats).length) continue;
     if (Date.parse(r.date + "T23:59:00Z") < asOf) continue;
-    const p = players[r.player_id]; if (!p?.team) continue;
+    const p = players[r.player_id]; if (!p?.team || offRow(r)) continue;
     const pk = injuryPlayProb(p.injury_status) ?? 0.91;
     byPid.set(r.player_id, (byPid.get(r.player_id) || 0) + pk * Math.max(0, gameDist(Math.max(ov?.[r.player_id]?.source !== "noProjection" ? ov?.[r.player_id]?.perGame ?? -Infinity : -Infinity, fantasyPoints(r.stats, S))).mu));
   }
   // flagged free agents without a Sleeper projection row (Sleeper shows 0): valued at the override over his team's games
   for (const [pid, x] of Object.entries(ov || {})) {
-    const p = players[pid]; if (rostered.has(pid) || byPid.has(pid) || !p?.team) continue;
-    const g = teamGames(p.team); const pk = injuryPlayProb(p.injury_status) ?? 0.91;
+    const p = players[pid]; const team = effectiveTeam(players, fixes, pid); if (rostered.has(pid) || byPid.has(pid) || !p || !team) continue;
+    const g = teamGames(team); const pk = injuryPlayProb(p.injury_status) ?? 0.91;
     byPid.set(pid, (g.thisW + g.nextW) * pk * Math.max(0, gameDist(x.perGame).mu));
   }
   const recentlyDropped = new Map<string, number>();
@@ -85,7 +90,7 @@ export async function waiverAdvice(o: { leagueId: string; rosterId: number; prot
   const baseCtxNow = await buildWeek({ leagueId: o.leagueId, rosterId: o.rosterId, week, asOf, skipOpp: true });
   const rel = new Set([...pool, ...baseCtxNow.me.pids]);
   const fp = o.force ? String(Math.random()) : fingerprint({
-    v: 7, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots,
+    v: 7, N, week, nextWeek, protect: [...protect].sort(), pool, openSpots, ...(Object.keys(fixes).length ? { rosterFix: Object.values(fixes).filter((f) => rel.has(f.pid)).map((f) => [f.pid, f.to]) } : {}),
     rosters: rosters.map((r) => [r.roster_id, r.players, r.taxi, r.reserve]),
     proj: projRows.filter((r) => rel.has(r.player_id)).map((r) => [r.player_id, r.date, fantasyPoints(r.stats, S)]),
     inj: [...rel].map((p) => [p, players[p]?.injury_status ?? null]),
