@@ -4,6 +4,7 @@ import { gameDist, injuryPlayProb, fantasyPoints, MODEL } from "../engine/model"
 import { sleeper, espnDay, type League, type GameRow, type SleeperPlayer, type Matchup } from "./sources";
 import { minutesOverrides } from "./oppscan";
 import type { Override } from "./opportunity";
+import { nbaRosters, rosterCheck, type RosterFix } from "./nbarosters";
 
 // holdYield: a held score never blocks a player tipping off - it must be locked or let go (backtest +2.2 pts/wk live;
 // fixes "dropping a bench player gains points", which a sound rule can't do).
@@ -24,6 +25,7 @@ export interface LiveTeam {
   st: E.State; events: E.Ev[]; evIdx: number; lineup: (string | null)[]; lockSource: ("sleeper" | "override" | "sim" | null)[];
   sleeperPoints: number | null;
   overrides?: Record<string, Override>; // minutes-based projection overrides applied to this team's players (option "minutesOverride")
+  rosterFix?: Record<string, RosterFix>; // task R: players whose Sleeper team's current NBA roster doesn't list them (live only)
 }
 export interface WeekContext {
   league: League; season: string; week: number; dates: string[]; asOf: number; mode: "live" | "replay";
@@ -79,6 +81,8 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   // task O: flagged players' minutes-based projections (live only; null unless "minutesOverride" is on)
   const ovAll = mode === "live" ? await minutesOverrides(o.leagueId, asOf0) : null;
   const statRow = new Map(wstats.map((r) => [`${r.player_id}|${r.date}`, r]));
+  // task R: current NBA rosters (ESPN; live only, null when the fetch fails or "rosterCheck" is off)
+  const nbaR = mode === "live" ? await nbaRosters() : null;
 
   const build = (rosterId: number): LiveTeam => {
     const roster = rosters.find((r) => r.roster_id === rosterId)!;
@@ -92,6 +96,7 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
     }
     const pl = (p: string): SleeperPlayer => players[p] || ({ player_id: p, team: null, fantasy_positions: ["UTIL"], injury_status: null } as SleeperPlayer);
     const games: LiveGame[] = [];
+    const rfix = rosterCheck(players, pids, nbaR);
     pids.forEach((pid) => {
       const rows = [...wproj, ...wstats].filter((r) => r.player_id === pid);
       const teamByDate = new Map(rows.map((r) => [r.date, r.team]));
@@ -104,7 +109,10 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
         : sproj[pid]?.gp ? fantasyPoints(sproj[pid], S) / (sproj[pid].gp > 1 ? sproj[pid].gp : 1) : 12;
       let lastProj: number | null = null;
       for (const g of weekGames.sort((a, b) => a.date.localeCompare(b.date))) {
-        const team = teamByDate.get(g.date) ?? fallbackTeam;
+        let team: string | null = teamByDate.get(g.date) ?? fallbackTeam;
+        // task R: a not-yet-started game of a team whose roster doesn't list him -> his new team's game that day, or none
+        const fx = rfix[pid];
+        if (fx && (team ?? null) === fx.from && (espn.get(`${g.date}|${team}`)?.state ?? "pre") === "pre") team = fx.to;
         if (!team || ![g.home.team, g.away.team].includes(team)) continue;
         const pr = projRow.get(`${pid}|${g.date}`); const srow = statRow.get(`${pid}|${g.date}`);
         let proj: number;
@@ -182,14 +190,18 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
       rosterId, ownerId: roster.owner_id, teamName: owner?.metadata?.team_name || owner?.display_name || `Team ${rosterId}`, pids,
       names: tw.names, positions: pids.map((p) => pl(p).fantasy_positions || []), injury: pids.map((p) => pl(p).injury_status ?? null),
       tw, games, real, st, events, evIdx, lineup, lockSource, sleeperPoints: mu?.points ?? null,
+      ...(Object.keys(rfix).length ? { rosterFix: rfix } : {}),
       ...(games.some((g) => g.projOverride) ? { overrides: Object.fromEntries([...new Set(games.filter((g) => g.projOverride).map((g) => g.pid))].map((p) => [p, ovAll![p]])) } : {}),
     };
   };
 
   const me = build(o.rosterId);
+  const rosterNotes = (T: LiveTeam, who: string) => Object.values(T.rosterFix || {}).forEach((f) => notes.push(`${who}${T.names[T.pids.indexOf(f.pid)]}: ${f.label}.`));
+  rosterNotes(me, "");
   const myMu = matchups.find((m) => m.roster_id === o.rosterId);
   const oppMu = !o.skipOpp && myMu?.matchup_id ? matchups.find((m) => m.matchup_id === myMu.matchup_id && m.roster_id !== o.rosterId) : undefined;
   const opp = oppMu ? build(oppMu.roster_id) : null;
+  if (opp) rosterNotes(opp, "Opponent's ");
   if (!opp && !o.skipOpp) notes.push("No opponent found for this week; win probability unavailable.");
   return { league, season, week, dates, asOf, mode, slotNames, me, opp, notes };
 }

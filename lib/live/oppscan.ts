@@ -8,6 +8,7 @@ import { fantasyPoints, injuryPlayProb } from "../engine/model";
 import { collectBoxScores, boxRows } from "./boxscores";
 import * as O from "./opportunity";
 import { optionOn, setOverrideHash } from "./override";
+import { nbaRosters, rosterCheck } from "./nbarosters";
 
 export interface OppCandidate extends O.Candidate { name: string; team: string | null; status: "fa" | "mine" | "rostered"; injury: string | null; sleeperProj: number | null; nextTip: number | null }
 export interface OppAbsence { pid: string; name: string; team: string; injury: string | null; mpg: number; missedBefore: number; since: number | null; candidates: OppCandidate[] }
@@ -84,20 +85,23 @@ export async function opportunityScan(o: { leagueId: string; rosterId?: number; 
   const meta: O.Meta = { positions: {}, depth: {} };
   for (const [pid, p] of Object.entries(players)) { meta.positions[pid] = p.fantasy_positions; const q = p as SleeperPlayer & { depth_chart_position?: string | null; depth_chart_order?: number | null }; meta.depth![pid] = { pos: q.depth_chart_position ?? null, order: q.depth_chart_order ?? null }; }
 
+  // task R: players whose Sleeper team's current NBA roster doesn't list them (waived / signed elsewhere): no candidate,
+  // surge or no-projection estimate from his old team's minutes
+  const fixes = rosterCheck(players, hist.byPid.keys(), await nbaRosters());
   const absences: OppAbsence[] = [];
   for (const [pid, p] of Object.entries(players)) {
     if (!p.team || !OUT(p.injury_status) || !hist.byPid.has(pid)) continue;
     if (O.teamAt(hist, pid, asOf) !== p.team || O.playedMpg(hist, pid, asOf) < O.OPP.rotationMpg) continue;
     const a = O.replacementCandidates(hist, pid, asOf, meta, prev); if (!a) continue;
     const cands: OppCandidate[] = [];
-    for (const c of a.candidates.slice(0, 5)) cands.push({ ...c, name: name(c.pid), team: players[c.pid]?.team ?? a.team, status: status(c.pid), injury: players[c.pid]?.injury_status ?? null, sleeperProj: nextProj.get(c.pid)?.fp ?? null, nextTip: await nextTip(players[c.pid]?.team ?? a.team) });
+    for (const c of a.candidates.filter((c) => !fixes[c.pid]).slice(0, 5)) cands.push({ ...c, name: name(c.pid), team: players[c.pid]?.team ?? a.team, status: status(c.pid), injury: players[c.pid]?.injury_status ?? null, sleeperProj: nextProj.get(c.pid)?.fp ?? null, nextTip: await nextTip(players[c.pid]?.team ?? a.team) });
     absences.push({ pid, name: name(pid), team: a.team, injury: p.injury_status, mpg: a.mpg, missedBefore: a.missedBefore, since: o.since?.[pid] ?? null, candidates: cands });
   }
   absences.sort((x, y) => y.mpg - x.mpg);
 
   const surges: OppReport["surges"] = [];
   for (const pid of hist.byPid.keys()) {
-    const p = players[pid]; if (!p?.team || OUT(p.injury_status)) continue;
+    const p = players[pid]; if (!p?.team || OUT(p.injury_status) || fixes[pid]) continue;
     const np = nextProj.get(pid);
     const s = O.surge(hist, pid, asOf, { min: np?.min ?? null, fp: np?.fp ?? null }, prev);
     if (s?.flagged && s.team === p.team) surges.push({ ...s, name: name(pid), status: status(pid), sleeperProj: np?.fp ?? null, nextTip: await nextTip(p.team) });
@@ -114,7 +118,7 @@ export async function opportunityScan(o: { leagueId: string; rosterId?: number; 
   const surfaced = new Set([...absences.flatMap((a) => a.candidates.map((c) => c.pid)), ...surges.map((s) => s.pid)]);
   const noProjection: OppReport["noProjection"] = [];
   for (const pid of hist.byPid.keys()) {
-    const p = players[pid]; if (!p?.team || OUT(p.injury_status) || nextProj.has(pid) || flagged[pid] || !playing.has(p.team)) continue;
+    const p = players[pid]; if (!p?.team || OUT(p.injury_status) || nextProj.has(pid) || flagged[pid] || !playing.has(p.team) || fixes[pid]) continue;
     if (!rostered.has(pid) && !surfaced.has(pid)) continue;
     const s = O.noProjection(hist, pid, asOf, prev);
     if (s && s.team === p.team) noProjection.push({ ...s, name: name(pid), status: status(pid) });

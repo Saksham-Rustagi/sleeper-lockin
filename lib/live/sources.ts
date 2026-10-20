@@ -78,3 +78,13 @@ export async function espnDay(date: string): Promise<EspnGame[]> {
     scores: e.competitions[0].competitors.map((c) => Number(c.score ?? 0)), seasonType: e.season?.type, // 1 = preseason, 2 = regular
   }));
 }
+// ESPN team ids and current rosters (task R, lib/live/nbarosters.ts: Sleeper keeps a waived player's team for days)
+export async function espnTeams(): Promise<{ id: string; team: string }[]> {
+  const j = await getJSON<any>("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams", 24 * HOUR);
+  return (j?.sports?.[0]?.leagues?.[0]?.teams || []).map((t: any) => ({ id: String(t.team?.id ?? ""), team: ESPN_FIX[t.team?.abbreviation] ?? t.team?.abbreviation })).filter((t: { id: string; team: string }) => t.id && t.team);
+}
+export async function espnRoster(id: string): Promise<{ espnId: string; name: string }[]> {
+  const j = await getJSON<any>(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${id}/roster`, 1 * HOUR);
+  const as: any[] = (j?.athletes || []).flatMap((a: any) => (Array.isArray(a?.items) ? a.items : [a])); // flat list (or grouped by position)
+  return as.map((a) => ({ espnId: String(a?.id ?? ""), name: a?.displayName || a?.fullName || "" })).filter((a) => a.name);
+}

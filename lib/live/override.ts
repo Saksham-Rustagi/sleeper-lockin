@@ -10,8 +10,10 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-type Opt = "minutesOverride" | "opportunityAlerts";
-const ENV: Record<Opt, string> = { minutesOverride: "LOCKIN_MINUTES_OVERRIDE", opportunityAlerts: "LOCKIN_OPPORTUNITY_ALERTS" };
+// Task R: "rosterCheck" (DEFAULT ON; false / LOCKIN_ROSTER_CHECK=0 turns it off) - lib/live/nbarosters.ts.
+type Opt = "minutesOverride" | "opportunityAlerts" | "rosterCheck";
+const ENV: Record<Opt, string> = { minutesOverride: "LOCKIN_MINUTES_OVERRIDE", opportunityAlerts: "LOCKIN_OPPORTUNITY_ALERTS", rosterCheck: "LOCKIN_ROSTER_CHECK" };
+const DEFAULT_ON: Partial<Record<Opt, boolean>> = { rosterCheck: true };
 let memo: { at: number; cfg: Record<string, unknown> } | null = null;
 export function optionOn(name: Opt): boolean {
   if (typeof window !== "undefined") return false;
@@ -22,7 +24,7 @@ export function optionOn(name: Opt): boolean {
     try { cfg = JSON.parse(fs.readFileSync(path.join(process.env.LOCKIN_CONFIG_DIR || path.join(os.homedir(), ".sleeper-lockin"), "config.json"), "utf8")); } catch { /* defaults */ }
     memo = { at: Date.now(), cfg };
   }
-  return memo.cfg[name] === true;
+  return DEFAULT_ON[name] ? memo.cfg[name] !== false : memo.cfg[name] === true;
 }
 export function resetOptionCache() { memo = null; overrideHash = null; }
 

@@ -2781,3 +2781,43 @@ New in `lib/live/opportunity.ts` (`noProjection`, `noProjectionOverrides`, `OPP.
   elsewhere; not applied, his fallback is higher) and Amari Williams 3.8 (a surfaced free agent). Unrestricted, 128
   players lack projection rows, almost all deep free agents.
 - Tests: 93/93 green, tsc clean. Deploy: `DEPLOY_OPPORTUNITY.md` §7.
+
+## NBA roster check: waived players get no games (task R, 2026-10-20)
+
+**Bug.** Kevin Porter Jr. (pid 2009, my roster 8) was waived by MIL on Oct 19. Sleeper still lists him on MIL and has
+dropped his per-game projection rows. buildWeek's fallback chain (last projection, then last week's average, then the
+season projection) therefore planned him at 21.3 fp for each of MIL's games Oct 21/23/24, games he cannot play. The
+fallback had no way to tell "Sleeper has a data gap" from "he is not on the team".
+
+**Fix** (`lib/live/nbarosters.ts`, switch `rosterCheck`, default on; DEPLOY_ROSTERCHECK.md):
+- **Source.** ESPN's current team rosters (30 fetches, cached 1 h), matched to Sleeper players by normalised name
+  (`normName`, the same as the box-score collector).
+- **Waived or released.** A player whose Sleeper team's roster doesn't list him gets no games for that team (games
+  not yet started only), labelled "not on <TEAM> roster (waived/released) - no games until he signs".
+- **Signed elsewhere.** If exactly one other roster lists him, and no Sleeper homonym belongs to that team, that team's
+  games are used. This also covers Sleeper showing no team.
+- **Fail-safe.** Nothing changes when the fetch fails (remembered 5 min), when a team is missing or lists fewer than
+  13 players, or when a player shares a last name with someone on his team's roster (possible name variant).
+- **Paths covered.** buildWeek (me, the opponent, and therefore start/sit, the race, IR and league), Waivers (the
+  free-agent pool, game counts, flagged free agents' team games) and the opportunity scan (no candidate, surge or
+  no-projection estimate from his old team). Every other fallback reads a player's team in one of these places.
+- **Tests.** `tests/rostercheck.test.ts`: waived means no games; fetch fails means unchanged; signed elsewhere means
+  the new team's games; name variant, small roster and homonym cases; switch off; replay unchanged. 96/96 green.
+
+**Live check** (`research/r_live.ts`, own cache, 2026-10-20, league 1344387394811490304):
+
+| | Porter's week-1 games |
+|---|---|
+| before | 10-21 MIL vs WAS 21.3 fp; 10-23 MIL vs CHI 21.3 fp; 10-24 MIL vs PHI 21.3 fp |
+| after | no games (note on the advise page) |
+
+ESPN rosters had 16-18 players for all 30 teams, fetched in 0.7 s.
+
+Results across the league:
+- **Rostered players.** Of the 232 rostered players, the check changes only Porter. 229 were found on their team's
+  roster by exact name, none needed the last-name guard, and 2 have no team.
+- **All Sleeper players.** Of the 443 players with a team and a season projection, the check changes 6: Porter,
+  Dalton Knecht (LAL), Dwight Powell (DAL), KJ Simpson (DEN), Walter Clayton and Micah Peavy (MEM). None of the 6 has
+  a Sleeper week-1 projection row, so they look like real waivers and not name-matching misses.
+- **Free agents.** Knecht is not rostered in our league. The Waivers pool no longer values any of the 6 at their old
+  team's games.
