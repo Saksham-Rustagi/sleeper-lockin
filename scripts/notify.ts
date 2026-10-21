@@ -7,6 +7,7 @@ import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
 import { advise, replay, type Advice } from "../lib/live/advise";
+import { doNow } from "../lib/live/donow";
 import { engineName, replayIsSlow } from "../lib/live/engine";
 import { sleeper } from "../lib/live/sources";
 import { resolveWeek } from "../lib/live/week";
@@ -54,11 +55,13 @@ export function irMessages(actions: IrAction[]): Msg[] {
     body: `${a.detail}${a.dropOptions?.length ? ` Other drop options: ${a.dropOptions.slice(1, 4).map((d) => `${d.name}${d.protected ? " (dynasty)" : ""}`).join(", ")}.` : ""}`,
   }));
 }
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 export function messages(a: Advice, now: number): Msg[] {
   const out: Msg[] = [];
+  const dn = a.doNow ?? doNow(a);
   for (const d of a.decisions) {
     const base = `${d.player} scored ${d.score.toFixed(1)}`;
-    if (d.recommended === "LOCK") out.push({ key: `lock|${d.pid}|${d.score}`, title: `🔒 LOCK ${d.player} (${d.score.toFixed(1)}) at ${d.recommendedSlot}`, body: `${(d.moves || []).join(" ")} ${d.reason} Deadline: ${d.deadlineText}.` });
+    if (d.recommended === "LOCK") out.push({ key: `lock|${d.pid}|${d.score}`, title: `🔒 LOCK ${d.player} (${d.score.toFixed(1)}) at ${dn.locks.find((l) => l.pid === d.pid)?.slot ?? d.recommendedSlot}`, body: `${(d.moves || []).join(" ")} ${d.reason} Deadline: ${d.deadlineText}.` });
     else if (d.recommended === "BENCH") out.push({ key: `bench|${d.pid}|${d.score}`, title: `↔️ PASS on ${d.player} (${d.score.toFixed(1)}) — bench him`, body: `${d.reason} Do it ${d.deadlineText}.` });
     else if (d.deadline) {
       out.push({ key: `hold|${d.pid}|${d.score}`, title: `⏳ HOLD ${d.player} (${d.score.toFixed(1)}) — keep him in a starting slot`, body: `${base}. ${d.reason} Cut-off to lock: ${d.threshold ?? "?"}.` });
@@ -67,15 +70,16 @@ export function messages(a: Advice, now: number): Msg[] {
   }
   const next = a.plan[0];
   if (next && next.tip - now < 75 * 60e3 && next.tip > now) {
-    const current = new Set(a.me.slots.map((s) => s.pid).filter(Boolean) as string[]);
-    const moves = next.starts.filter((s) => !current.has(s.pid));
     const cut = next.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} ≥ ${s.lockIf}`).join(", ");
     const startingIds = new Set(next.starts.map((s) => s.pid));
     const scratched = a.me.slots.filter((s) => s.pid && !s.locked && /^(out|doubtful|inactive|sus)/i.test(s.injury || "") && !startingIds.has(s.pid));
     const why = scratched.length ? `⚠️ ${scratched.map((s) => `${s.player} ${String(s.injury).toUpperCase()}`).join(", ")} → ` : "🏀 ";
-    const hm = (next.holds || []).filter((h) => h.move);
-    const holdTxt = hm.length ? ` Move held ${hm.map((h) => `${h.player} (${h.score.toFixed(1)}) → ${h.slot}`).join(", ")} - NOT to the bench.` : "";
-    if (moves.length || hm.length) out.push({ key: `lineup|${next.tip}|${moves.map((m) => m.pid + m.slot).join(",")}|${hm.map((h) => h.pid + h.slot).join(",")}`, title: `${why}Before ${next.when}: ${moves.length ? `start ${moves.map((m) => `${m.player} (${m.slot}${m.label ? `; ${m.label}` : ""})`).join(", ")}` : "shuffle held players"}`, body: `${scratched.length ? `Bench ${scratched.map((s) => s.player).join(", ")} (ruled out). ` : ""}${holdTxt} Lock cut-offs tonight: ${cut || "–"}. Bench: ${next.benched.map((b) => b.player).join(", ") || "–"}.`.trim() });
+    // the concrete diff vs the Sleeper lineup (lib/live/donow.ts); locks have their own reminder above
+    const ch = dn.changes.filter((c) => !/^LOCK /.test(c));
+    const later = dn.then.find((s) => s.items.some((i) => !/lock him if/.test(i)));
+    if (ch.length) out.push({ key: `lineup|${next.tip}|${dn.rows.filter((r) => r.change && !/^LOCK /.test(r.change)).map((r) => `${r.pid ?? "-"}${r.slot}`).join(",")}`,
+      title: clip(`${why}Before ${next.when}: ${dn.compact || ch.join(", ")}`, 150),
+      body: clip(`${ch.join("; ")}.${later ? ` Then ${later.when}: ${later.items.filter((i) => !/lock him if/.test(i)).join("; ")}.` : ""} Lock if: ${cut || "–"}.`, 400) });
     else if (cut) out.push({ key: `cutoffs|${next.tip}`, title: `🏀 ${next.when} tip-off — lineup is set`, body: `Lock if: ${cut}.` });
   }
   return out;

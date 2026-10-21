@@ -2879,3 +2879,42 @@ it forward. Extending it to all of the week's games would overfit day-to-day tag
   |---|---|---|
   | 1 | 271.85 | 281.55 |
   | 2 | 278.9 | 289.35 |
+
+## Do now: "Set your lineup to" (task U, 2026-10-21)
+The Live page's "Do now" card now shows **the lineup to set in Sleeper** before the next tip-off: the 9 slots in
+Sleeper order, each with player + status, the rows that need a change highlighted, the ordered list of Sleeper moves, a
+LOCK banner (who / slot / deadline) and a "Then" timeline of later changes today (after games end, before later
+tip-offs). If nothing needs to change it says "Your lineup is already correct - nothing to do until <time>". The Apple
+Reminder for a tip-off is now the concrete diff. The builder is pure (`lib/live/donow.ts`, 7 unit tests). Display only:
+engine decisions are unchanged. Details, construction rules, deploy and rollback: `DEPLOY_DONOW.md`.
+
+**Live check.** League 1344387394811490304, roster 8, Wed Oct 21 11:41 ET, engine p10b, own cache/config;
+`research/donow_live.ts` -> `research/scratch/donow/live_final.txt`. Screenshot at phone width: `research/scratch/donow/live_phone.png`.
+
+| slot | player | status | change now |
+|---|---|---|---|
+| PG | Anthony Black | free roll - Out, 3% to play (7:00 PM) | swap Black (SG) ↔ Wallace (PG) |
+| SG | Cason Wallace | held 5.0 - keep, don't lock (lock-if 23.9) | (same swap) |
+| G | Stephon Castle | held 15.5 - keep, don't lock (lock-if 23.9) | - |
+| SF | Jalen Johnson | plays 7:00 PM vs ORL (proj 35.9) · lock if ≥ 33.2 | swap Johnson (UTIL 1) ↔ Caleb Wilson (SF) |
+| PF | Draymond Green | plays 10:00 PM vs LAL (proj 19.4) · set now | bench Mobley (no game today), put Green in PF |
+| F | Leonard Miller | plays 7:30 PM vs TOR (proj 8.3) · set now | - |
+| C | Collin Murray-Boyles | plays 7:30 PM vs CHI (proj 21.3) · set now | - |
+| UTIL 1 | Caleb Wilson | plays 7:30 PM vs TOR (proj 23.7) · set now | (same swap) |
+| UTIL 2 | Isaiah Hartenstein | held 7.0 - keep, don't lock (lock-if 23.9) | - |
+
+Then (tentative): before 8:00 PM bench Wallace (the plan lets his 5.0 go), Castle G → SG, Coward into G; before 8:30 PM
+bench Castle, Flagg into SG; ~9:30 PM Johnson lock if ≥ 33.2, Black out, Gillespie into PG; ~10:00 PM (tight) lock
+checks for Wilson / Murray-Boyles / Miller, Clingan into UTIL 2, Jalen Green into F; ~10:30 PM more slot reuse.
+Reminder (as if 6:30 PM): title 138 chars `🏀 Before Wed 7:00 PM: PG Anthony Black (free roll), SG Cason Wallace (held 5.0),
+SF Jalen Johnson, PF Draymond Green, UTIL 1 Caleb Wilson`, body 391 chars (4 ordered moves, the 8:00 PM step, cut-offs).
+
+**Churn fixes found on live data.** The engine assigns slots without knowing where players sit. Shown raw, the plan
+asked for 3 extra swaps today (UTIL 1/UTIL 2 and C/F relabels; a held player shuffled at every tip-off). The card
+therefore keeps held scores in place, arranges each tip-off's starters among slots of the same names (future-equivalent),
+and carries a relabel forward while those players are in their game. Result: 4 moves now, and the later steps contain
+only real changes.
+
+Checks: tsc clean; `npm test` 106/106 (7 new in `tests/donow.test.ts`; 3 notifier tests updated to the new reminder
+text, same checks: Garland not repeated, the Out player explained, the held player moved and never benched).
+

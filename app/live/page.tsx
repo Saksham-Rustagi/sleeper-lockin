@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Advice, Replay } from "@/lib/live/advise";
+import type { DoNow } from "@/lib/live/donow";
 import type { WaiverAdvice, WaiverPlayer } from "@/lib/live/waivers";
 import type { IrAdvice } from "@/lib/live/ir";
 import type { LeagueWeek, LeagueTeam } from "@/lib/live/league";
@@ -88,7 +89,7 @@ function Live() {
           <Card><CardContent className="py-10 text-center text-gray-500">Enter your Sleeper username and press Connect.</CardContent></Card>
         ) : (
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="grid w-full grid-cols-5 max-w-3xl">
+            <TabsList className="flex w-full max-w-3xl overflow-x-auto justify-start md:grid md:grid-cols-5">
               <TabsTrigger value="week">This week</TabsTrigger>
               <TabsTrigger value="matchups">Matchups</TabsTrigger>
               <TabsTrigger value="waivers">Waivers</TabsTrigger>
@@ -128,7 +129,7 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
   const o = a.outlook;
   return (
     <div className="space-y-6">
-      <div className="grid md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-4">
         <Stat label={`Week ${a.week} · ${a.season}`} value={`${a.dates[0]?.slice(5)} → ${a.dates[a.dates.length - 1]?.slice(5)}`} sub={a.league} />
         <Stat label="Your locked points" value={fmt(a.me.lockedTotal)} sub={`${a.me.slots.filter((s) => s.locked).length}/${a.me.slots.length} slots locked`} />
         <Stat label="Your projected total" value={fmt(o.myMean, 0)} sub={`80% range ${fmt(o.myP10, 0)}–${fmt(o.myP90, 0)}`} />
@@ -141,8 +142,12 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
           <div><CardTitle>Do now</CardTitle><CardDescription>{a.cached ? `Nothing changed since ${tipTime(a.generatedAt)} — reusing that result` : `Recalculated ${tipTime(a.generatedAt)}`} · checks for changes every 2 min</CardDescription></div>
           <Button size="sm" variant="outline" onClick={load} disabled={loading}>{loading ? "Simulating…" : "Refresh"}</Button>
         </CardHeader>
-        <CardContent>
-          {a.actions.length ? <ol className="list-decimal pl-5 space-y-1">{a.actions.map((x, i) => <li key={i}>{x}</li>)}</ol> : <p className="text-gray-500">Nothing to do right now.</p>}
+        <CardContent className="space-y-4">
+          {a.doNow && <DoNowView d={a.doNow} />}
+          <details open={!a.doNow}>
+            <summary className="text-sm text-gray-500 cursor-pointer">Details: the engine&apos;s calls in words</summary>
+            {a.actions.length ? <ol className="list-decimal pl-5 space-y-1 mt-2 text-sm">{a.actions.map((x, i) => <li key={i}>{x}</li>)}</ol> : <p className="text-gray-500">Nothing to do right now.</p>}
+          </details>
           {a.notes.map((n, i) => <p key={i} className="text-xs text-gray-500 mt-2">{n}</p>)}
         </CardContent>
       </Card>
@@ -212,6 +217,53 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
           </table>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// task U: the lineup to set in Sleeper before the next tip-off (rows needing a change highlighted), LOCK banners,
+// then the later changes today and the bench (lib/live/donow.ts)
+function DoNowView({ d }: { d: DoNow }) {
+  const kindCls: Record<string, string> = { locked: "text-purple-700 dark:text-purple-300", lock: "text-purple-700 dark:text-purple-300 font-semibold", held: "text-amber-700 dark:text-amber-300", freeRoll: "text-orange-600", playing: "text-blue-600" };
+  return (
+    <div className="space-y-4">
+      {d.locks.map((l) => (
+        <div key={l.pid} className="rounded-lg border-2 border-purple-500 bg-purple-50 dark:bg-purple-900/30 p-3">
+          <div className="text-lg font-bold text-purple-800 dark:text-purple-200">🔒 LOCK {l.player} ({fmt(l.score)}) in {l.slot}</div>
+          <div className="text-sm text-purple-800 dark:text-purple-200">Do it {l.by} - his next game replaces the score otherwise.</div>
+        </div>
+      ))}
+      <div>
+        <div className="font-semibold mb-1">Set your lineup to{d.tipText ? ` (before the ${d.tipText} tip-off)` : ""}</div>
+        <div className="divide-y rounded-lg border">
+          {d.rows.map((r) => (
+            <div key={r.slot} className={`flex gap-2 px-2 py-1.5 text-sm ${r.change ? "bg-yellow-50 dark:bg-yellow-900/20" : ""}`}>
+              <div className="w-14 shrink-0 font-mono text-xs pt-0.5 text-gray-500">{r.slot}</div>
+              <div className="min-w-0 flex-1">
+                <div><span className="font-medium">{r.player ?? <span className="text-gray-400">empty</span>}</span> <span className={`text-xs ${kindCls[r.kind] ?? "text-gray-500"}`}>{r.status}</span></div>
+                {r.change && <div className="text-xs font-semibold text-yellow-800 dark:text-yellow-300">change: {r.change}</div>}
+                {r.later && <div className="text-[11px] text-gray-500">later {r.later}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {d.upToDate
+        ? <div className="rounded-lg bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300 p-3 font-medium">✅ {d.upToDate}</div>
+        : <div><div className="font-semibold">Do now, in this order</div><ol className="list-decimal pl-5 text-sm space-y-0.5">{d.changes.map((c, i) => <li key={i}>{c}</li>)}</ol>
+            <div className="text-[11px] text-gray-500 mt-1">Held players move only between starting slots - moving one to the bench forfeits his score.</div></div>}
+      {d.then.length > 0 && (
+        <div>
+          <div className="font-semibold">Then</div>
+          <div className="space-y-2 mt-1">{d.then.map((s, i) => (
+            <div key={i} className="border-l-4 border-blue-400 pl-2 text-sm">
+              <div className="font-medium">{s.title}{s.tentative && <span className="text-[11px] text-gray-500"> · tentative (assumes projections; the plan is redone as games finish)</span>}</div>
+              <ul className="list-disc pl-5 text-xs space-y-0.5">{s.items.map((x, j) => <li key={j} className={/^LOCK /.test(x) ? "font-semibold text-purple-700" : ""}>{x}</li>)}</ul>
+            </div>))}
+          </div>
+        </div>
+      )}
+      {d.bench.length > 0 && <div className="text-xs text-gray-600 dark:text-gray-300"><span className="font-semibold">Bench:</span> {d.bench.join(" · ")}</div>}
     </div>
   );
 }
