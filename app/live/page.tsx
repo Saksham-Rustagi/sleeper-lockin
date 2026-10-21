@@ -181,11 +181,11 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
             <div key={p.tip} className="border-l-4 border-blue-500 pl-3">
               <div className="font-semibold">{p.when} {p.tentative && <Badge variant="outline">tentative</Badge>}</div>
               <table className="w-full text-sm mt-1"><tbody>
-                {p.starts.map((s) => <tr key={s.pid}><td className="w-16 font-mono">{s.slot}</td><td>{s.player}</td><td>proj {fmt(s.proj)}</td><td>lock if ≥ <b>{fmt(s.lockIf)}</b></td></tr>)}
+                {p.starts.map((s) => <tr key={s.pid}><td className="w-16 font-mono">{s.slot}</td><td>{s.player}</td><td>proj {fmt(s.proj)}{s.label && <div className="text-[11px] text-amber-700">{s.label}</div>}</td><td>lock if ≥ <b>{fmt(s.lockIf)}</b></td></tr>)}
               </tbody></table>
               {p.holds?.length > 0 && <div className="text-sm mt-1 text-purple-700 dark:text-purple-300">Holding (keep in a starting slot, never the bench): {p.holds.map((h) => `${h.player} ${fmt(h.score)} in ${h.slot}${h.move ? ` (move from ${h.from ?? "?"})` : ""}`).join("; ")}</div>}
               {p.forfeits?.length > 0 && <div className="text-xs text-orange-600 mt-1">Let go to free a slot: {p.forfeits.map((f) => `${f.player} (${fmt(f.score)})`).join(", ")}</div>}
-              {p.benched.length > 0 && <div className="text-xs text-gray-500 mt-1">Bench: {p.benched.map((b) => `${b.player} (${fmt(b.proj)})`).join(", ")}</div>}
+              {p.benched.length > 0 && <div className="text-xs text-gray-500 mt-1">Bench: {p.benched.map((b) => `${b.player} (${fmt(b.proj)}${b.label ? `; ${b.label}` : ""})`).join(", ")}</div>}
             </div>
           ))}
         </CardContent>
@@ -219,13 +219,13 @@ function WeekView({ leagueId, rosterId, season }: { leagueId: string; rosterId: 
 function SlotsCard({ title, team, onToggle }: { title: string; team: Advice["me"]; onToggle?: (slotIdx: number, pid: string | null) => void }) {
   return (
     <Card>
-      <CardHeader><CardTitle className="text-lg">{title}</CardTitle><CardDescription>Locked {fmt(team.lockedTotal)}</CardDescription></CardHeader>
+      <CardHeader><CardTitle className="text-lg">{title}</CardTitle><CardDescription>Locked {fmt(team.lockedTotal)}{team.slots.some((s) => s.state === "held") ? ` · held ${fmt(team.slots.reduce((a, s) => a + (s.state === "held" ? s.points ?? 0 : 0), 0))} (not locked: lock or let go before the next tip-off)` : ""}</CardDescription></CardHeader>
       <CardContent>
         <table className="w-full text-sm"><tbody>
           {team.slots.map((s, i) => (
             <tr key={i} className={s.locked ? "bg-purple-50 dark:bg-purple-900/20" : ""}>
               <td className="font-mono w-14">{s.slot}</td><td>{s.player || <span className="text-gray-400">empty</span>}</td>
-              <td><Badge variant={s.locked ? "default" : "outline"}>{s.state}</Badge></td><td>{s.points !== null ? fmt(s.points) : ""}</td>
+              <td><Badge variant={s.locked ? "default" : "outline"} className={s.state === "held" ? "border-amber-500 text-amber-700" : ""}>{s.stateText ?? s.state}</Badge></td><td>{s.points !== null ? fmt(s.points) : ""}</td>
               {onToggle && <td className="text-right">{s.pid && <button className="text-xs underline text-gray-500" onClick={() => onToggle(i, s.locked ? null : s.pid)}>{s.locked ? "mark unlocked" : "mark locked"}</button>}</td>}
             </tr>))}
         </tbody></table>

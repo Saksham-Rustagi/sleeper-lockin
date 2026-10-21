@@ -23,7 +23,11 @@ export interface Decision {
   moves: string[]; // step-by-step Sleeper moves to execute the recommendation (e.g. swap into the lock slot first)
 }
 export interface TipPlan {
-  tip: number; when: string; starts: { slot: string; player: string; pid: string; proj: number; lockIf: number | null }[]; benched: { player: string; proj: number }[]; tentative: boolean;
+  // playProb / expected / label: only for a player the injury report makes unlikely to play this game (Out 3%, Doubtful
+  // 25%): "Out - 3% to play · free roll" when his slot isn't needed by anyone else before his game ends; otherwise he is
+  // listed on the bench ("don't start")
+  tip: number; when: string; starts: { slot: string; player: string; pid: string; proj: number; lockIf: number | null; playProb?: number; expected?: number; label?: string }[];
+  benched: { player: string; proj: number; playProb?: number; expected?: number; label?: string }[]; tentative: boolean;
   // players holding a finished, unlocked score: where they sit during this tip-off (any starting slot - never the bench)
   holds: { player: string; pid: string; score: number; slot: string; from: string | null; move: boolean }[];
   forfeits: { player: string; score: number }[]; // held scores the plan gives up to make room (only if locking them isn't better)
@@ -35,7 +39,9 @@ export interface Advice {
 }
 export interface TeamView {
   rosterId: number; name: string; lockedTotal: number;
-  slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string; injury?: string | null }[];
+  // state: "locked" | "playing" | "held" (finished game, decide before his next tip-off: heldUntil) | "idle" | "empty";
+  // stateText: the same for display ("held (decide by Thu 7:30 PM)", "locked (final game)")
+  slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string; stateText?: string; heldUntil?: number | null; injury?: string | null }[];
   // projOverride: the minutes override replaced Sleeper's projection for this player (option "minutesOverride")
   players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; projOverride?: string; rosterNote?: string; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null; projOverride?: string }[] }[];
 }
@@ -45,10 +51,16 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
   const st = T.st;
   const slots = ctx.slotNames.map((slot, s) => {
     const lp = st.lockedBy[s];
-    if (lp >= 0) return { slot, player: T.names[lp], pid: T.pids[lp], locked: true, points: st.lockedPts[s], source: T.lockSource[s], state: "locked" };
+    if (lp >= 0) {
+      const src = T.lockSource[s];
+      return { slot, player: T.names[lp], pid: T.pids[lp], locked: true, points: st.lockedPts[s], source: src, state: "locked", stateText: src === "final" ? "locked (final game)" : src === "override" ? "locked (marked by you)" : "locked" };
+    }
     const pid = T.lineup[s]; const i = pid ? T.pids.indexOf(pid) : -1;
-    const state = i < 0 ? "empty" : st.inGame[i] >= 0 ? "playing" : !Number.isNaN(st.pendingX[i]) ? "lockable" : "idle";
-    return { slot, player: i >= 0 ? T.names[i] : null, pid, locked: false, points: i >= 0 && !Number.isNaN(st.pendingX[i]) ? st.pendingX[i] : null, source: null, state, injury: i >= 0 ? T.injury[i] : null };
+    const held = i >= 0 && st.inGame[i] < 0 && !Number.isNaN(st.pendingX[i]);
+    const state = i < 0 ? "empty" : st.inGame[i] >= 0 ? "playing" : held ? "held" : "idle";
+    const next = held ? T.games.find((g) => g.pid === pid && g.status === "pre" && g.tip > ctx.asOf) : undefined;
+    const stateText = held ? (next ? `held (decide by ${fmtTime(next.tip)})` : "held (last game - counts automatically)") : state;
+    return { slot, player: i >= 0 ? T.names[i] : null, pid, locked: false, points: held ? st.pendingX[i] : null, source: null, state, stateText, ...(held ? { heldUntil: next?.tip ?? null } : {}), injury: i >= 0 ? T.injury[i] : null };
   });
   return {
     rosterId: T.rosterId, name: T.teamName, lockedTotal: Array.from(st.lockedBy).reduce((a, p, s) => a + (p >= 0 ? st.lockedPts[s] : 0), 0), slots,
@@ -222,8 +234,10 @@ function decisions(ctx: WeekContext, K: number, seed: number, eng?: { st: E.Stat
 async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; tip?: number }): Promise<TipPlan[]> {
   const T = ctx.me; const out: TipPlan[] = [];
   // median path: unknown games score their mean, everyone plays
+  // (a game the injury report makes unlikely, e.g. Out = 3% to play, is a DNP on the median path)
   const actual = T.real.actual.slice(); const played = T.real.played.slice();
-  T.games.forEach((g) => { if (g.status !== "post") { actual[g.gi] = g.mu; played[g.gi] = 1; } });
+  T.games.forEach((g) => { if (g.status !== "post") { const pk = reportPlayProb(T, g.gi); actual[g.gi] = g.mu; played[g.gi] = pk !== null && pk < 0.5 ? 0 : 1; } });
+  const benchedIdx: number[][] = []; const unlikelyStarts: { k: number; j: number; s: number; end: number }[] = [];
   let st = E.cloneState(T.st); let ev = T.evIdx; let first = true;
   // who starts at each tip-off: decided by simulation (rule's lineup vs small changes, 200 continuations each).
   // Backtest 2025-26: +4.3 ± 2.0 pts/week over lock-only simulation.
@@ -238,7 +252,7 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
     st = res.st; ev = res.evIdx;
     if (first && first0) { first0.st = E.cloneState(st); first0.tip = tip; }
     const groupGames = T.games.filter((g) => g.tip === tip);
-    const starts: TipPlan["starts"] = []; const benched: TipPlan["benched"] = [];
+    const starts: TipPlan["starts"] = []; const benched: TipPlan["benched"] = []; const bIdx: number[] = [];
     for (const g of groupGames) {
       const p = T.tw.games[g.gi].p;
       const s = Array.from(st.pinned).indexOf(p);
@@ -246,9 +260,12 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
         const th0 = lockThreshold(T, E.cloneState(st), p, g.end);
         // the cut-off shown is the simulated one (first tip-off of the plan); the quick rule only seeds it
         const th = th0 && first ? { ...th0, threshold: await simCutoff(T, st, ev, p, g.gi, th0.threshold, ctx.asOf) } : th0;
-        starts.push({ slot: slotLabels(ctx.slotNames)[s], player: T.names[p], pid: T.pids[p], proj: Math.round(g.proj * 10) / 10, lockIf: th ? Math.round(th.threshold * 10) / 10 : null });
-      } else if (!st.isLocked[p]) benched.push({ player: T.names[p], proj: Math.round(g.proj * 10) / 10 });
+        const u = unlikely(T, g.gi, g.proj);
+        if (u) unlikelyStarts.push({ k: out.length, j: starts.length, s, end: g.end });
+        starts.push({ slot: slotLabels(ctx.slotNames)[s], player: T.names[p], pid: T.pids[p], proj: Math.round(g.proj * 10) / 10, lockIf: th ? Math.round(th.threshold * 10) / 10 : null, ...(u ?? {}) });
+      } else if (!st.isLocked[p]) { benched.push({ player: T.names[p], proj: Math.round(g.proj * 10) / 10, ...(unlikely(T, g.gi, g.proj) ?? {}) }); bIdx.push(p); }
     }
+    benchedIdx.push(bIdx);
     // held scores: everyone still lockable but not playing now keeps a starting slot (assigned among free slots)
     const L = slotLabels(ctx.slotNames);
     const held: number[] = []; const w = new Float64Array(T.pids.length);
@@ -269,7 +286,32 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
     out.push({ tip, when: fmtTime(tip), starts, benched, tentative: !first, holds, forfeits });
     first = false;
   }
+  // an unlikely player is a start only as a free roll: nobody likely to play who fits his slot is benched at a tip-off
+  // before his game ends (the slot is reusable after it); otherwise the plan lists him on the bench
+  for (const u of unlikelyStarts.reverse()) {
+    const t0 = out[u.k].tip; const x = out[u.k].starts[u.j];
+    const needed = out.flatMap((pl, k) => (pl.tip >= t0 && pl.tip < u.end ? benchedIdx[k] : []))
+      .filter((q) => (T.tw.slots[u.s] & T.tw.pmask[q]) && !unlikely(T, T.tw.byPlayer[q].find((gi) => T.games[gi].tip >= t0) ?? -1, 0));
+    if (!needed.length) x.label += " · free roll (his slot isn't needed before his game ends)";
+    else {
+      out[u.k].starts.splice(u.j, 1);
+      out[u.k].benched.unshift({ player: x.player, proj: x.proj, playProb: x.playProb, expected: x.expected, label: `${x.label}: don't start (${x.slot} is needed by ${[...new Set(needed.map((q) => T.names[q]))].join(", ")})` });
+    }
+  }
   return out;
+}
+
+// play probability of game gi when the injury report sets it (his next game; null = the sit-out chain decides)
+function reportPlayProb(T: LiveTeam, gi: number): number | null {
+  if (gi < 0) return null;
+  const p = T.tw.games[gi].p; const v = T.tw.pNext?.[p];
+  return v != null && T.tw.nextGameIdx?.[p] === gi ? v : null;
+}
+// display fields for a game the injury report makes unlikely (< 50% to play)
+function unlikely(T: LiveTeam, gi: number, proj: number): { playProb: number; expected: number; label: string } | null {
+  const pk = reportPlayProb(T, gi); if (pk === null || pk >= 0.5) return null;
+  const inj = T.injury[T.tw.games[gi].p] || "injured"; const ex = Math.round(pk * proj * 10) / 10;
+  return { playProb: pk, expected: ex, label: `${inj[0].toUpperCase() + inj.slice(1)} - ${Math.round(pk * 100)}% to play (exp ${ex.toFixed(1)})` };
 }
 
 function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] {
@@ -285,7 +327,9 @@ function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] 
     const moves = nxt.starts.filter((s) => !current.has(s.pid));
     const hm = nxt.holds.filter((h) => h.move);
     if (hm.length) a.push(`Before ${nxt.when}: move held ${hm.map((h) => `${h.player} (${h.score.toFixed(1)}) ${h.from ?? ""} → ${h.slot}`).join(", ")} - keep them in starting slots, NOT the bench.`);
-    if (moves.length) a.push(`Before ${nxt.when}: start ${moves.map((m) => `${m.player} (${m.slot})`).join(", ")}.`);
+    if (moves.length) a.push(`Before ${nxt.when}: start ${moves.map((m) => `${m.player} (${m.slot}${m.label ? `; ${m.label}` : ""})`).join(", ")}.`);
+    const dont = nxt.benched.filter((b) => b.label && /don't start/.test(b.label));
+    if (dont.length) a.push(`Before ${nxt.when}: don't start ${dont.map((b) => `${b.player} (${b.label})`).join(", ")}.`);
     if (nxt.forfeits.length) a.push(`At ${nxt.when} the plan lets go of ${nxt.forfeits.map((f) => `${f.player}'s ${f.score.toFixed(1)}`).join(", ")} (locking isn't worth the slot).`);
     if (nxt.starts.length) a.push(`${nxt.tip - ctx.asOf < 20 * 3600e3 ? "Tonight's" : `${nxt.when}`} cut-offs: ${nxt.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} lock if >= ${s.lockIf}`).join("; ")}.`);
   }
@@ -299,7 +343,7 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
   if (!windowTips.length) { const nd = ctx.me.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0]; if (nd) windowTips.push(...ctx.me.games.filter((g) => g.date === nd).map((g) => g.tip)); }
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 12, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 13, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
   const [ms, os] = await Promise.all([teamSims(ctx.me, ctx.week, ctx.asOf), ctx.opp ? teamSims(ctx.opp, ctx.week, ctx.asOf) : Promise.resolve(null)]);
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K, ms, os));
   return { ...value, cached, checkedAt: Date.now() };

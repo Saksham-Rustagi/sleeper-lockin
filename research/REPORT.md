@@ -2821,3 +2821,61 @@ Results across the league:
   a Sleeper week-1 projection row, so they look like real waivers and not name-matching misses.
 - **Free agents.** Knecht is not rostered in our league. The Waivers pool no longer values any of the 6 at their old
   team's games.
+
+## Live state: held vs locked, Out players (task L-held, 2026-10-21)
+**Bug.** In live mode, buildWeek read every starting slot with nonzero Sleeper `starters_points` as **locked**. Sleeper
+has no lock flag. In Lock-In a finished game is only **held** until the player's next tip-off, and the manager may
+lock it or let it go. So every Tuesday score killed its slot for the week, for both teams. A live game with points
+would have been read as locked too. **Fix:** `inferSlot` in `lib/live/week.ts`. The rule, its edge cases, the files
+and the rollback are in `DEPLOY_HELD.md`. In short:
+- the user's toggle wins;
+- a game in progress is in progress;
+- finished with the next game not tipped = **held**, and the engine decides (P10b for me, the opponent policy for the
+  opponent);
+- locked only with evidence: a later game started or finished but the slot still shows the earlier score, or he has
+  no game left.
+
+**Out players.** The plan's median path used to play an Out player and then show him holding his projection. It now
+treats the game as a DNP. The plan labels him "Out - 3% to play (exp 0.6)". He is listed as a start only as a free roll
+(nobody likely to play who fits his slot is benched before his game ends); otherwise "don't start". Out still applies
+to the next game only. The sit-out chain (24% after a DNP) and the re-read of Sleeper's tag before every tip-off carry
+it forward. Extending it to all of the week's games would overfit day-to-day tags.
+
+**Live check** (`research/held_live.ts`, own cache/config, league 1344387394811490304, roster 8, Wed Oct 21 00:39 /
+00:47 ET, engine p10b):
+
+| slot (team) | Sleeper slot pts | next game | before | after |
+|---|---|---|---|---|
+| SG Cason Wallace (me) | 5.0 | Thu DEN | locked | **held** → P10b: HOLD (lock 255.6 vs hold 276.0) |
+| G Stephon Castle (me) | 15.5 | Fri HOU | locked | **held** → P10b: HOLD (lock 265.8 vs hold 277.8) |
+| C Isaiah Hartenstein (me) | 7.0 | Thu DEN | locked | **held** → P10b: HOLD (lock 257.1 vs hold 277.4) |
+| PG Shai Gilgeous-Alexander (opp 9) | 42.5 | Thu DEN | locked | **held** |
+| UTIL Paul George (opp 9) | 46.5 | Fri NYK | locked | **held** |
+
+| outlook | before | after |
+|---|---|---|
+| my projected total | 219.5 | **276.2** (80% 242–310) |
+| opponent projected | 302.2 | 305.6 |
+| win probability | 0.5% | **19.6%** |
+| Wed 7:00 PM plan | start Jalen Johnson (SF), **Anthony Black (PG, proj 19.7)** | start Jalen Johnson (F); bench: Anthony Black 19.7 "Out - 3% to play (exp 0.6)"; hold Hartenstein in C, Castle in G, move Wallace SG → PG |
+
+- **All three held scores: HOLD.** Locking now costs 12–21 expected points: these are low scores for the week, and
+  each player has 2 games left. The quick simulations put BENCH within 0.5 of HOLD, a tie.
+- **Black.** The old plan started him at PG and "held 17" after his game. The new plan doesn't start him, because PG
+  is better used by Wallace's held score.
+- **Before the fix, the opponent's held scores** (89 points) counted as banked. The engine also assumed the opponent
+  couldn't use those two slots, which pushed his projection down. He can use them, and that shows in his 302 → 306.
+
+**Checks.**
+- `tests/held.test.ts`: inferSlot cases; stubbed buildWeek for both teams with toggles; advice view and Out label.
+- `npm test` 99/99; tsc clean.
+- Replay and the season backtest are unchanged by construction. The code is live-only, and the backtest bundle's
+  inputs (core, lagrange, moves, p8, backtest, btcommon, research/engine) contain no changed file.
+- **Backtest smoke run, weeks 1–2** (20 team-weeks, P2LAH and P7H, K=200, KS=200, prefixes `heldsmoke` /
+  `heldsmokeref`). The current tree's bundle and the previously built `research/dist/backtest.cjs` (Oct 13) give
+  identical per-team-week totals for both policies:
+
+  | week | P2LAH | P7H |
+  |---|---|---|
+  | 1 | 271.85 | 281.55 |
+  | 2 | 278.9 | 289.35 |
