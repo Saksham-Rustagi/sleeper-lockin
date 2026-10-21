@@ -22,7 +22,7 @@ export interface LiveGame {
 export interface LiveTeam {
   rosterId: number; ownerId: string; teamName: string; pids: string[]; names: string[]; positions: string[][];
   injury: (string | null)[]; tw: E.TeamWeek; games: LiveGame[]; real: { actual: Float64Array; played: Uint8Array };
-  st: E.State; events: E.Ev[]; evIdx: number; lineup: (string | null)[]; lockSource: ("sleeper" | "override" | "sim" | null)[];
+  st: E.State; events: E.Ev[]; evIdx: number; lineup: (string | null)[]; lockSource: ("sleeper" | "override" | "final" | "sim" | null)[];
   sleeperPoints: number | null;
   overrides?: Record<string, Override>; // minutes-based projection overrides applied to this team's players (option "minutesOverride")
   rosterFix?: Record<string, RosterFix>; // task R: players whose Sleeper team's current NBA roster doesn't list them (live only)
@@ -30,6 +30,52 @@ export interface LiveTeam {
 export interface WeekContext {
   league: League; season: string; week: number; dates: string[]; asOf: number; mode: "live" | "replay";
   slotNames: string[]; me: LiveTeam; opp: LiveTeam | null; notes: string[];
+}
+
+// Lock state of one starting slot, inferred from evidence (live mode; task "held vs locked"). Sleeper's API has no
+// lock flag: starters_points[s] is the score the slot counts NOW, which is the same number whether the player locked it
+// or only holds it (Lock-In: a finished game is held until his next tip-off; the manager may lock it, keep holding,
+// or let it go). Rule, in order:
+//  (a) a user lock override wins (pid = locked at Sleeper's score; null = never treated as locked);
+//  (b) his game is in progress -> "inGame", unless the slot still shows an EARLIER finished game's nonzero score while
+//      the live game's own points differ (or aren't known yet) -> "locked" (a locked player's later games don't count);
+//  (c) his last game is finished and his next game hasn't tipped -> "held" at Sleeper's slot score (the engine decides
+//      lock / hold / let go); if he has no game left the held score is final -> "locked" (source "final");
+//  (d) "locked" (source "sleeper") only with evidence: a LATER game of his has finished but the slot still shows an
+//      earlier game's score.
+// Edge cases: slot score 0 is never inferred locked (a 0 is held or nothing, and locking a 0 is dominated - use the
+// toggle); a nonzero score equal to both the last and an earlier game -> held (the reversible reading, noted);
+// a nonzero score that matches no game (stat correction / lag) -> held at Sleeper's number if a game is left (noted);
+// slot score 0 after a nonzero game -> he wasn't in the lineup at that tip-off, so he holds nothing ("idle").
+export interface SlotGame { gi: number; tip: number; status: "pre" | "in" | "post"; actual: number | null; livePts?: number | null }
+export type SlotState = { kind: "empty" | "idle" } | { kind: "inGame"; gi: number } | { kind: "held"; pts: number; gi: number; deadline: number | null }
+  | { kind: "locked"; pts: number; source: "override" | "sleeper" | "final" };
+const same = (a: number, b: number) => Math.abs(a - b) < 0.05;
+// why: the reading, for the UI; note: unusual reading worth telling the manager (shown in the notes)
+export function inferSlot(a: { pts: number; override?: string | null; pid: string | null; overridePts?: number | null; games: SlotGame[] }): SlotState & { why: string; note?: boolean } {
+  if (a.override) return { kind: "locked", pts: a.overridePts ?? a.pts, source: "override", why: "marked locked by you" };
+  if (!a.pid) return { kind: "empty", why: "" };
+  const lockOk = a.override !== null; // "mark unlocked": evidence never makes it locked
+  const gs = [...a.games].sort((x, y) => x.tip - y.tip);
+  const done = gs.filter((g) => g.status === "post"); const live = gs.find((g) => g.status === "in");
+  const next = gs.find((g) => g.status === "pre");
+  const earlierMatch = (before: number) => done.some((g) => g.tip < before && same(g.actual ?? 0, a.pts));
+  const held = (gi: number, why: string, note?: boolean) => ({ kind: "held" as const, pts: a.pts, gi, deadline: next?.tip ?? null, why, ...(note ? { note } : {}) });
+  if (live) {
+    if (lockOk && a.pts !== 0 && earlierMatch(live.tip) && !(live.livePts != null && same(live.livePts, a.pts)))
+      return { kind: "locked", pts: a.pts, source: "sleeper", why: `his next game is live but the slot still shows the earlier ${a.pts}`, note: true };
+    return { kind: "inGame", gi: live.gi, why: "game in progress" };
+  }
+  if (!done.length) return a.pts !== 0 ? { kind: "idle", why: `slot shows ${a.pts} but no finished game of his this week`, note: true } : { kind: "idle", why: "" };
+  const last = done[done.length - 1]; const la = last.actual ?? 0;
+  if (a.pts === 0) return la === 0 ? held(last.gi, "held 0") : { kind: "idle", why: `scored ${la} but the slot shows 0 (not in the lineup at that tip-off): holds nothing`, note: true };
+  if (same(a.pts, la)) {
+    if (!next && lockOk && a.pts > 0) return { kind: "locked", pts: a.pts, source: "final", why: "no game left: the held score is final" };
+    return earlierMatch(last.tip) ? held(last.gi, "same score as an earlier game: read as held (reversible); use the toggle if it's locked", true) : held(last.gi, "finished, next game not tipped");
+  }
+  if (lockOk && earlierMatch(last.tip)) return { kind: "locked", pts: a.pts, source: "sleeper", why: `a later game finished (${la}) but the slot still shows ${a.pts}`, note: true };
+  if (!next && lockOk && a.pts > 0) return { kind: "locked", pts: a.pts, source: "final", why: `no game left; slot shows ${a.pts} (last game ${la})`, note: true };
+  return held(last.gi, `slot shows ${a.pts}, last game ${la} (stat correction?): held at Sleeper's number`, true);
 }
 
 export function etDate(ms: number) {
@@ -162,28 +208,26 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
     if (mode === "live") {
       // last-known play state
       pids.forEach((p, i) => { const done = byPlayer[i].filter((gi) => games[gi].status === "post"); if (done.length) st.lastPlayed[i] = games[done[done.length - 1]].played ? 1 : 0; });
+      // lock / held / in-game per slot from evidence (inferSlot above), for both teams
       slotNames.forEach((_, s) => {
-        const pid = lineup[s]; const ov = o.lockOverrides?.[s];
+        const ov = o.lockOverrides?.[s];
+        const pid = ov ? ov : lineup[s];
+        if (pid && !pidx.has(pid)) return;
+        const i = pid ? pidx.get(pid)! : -1;
         const pts = mu?.starters_points?.[s] ?? 0;
-        const lockedPid = ov !== undefined ? ov : pid && pts !== 0 ? pid : null;
-        if (lockedPid && pidx.has(lockedPid)) {
-          const i = pidx.get(lockedPid)!; st.lockedBy[s] = i; st.isLocked[i] = 1;
-          st.lockedPts[s] = ov !== undefined ? (mu?.players_points?.[lockedPid] ?? pts) : pts; lockSource[s] = ov !== undefined ? "override" : "sleeper";
-          return;
-        }
-        if (!pid || !pidx.has(pid)) return;
-        const i = pidx.get(pid)!;
-        const live = byPlayer[i].find((gi) => games[gi].status === "in");
-        if (live !== undefined) { st.inGame[i] = live; st.pinned[s] = i; st.pinnedUntil[s] = games[live].end; st.started[live] = 1; return; }
-        const done = byPlayer[i].filter((gi) => games[gi].status === "post");
-        const nextPre = byPlayer[i].find((gi) => games[gi].status === "pre");
-        if (done.length && (nextPre === undefined || games[nextPre].tip > asOf)) {
-          const last = games[done[done.length - 1]]; st.pendingX[i] = last.actual ?? 0; st.started[last.gi] = 1;
-        }
+        const gs: SlotGame[] = i < 0 ? [] : byPlayer[i].map((gi) => {
+          const g = games[gi]; const sr = g.status === "in" ? statRow.get(`${g.pid}|${g.date}`) : undefined;
+          return { gi, tip: g.tip, status: g.status, actual: g.actual, livePts: sr?.stats ? fantasyPoints(sr.stats, S) : null };
+        });
+        const x = inferSlot({ pts, override: ov, pid, overridePts: ov ? mu?.players_points?.[ov] ?? null : null, games: gs });
+        if (x.note && i >= 0) notes.push(`${rosterId === o.rosterId ? "" : "Opponent's "}${tw.names[i]} (${slotNames[s]}): ${x.kind} - ${x.why}.`);
+        if (x.kind === "locked") { st.lockedBy[s] = i; st.isLocked[i] = 1; st.lockedPts[s] = x.pts; lockSource[s] = x.source; }
+        else if (x.kind === "inGame") { st.inGame[i] = x.gi; st.pinned[s] = i; st.pinnedUntil[s] = games[x.gi].end; st.started[x.gi] = 1; }
+        else if (x.kind === "held") { st.pendingX[i] = x.pts; st.started[x.gi] = 1; }
       });
       if (rosterId !== o.rosterId) { /* notes only for my team */ }
       else if (!mu) notes.push("Sleeper has no matchup for this week yet (preseason) - starting from an empty lineup.");
-      else if (rosterId === o.rosterId) notes.push("Locks are read from Sleeper's per-slot points (a slot with points = locked). Use the lock toggles if that's wrong.");
+      else notes.push("Lock state is inferred per slot (Sleeper has no lock flag): a finished game whose next game hasn't tipped is HELD (lock or let go before the next tip-off); a slot counts as locked only when a later game of his has started or finished but the slot still shows the earlier score, or he has no game left. Use the lock toggles if that's wrong.");
     }
     const owner = users.find((u) => u.user_id === roster.owner_id);
     return {
