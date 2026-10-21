@@ -33,6 +33,7 @@ export type DoNowInput = Pick<Advice, "asOf" | "plan" | "decisions"> & { me: Pic
 interface Occ {
   pid: string; name: string; kind: DoNowKind; score?: number | null; proj?: number; lockIf?: number | null;
   label?: string; playProb?: number; end?: number; opp?: string; tip?: number; early?: boolean;
+  dnp?: boolean; team?: string; // in a game in progress he is Out for (scores 0, no lock call), his NBA team
 }
 type Lineup = (Occ | null)[];
 interface Change { kind: "bench" | "move" | "swap" | "in" | "lock"; text: string; pids: string[]; slots: number[]; row: number; held?: boolean }
@@ -74,14 +75,26 @@ export function doNow(a: DoNowInput): DoNow {
   const width = (s: number) => SLOT_POS[S[s].slot]?.length ?? 5;
   const at = (label: string) => L.indexOf(label);
   const tip0 = plan[0]?.tip ?? null;
-  const tipTxt = (ms: number) => (etDay(ms) === etDay(a.asOf) ? clock(ms) : dayClock(ms));
+  // a late tip (past its scheduled time, not tipped yet; task T): "7:30 PM (late tip)" - its time is an estimate
+  const lateAt = new Map<number, number>(); for (const pl of plan) if (pl.late) lateAt.set(pl.tip, pl.late);
+  const tipTxt = (ms: number) => { const l = lateAt.get(ms); const t = l ?? ms; return `${etDay(t) === etDay(a.asOf) ? clock(t) : dayClock(t)}${l ? " (late tip)" : ""}`; };
+  // his games on tip-off k's date (ET): "no game today" only when he has none that day (task T)
+  const dayGames = (pid: string, t: number) => players.find((x) => x.pid === pid)?.games?.filter((g) => etDay(g.tip) === etDay(t));
+  const dayNote = (pid: string, t: number): string | null => {
+    const g = dayGames(pid, t); if (!g) return null;
+    if (!g.length) return "no game today";
+    const nxt = g.filter((x) => x.status !== "post" && x.tip > t).sort((x, y) => x.tip - y.tip)[0];
+    if (nxt) return `next game ${tipTxt(nxt.tip)}`;
+    if (g.some((x) => x.status === "in" || (x.status === "pre" && x.tip <= t))) return null; // (his game is now)
+    return "his game today is over";
+  };
 
   // ---- Sleeper now ----
   const cur: Lineup = S.map((s) => {
     if (!s.pid) return null;
     const base = { pid: s.pid, name: s.player ?? nm(s.pid) };
     if (s.locked || s.state === "locked") return { ...base, kind: "locked", score: s.points };
-    if (s.state === "playing") return { ...base, kind: "playing", end: s.gameEnd, lockIf: s.lockIf ?? null };
+    if (s.state === "playing") return { ...base, kind: "playing", end: s.gameEnd, lockIf: s.dnp ? null : s.lockIf ?? null, ...(s.dnp ? { dnp: true, team: s.team } : {}) };
     if (s.state === "held") return { ...base, kind: "held", score: s.points };
     return { ...base, kind: "idle" };
   });
@@ -104,7 +117,7 @@ export function doNow(a: DoNowInput): DoNow {
     const has = (pid: string) => items.some((x) => x.o.pid === pid) || playing.some((x) => x.o.pid === pid);
     const add = (to: Item[], o: Occ, hint: number, lock = false) => { if (!has(o.pid)) to.push({ o, hint, lock }); };
     for (const x of pl.locks ?? []) add(items, lockOcc(x.pid, x.player, x.score), at(x.slot), true);
-    for (const x of pl.playing ?? []) add(playing, { pid: x.pid, name: x.player, kind: "playing", end: x.end, lockIf: cutoff.get(x.pid) ?? null }, at(x.slot));
+    for (const x of pl.playing ?? []) add(playing, { pid: x.pid, name: x.player, kind: "playing", end: x.end, lockIf: x.dnp ? null : cutoff.get(x.pid) ?? null, ...(x.dnp ? { dnp: true, team: x.team } : {}) }, at(x.slot));
     for (const x of pl.starts) add(items, { pid: x.pid, name: x.player, kind: (x.label && /free roll/.test(x.label) ? "freeRoll" : "start") as DoNowKind, proj: x.proj, lockIf: x.lockIf, label: x.label, playProb: x.playProb, end: x.end, opp: x.opp, tip: pl.tip }, at(x.slot));
     for (const h of pl.holds) {
       const d = k === 0 ? dec.get(h.pid) : undefined;
@@ -251,9 +264,8 @@ export function doNow(a: DoNowInput): DoNow {
     const b = plan[k]?.benched.find((x) => (x.pid ?? pidOf(x.player)) === r.pid);
     if (inj && /^(out|doubtful|inactive|sus)/i.test(inj)) return ` (${inj} - ruled out)`;
     if (b) return b.label ? ` (${b.label.split(":")[0]})` : ` (sits ${dayClock(plan[k].tip)}, proj ${f1(b.proj)})`;
-    const g = players.find((x) => x.pid === r.pid)?.games;
-    if (g && plan[k] && !g.some((x) => x.tip >= plan[k].tip && etDay(x.tip) === etDay(plan[k].tip))) return " (no game today)";
-    return "";
+    const n = plan[k] ? dayNote(r.pid, plan[k].tip) : null;
+    return n ? ` (${n})` : "";
   };
   const diff = (p: Lineup, t: Lineup, k: number): Change[] => {
     const out: Change[] = [];
@@ -346,7 +358,7 @@ export function doNow(a: DoNowInput): DoNow {
   // lock checks when games end (cut-off: the score at which locking beats holding)
   const checked = new Set<string>();
   const check = (o: Occ | null) => {
-    if (!o || (o.kind !== "start" && o.kind !== "freeRoll" && o.kind !== "playing") || o.end == null || o.lockIf == null) return;
+    if (!o || (o.kind !== "start" && o.kind !== "freeRoll" && o.kind !== "playing") || o.end == null || o.lockIf == null || o.dnp) return;
     const key = `${o.pid}|${o.end}`; if (checked.has(key)) return; checked.add(key);
     const st = [...steps.values()].find((x) => Math.abs(x.t - o.end!) < 60e3) ?? step(o.end, o.kind !== "playing", null);
     st.after.add(o.name);
@@ -385,8 +397,14 @@ export function doNow(a: DoNowInput): DoNow {
         return `plays ${tipTxt(o.tip!)}${o.opp ? ` vs ${o.opp}` : ""} (proj ${f1(o.proj)})${lk(o.lockIf)}${h != null ? ` · replaces held ${f1(h)}` : ""}${o.early ? " · set now, slot unused before" : ""}`;
       }
       case "freeRoll": return `free roll - ${injury.get(o.pid) || "injured"}, ${Math.round((o.playProb ?? 0) * 100)}% to play (${tipTxt(o.tip!)})`;
-      case "playing": return `in game now${o.end ? ` (ends ~${clock(r5(o.end))})` : ""}${lk(o.lockIf)}`;
-      case "idle": return tip0 !== null ? `no game at ${tipTxt(tip0)} - can stay` : "no game left - can stay";
+      case "playing":
+        if (o.dnp) return `${cap(injury.get(o.pid) || "out")} - scores 0; stuck in this slot until ${o.team ? `the ${o.team}` : "his"} game ends${o.end ? ` ~${clock(r5(o.end))}` : ""} (Sleeper locks him at tip)`;
+        return `in game now${o.end ? ` (ends ~${clock(r5(o.end))})` : ""}${lk(o.lockIf)}`;
+      case "idle": {
+        if (tip0 === null) return "no game left - can stay";
+        const n = dayNote(o.pid, tip0);
+        return n === "no game today" || n === "his game today is over" ? `${n} - can stay` : `no game at ${tipTxt(tip0)}${n ? ` (${n})` : ""} - can stay`;
+      }
     }
   };
   const rowChange = new Map<number, string[]>();

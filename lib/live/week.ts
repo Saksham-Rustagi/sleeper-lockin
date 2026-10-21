@@ -13,11 +13,41 @@ export const POLICY: E.Policy = { name: "P2", matching: "exact", value: "stop", 
   // choice that cost ~1.9 pts/wk in the live algorithm on the 2025-26 backtest, so keep the old tie-break.
   legacyBugs: ["heldTie"] };
 const GAME_LEN = 2.5 * 3600e3;
+// Task T: game timing in live mode. A game whose scheduled tip has passed but ESPN still shows "pre" is a late tip
+// (NBA tips run ~10 min late, or a delay): it still counts for whoever is in the lineup when it tips, so it is modelled
+// as tipping at max(scheduled, now) - the next 5-minute mark after now (stable across refreshes), kept 1 min before the
+// next scheduled tip-off so the two groups aren't merged - and ending ~2h15 after that. A game in progress ends ~2h15
+// after its actual tip: from ESPN's period / clock (2.5 real s per game-clock s, + 15 min halftime before it), else
+// scheduled tip + 2.5 h (at least 15 min from now).
+export const LATE_GAME_LEN = 2.25 * 3600e3;
+export function lateTip(sched: number, asOf: number, laterTips: number[]): number {
+  let t = Math.ceil((asOf + 60e3) / 300e3) * 300e3;
+  const next = Math.min(...laterTips.filter((x) => x > asOf && x > sched));
+  if (Number.isFinite(next) && t >= next) t = next - 60e3 > asOf ? next - 60e3 : next;
+  return Math.max(t, sched);
+}
+export function expectedEnd(g: { status: "pre" | "in" | "post"; tip: number; sched?: number; period?: number; clock?: number }, asOf: number): number {
+  if (g.status === "in" && g.period) {
+    const left = g.period <= 4 ? (4 - g.period) * 720 + (g.clock ?? 0) : g.clock ?? 0;
+    const t = asOf + left * 2500 + (g.period <= 2 ? 900e3 : 0);
+    return Math.max(asOf + 5 * 60e3, Math.ceil(t / 60e3) * 60e3);
+  }
+  const end = Math.max(g.tip + (g.sched !== undefined && g.sched < g.tip ? LATE_GAME_LEN : GAME_LEN), (g.sched ?? g.tip) + GAME_LEN);
+  if (g.status === "in" && end <= asOf) return asOf + 15 * 60e3;
+  return end;
+}
+// Out / inactive (injury tag) and no stats while his team's game is in progress: he scores 0 in that game (task T)
+export function outInGame(injury: string | null | undefined, stats: Record<string, number> | null | undefined): boolean {
+  const ip = injuryPlayProb(injury);
+  return ip !== null && ip <= 0.03 && !(stats && (stats.gp || stats.sp || stats.min));
+}
 
 export interface LiveGame {
   gi: number; pid: string; date: string; tip: number; end: number; team: string; opp: string;
   proj: number; mu: number; sd: number; status: "pre" | "in" | "post"; actual: number | null; played: boolean | null;
   projOverride?: string; // "projection override: based on last N games (...)" when the minutes override replaced Sleeper's projection
+  late?: number; // task T: scheduled tip of a game that hasn't tipped yet although it's past (tip = expected tip)
+  dnp?: boolean; // task T: in progress, he is Out / inactive and has no stats: scores 0 (pinned in his slot until it ends)
 }
 export interface LiveTeam {
   rosterId: number; ownerId: string; teamName: string; pids: string[]; names: string[]; positions: string[][];
@@ -111,10 +141,11 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   const prevProj = week > 1 ? await sleeper.weekProjections(season, week - 1).catch(() => [] as GameRow[]) : [];
   const weekGames = sched.filter((g) => g.week === week);
   const dates = [...new Set(weekGames.map((g) => g.date))].sort();
-  const espn = new Map<string, { tip: number; state: "pre" | "in" | "post" }>();
+  const espn = new Map<string, { tip: number; state: "pre" | "in" | "post"; period?: number; clock?: number }>();
   await Promise.all(dates.map(async (d) => {
-    for (const g of await espnDay(d).catch(() => [])) for (const t of g.teams) espn.set(`${d}|${t}`, { tip: g.tip, state: g.state });
+    for (const g of await espnDay(d).catch(() => [])) for (const t of g.teams) espn.set(`${d}|${t}`, { tip: g.tip, state: g.state, period: g.period, clock: g.clock });
   }));
+  const schedTips = [...new Set([...espn.values()].filter((g) => g.state === "pre").map((g) => g.tip))];
   // Injury tags: refresh every 4 min when any game tips within 2h (late scratches), otherwise hourly.
   const soon = [...espn.values()].some((g) => g.state !== "post" && g.tip - asOf0 < 2 * 3600e3 && g.tip - asOf0 > -30 * 60e3);
   const players = await sleeper.players(mode === "live" && soon ? 4 * 60e3 : 60 * 60e3);
@@ -165,20 +196,25 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
         if (pr?.stats && Object.keys(pr.stats).length) { proj = fantasyPoints(pr.stats, S); lastProj = proj; }
         else proj = lastProj ?? seasonPer; // replay: never treat a missing projection as a DNP signal (it leaks)
         const ek = espn.get(`${g.date}|${team}`);
-        const tip = ek?.tip ?? Date.parse(g.date + "T23:30:00Z");
+        const sched = ek?.tip ?? Date.parse(g.date + "T23:30:00Z");
         let status: LiveGame["status"] = ek?.state ?? "pre";
-        if (mode === "replay") status = tip + GAME_LEN <= asOf ? "post" : tip <= asOf ? "in" : "pre";
+        if (mode === "replay") status = sched + GAME_LEN <= asOf ? "post" : sched <= asOf ? "in" : "pre";
+        // task T: a late tip (scheduled time passed, not tipped yet) tips at max(scheduled, now)
+        const late = mode === "live" && status === "pre" && sched <= asOf;
+        const tip = late ? lateTip(sched, asOf, schedTips) : sched;
         // the override only ever raises a game's projection (Sleeper may already have reacted to the news); a
         // no-projection override (task O2) only replaces the fallback of a game without a Sleeper projection row
         const ov = status === "pre" && ovAll?.[pid] && ovAll[pid].perGame > proj && (ovAll[pid].source !== "noProjection" || !(pr?.stats && Object.keys(pr.stats).length)) ? ovAll[pid] : undefined;
         if (ov) proj = ov.perGame;
         const played = srow?.stats ? !!(srow.stats.gp || srow.stats.sp) : status === "post" ? false : null;
         const actual = status === "post" ? (played ? fantasyPoints(srow!.stats, S) : 0) : null;
-        let end = tip + GAME_LEN;
+        let end = mode === "live" ? expectedEnd({ status, tip, sched, period: ek?.period, clock: ek?.clock }, asOf) : tip + GAME_LEN;
         if (status === "post" && end > asOf) end = asOf - 1;
         if (status === "in" && end <= asOf) end = asOf + 15 * 60e3;
+        const dnp = mode === "live" && status === "in" && outInGame(pl(pid).injury_status, srow?.stats);
         const d = gameDist(proj);
-        games.push({ gi: -1, pid, date: g.date, tip, end, team, opp: g.home.team === team ? g.away.team : g.home.team, proj, mu: d.mu, sd: d.sd, status, actual, played, ...(ov ? { projOverride: ov.label } : {}) });
+        games.push({ gi: -1, pid, date: g.date, tip, end, team, opp: g.home.team === team ? g.away.team : g.home.team, proj, mu: d.mu, sd: d.sd, status, actual, played,
+          ...(ov ? { projOverride: ov.label } : {}), ...(late ? { late: sched } : {}), ...(dnp ? { dnp: true } : {}) });
       }
     });
     games.sort((a, b) => a.tip - b.tip); games.forEach((g, i) => (g.gi = i));
@@ -198,6 +234,8 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
     if (mode === "live") {
       tw.nextGameIdx = pids.map((_, i) => { const g = byPlayer[i].find((gi) => games[gi].status === "pre"); return g ?? -1; });
       tw.pNext = pids.map((p) => injuryPlayProb(pl(p).injury_status));
+      // task T: Out with no stats in a game in progress -> that game is a DNP (the tag applied to it, not to the next one)
+      pids.forEach((_, i) => { const g = byPlayer[i].find((gi) => games[gi].dnp); if (g !== undefined) { tw.nextGameIdx![i] = g; tw.pNext![i] = 0; } });
     }
     const real = { actual: Float64Array.from(games.map((g) => g.actual ?? 0)), played: Uint8Array.from(games.map((g) => (g.played ? 1 : 0))) };
     const events = E.buildEvents(tw, true);

@@ -66,16 +66,18 @@ export const sleeper = {
 
 // ---------- ESPN ----------
 const ESPN_FIX: Record<string, string> = { GS: "GSW", NY: "NYK", SA: "SAS", NO: "NOP", UTAH: "UTA", WSH: "WAS", PHO: "PHX" };
-export interface EspnGame { id: string; tip: number; state: "pre" | "in" | "post"; detail: string; teams: string[]; scores: number[]; seasonType?: number }
+// period / clock: game period (1-4, 5+ = OT) and seconds left in it (in progress only; task T: expected game end)
+export interface EspnGame { id: string; tip: number; state: "pre" | "in" | "post"; detail: string; teams: string[]; scores: number[]; seasonType?: number; period?: number; clock?: number }
 export async function espnDay(date: string): Promise<EspnGame[]> {
   const d = date.replace(/-/g, "");
   const isPast = Date.parse(date + "T12:00:00Z") < Date.now() - 36 * HOUR;
-  const j = await getJSON<{ events?: { id: string; date: string; season?: { type?: number }; status: { type: { state: string; shortDetail: string } }; competitions: { competitors: { score?: string; team: { abbreviation: string } }[] }[] }[] }>(
+  const j = await getJSON<{ events?: { id: string; date: string; season?: { type?: number }; status: { period?: number; clock?: number; type: { state: string; shortDetail: string } }; competitions: { competitors: { score?: string; team: { abbreviation: string } }[] }[] }[] }>(
     `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${d}`, isPast ? 24 * HOUR : 1 * MIN);
   return (j.events || []).map((e) => ({
     id: e.id, tip: Date.parse(e.date), state: e.status.type.state as EspnGame["state"], detail: e.status.type.shortDetail,
     teams: e.competitions[0].competitors.map((c) => ESPN_FIX[c.team.abbreviation] ?? c.team.abbreviation),
     scores: e.competitions[0].competitors.map((c) => Number(c.score ?? 0)), seasonType: e.season?.type, // 1 = preseason, 2 = regular
+    ...(e.status.type.state === "in" && e.status.period ? { period: e.status.period, clock: e.status.clock ?? 0 } : {}),
   }));
 }
 // ESPN team ids and current rosters (task R, lib/live/nbarosters.ts: Sleeper keeps a waived player's team for days)

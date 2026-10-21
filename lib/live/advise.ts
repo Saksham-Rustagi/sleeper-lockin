@@ -32,10 +32,12 @@ export interface TipPlan {
   // players holding a finished, unlocked score: where they sit during this tip-off (any starting slot - never the bench);
   // from / move: his slot at the previous tip-off (first: Sleeper's lineup) and whether he has to change slots
   holds: { player: string; pid: string; score: number; slot: string; from: string | null; move: boolean }[];
+  late?: number; // task T: scheduled tip of a game in this group that is past its time but hasn't tipped (tip = expected)
   forfeits: { player: string; score: number }[]; // held scores the plan gives up to make room (only if locking them isn't better)
   // locks the plan makes at this tip-off (the engine's decision, exact slot), and players still in an earlier game
   locks?: { player: string; pid: string; score: number; slot: string }[];
-  playing?: { player: string; pid: string; slot: string; end: number }[];
+  // dnp: Out / inactive with no stats in that game (scores 0; no lock decision; his slot frees with nothing held)
+  playing?: { player: string; pid: string; slot: string; end: number; dnp?: boolean; team?: string }[];
 }
 export interface Advice {
   generatedAt: number; asOf: number; mode: "live" | "replay"; league: string; season: string; week: number; dates: string[];
@@ -48,9 +50,10 @@ export interface TeamView {
   // state: "locked" | "playing" | "held" (finished game, decide before his next tip-off: heldUntil) | "idle" | "empty";
   // stateText: the same for display ("held (decide by Thu 7:30 PM)", "locked (final game)")
   // gameEnd / lockIf: for a player in a game now, its estimated end and the quick rule's lock cut-off
-  slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string; stateText?: string; heldUntil?: number | null; injury?: string | null; gameEnd?: number; lockIf?: number | null }[];
+  // dnp / team (task T): in a game in progress he is Out / inactive for (scores 0; no lock cut-off), his NBA team
+  slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string; stateText?: string; heldUntil?: number | null; injury?: string | null; gameEnd?: number; lockIf?: number | null; dnp?: boolean; team?: string }[];
   // projOverride: the minutes override replaced Sleeper's projection for this player (option "minutesOverride")
-  players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; projOverride?: string; rosterNote?: string; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null; projOverride?: string }[] }[];
+  players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; projOverride?: string; rosterNote?: string; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null; projOverride?: string; late?: number; dnp?: boolean }[] }[];
 }
 export interface Outlook { myMean: number; myP10: number; myP90: number; oppMean: number | null; oppP10: number | null; oppP90: number | null; winProb: number | null; sims: number }
 
@@ -68,16 +71,16 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
     const next = held ? T.games.find((g) => g.pid === pid && g.status === "pre" && g.tip > ctx.asOf) : undefined;
     const stateText = held ? (next ? `held (decide by ${fmtTime(next.tip)})` : "held (last game - counts automatically)") : state;
     const live = state === "playing" ? T.games[st.inGame[i]] : undefined;
-    const th = live ? lockThreshold(T, E.cloneState(st), i, live.end) : null;
+    const th = live && !live.dnp ? lockThreshold(T, E.cloneState(st), i, live.end) : null;
     return { slot, player: i >= 0 ? T.names[i] : null, pid, locked: false, points: held ? st.pendingX[i] : null, source: null, state, stateText, ...(held ? { heldUntil: next?.tip ?? null } : {}), injury: i >= 0 ? T.injury[i] : null,
-      ...(live ? { gameEnd: live.end, lockIf: th ? Math.round(th.threshold * 10) / 10 : null } : {}) };
+      ...(live ? { gameEnd: live.end, lockIf: th ? Math.round(th.threshold * 10) / 10 : null, team: live.team, ...(live.dnp ? { dnp: true } : {}) } : {}) };
   });
   return {
     rosterId: T.rosterId, name: T.teamName, lockedTotal: Array.from(st.lockedBy).reduce((a, p, s) => a + (p >= 0 ? st.lockedPts[s] : 0), 0), slots,
     players: T.pids.map((pid, i) => ({
       pid, name: T.names[i], pos: T.positions[i].join("/"), injury: T.injury[i], locked: !!st.isLocked[i], ...(T.overrides?.[pid] ? { projOverride: T.overrides[pid].label } : {}),
       ...(T.rosterFix?.[pid] ? { rosterNote: T.rosterFix[pid].label } : {}), // task R: his team's current NBA roster doesn't list him
-      games: T.games.filter((g) => g.pid === pid).map((g) => ({ date: g.date, opp: g.opp, tip: g.tip, status: g.status, proj: Math.round(g.proj * 10) / 10, actual: g.actual, ...(g.projOverride ? { projOverride: g.projOverride } : {}) })),
+      games: T.games.filter((g) => g.pid === pid).map((g) => ({ date: g.date, opp: g.opp, tip: g.tip, status: g.status, proj: Math.round(g.proj * 10) / 10, actual: g.actual, ...(g.projOverride ? { projOverride: g.projOverride } : {}), ...(g.late ? { late: g.late } : {}), ...(g.dnp ? { dnp: true } : {}) })),
     })),
   };
 }
@@ -280,7 +283,9 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
     benchedIdx.push(bIdx);
     // held scores: everyone still lockable but not playing now keeps a starting slot (assigned among free slots)
     const held: number[] = []; const w = new Float64Array(T.pids.length);
-    for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0) { held.push(p); w[p] = st.pendingX[p] + 1000; }
+    // (a 0 from a game he didn't play holds nothing: his slot is free - task T, e.g. Out but stuck in a game in progress)
+    const dnpZero = (p: number) => { const gi = T.tw.byPlayer[p].filter((g) => T.games[g].end <= tip && T.games[g].tip < tip).pop(); return st.pendingX[p] === 0 && gi !== undefined && !played[gi]; };
+    for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0 && !dnpZero(p)) { held.push(p); w[p] = st.pendingX[p] + 1000; }
     const ha = E.assignExact(T.tw.slots, E.unpinnedOpen(st), held, T.tw.pmask, w);
     const holds: TipPlan["holds"] = [];
     for (const p of held) {
@@ -296,14 +301,15 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
     for (let s = 0; s < ctx.slotNames.length; s++) {
       const lp = st.lockedBy[s]; if (lp >= 0 && pre.lockedBy[s] < 0) locks.push({ player: T.names[lp], pid: T.pids[lp], score: st.lockedPts[s], slot: L[s] });
       const pp = st.pinned[s];
-      if (pp >= 0) { pos.set(pp, s); const g = T.games[st.inGame[pp]]; if (g && g.tip !== tip) playing.push({ player: T.names[pp], pid: T.pids[pp], slot: L[s], end: g.end }); }
+      if (pp >= 0) { pos.set(pp, s); const g = T.games[st.inGame[pp]]; if (g && g.tip !== tip) playing.push({ player: T.names[pp], pid: T.pids[pp], slot: L[s], end: g.end, ...(g.dnp ? { dnp: true, team: g.team } : {}) }); }
     }
     for (const h of holds) pos.set(T.pids.indexOf(h.pid), L.indexOf(h.slot));
     prevPos = pos;
     const before = first ? T.st : null;
     const forfeits: TipPlan["forfeits"] = [];
     if (before) for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(before.pendingX[p]) && Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0) forfeits.push({ player: T.names[p], score: before.pendingX[p] });
-    out.push({ tip, when: fmtTime(tip), starts, benched, tentative: !first, holds, forfeits, locks, playing });
+    const late = groupGames.find((g) => g.late)?.late;
+    out.push({ tip, when: late ? `${fmtTime(late)} (late tip - not tipped yet)` : fmtTime(tip), starts, benched, tentative: !first, holds, forfeits, locks, playing, ...(late ? { late } : {}) });
     first = false;
   }
   // an unlikely player is a start only as a free roll: nobody likely to play who fits his slot is benched at a tip-off
@@ -364,7 +370,7 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
   if (!windowTips.length) { const nd = ctx.me.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0]; if (nd) windowTips.push(...ctx.me.games.filter((g) => g.date === nd).map((g) => g.tip)); }
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 14, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 15, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
   const [ms, os] = await Promise.all([teamSims(ctx.me, ctx.week, ctx.asOf), ctx.opp ? teamSims(ctx.opp, ctx.week, ctx.asOf) : Promise.resolve(null)]);
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K, ms, os));
   return { ...value, doNow: doNow(value), cached, checkedAt: Date.now() }; // (pure and fast: never stale from the cache)
