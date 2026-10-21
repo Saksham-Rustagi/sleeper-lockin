@@ -2918,3 +2918,25 @@ only real changes.
 Checks: tsc clean; `npm test` 106/106 (7 new in `tests/donow.test.ts`; 3 notifier tests updated to the new reminder
 text, same checks: Garland not repeated, the Out player explained, the held player moved and never benched).
 
+
+## Sticky lineups: reminders without flip-flops (task S, 2026-10-21)
+Live bug before the Wed 7:00 PM tip: lineup reminders at 5:48 / 6:08 / 6:19 ("lineup is set") / 6:24 PM, the last a pure
+PG ↔ SG swap of Black and Wallace (both PG/SG); the engine's slot choice among equal options is arbitrary (MC ordering),
+the card only re-arranged within same-name slots, and the reminder was keyed by changed slots. Fix (`DEPLOY_STICKY.md`):
+the card re-solves *where* players go per tip-off (placed > every later tip-off still placeable, backtracking forward
+search > stay where they sit > narrowest slot / the benched player's slot for newcomers; engine slot only for locks and
+unknown positions); the notifier (`lib/live/lineupnotify.ts`) keeps a memo per tip-off, applies 0.5-pt hysteresis to
+starter swaps, and after any reminder for that tip-off sends a change only with a named reason (injury tag, game ended,
+projection ≥ 0.5, Sleeper lineup edited), stated in the body ("Changed because: …"). Display / notification only.
+
+Live check (`research/s_live.ts`, read-only copy of the notifier's cached advice at 6:44 PM ET + today's advice.jsonl):
+
+| check | old card | new card |
+|---|---|---|
+| live advice (Sleeper PG Wallace / SG Black; engine PG Black / SG Wallace) | swap Black ↔ Wallace | put Coward in SF (8:00 PM starter, empty slot) |
+| 10 runs, engine slot labels re-drawn at random (valid placements) | 10 distinct change lists | 1 (identical every run) |
+| notifier replay, today's 41 logged plans + live (6:08 → 6:44 PM) | 3 reminders (6:08, 6:19 set, 6:24 swap) | 1 (6:08), then "same changes" |
+| doNow runtime, 8 tip-offs | - | ≈ 15 ms |
+
+Tests 114/114 (8 new: swap-only → no change / no reminder, injury change → reminder with reason, hysteresis across runs,
+"set" then reasonless change → silent, later-move feasibility forcing a move now, relabel invariance, worst-case time).

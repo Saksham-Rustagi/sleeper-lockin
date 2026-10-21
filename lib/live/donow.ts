@@ -24,6 +24,9 @@ export interface DoNow {
   tip: number | null; tipText: string | null; rows: DoNowRow[]; changes: string[]; locks: DoNowLock[];
   then: DoNowStep[]; bench: string[]; upToDate: string | null;
   compact: string; // "SG Black (free roll), PG Wallace (held 5.0), F Jalen Johnson" (reminder title)
+  // the target lineup at the next tip-off (who starts / holds / locks; value = expected points of tonight's game for
+  // a starter, the score for a held / locked one): the notifier's materiality and hysteresis (lib/live/lineupnotify.ts)
+  target: { slot: string; pid: string; name: string; kind: DoNowKind; tip: number | null; value: number | null; early: boolean }[];
 }
 export type DoNowInput = Pick<Advice, "asOf" | "plan" | "decisions"> & { me: Pick<Advice["me"], "slots"> & { players?: Partial<Advice["me"]["players"][number]>[] } };
 
@@ -67,56 +70,8 @@ export function doNow(a: DoNowInput): DoNow {
   const fits = (pid: string, s: number): boolean | null => { const ps = posOf.get(pid); const ok = SLOT_POS[S[s].slot]; return !ps || !ok ? null : ps.split("/").some((x) => ok.includes(x)); };
   // where he sits now / before a tip-off
   const where = (l: Lineup, pid: string) => l.findIndex((o) => o?.pid === pid);
-  // this tip-off's starters on the engine's slot names (slots of one name are interchangeable, and they are all in a
-  // game for the same stretch), arranged to keep as many players as possible where they sit now
-  const arrange = (group: { s: number; o: Occ }[], t: Lineup, pre: Lineup, keep: Set<string>): number[] => {
-    const engine = group.map((g) => g.s);
-    if (group.length > 6) return engine;
-    const cand = [...new Set([...engine, ...L.map((_, i) => i).filter((i) => !t[i] && engine.some((e) => S[e].slot === S[i].slot))])];
-    const need = new Map<string, number>(); engine.forEach((e) => need.set(S[e].slot, (need.get(S[e].slot) ?? 0) + 1));
-    let best = engine; let bestScore = -Infinity; const pick: number[] = []; const used = new Set<number>();
-    // +1 per starter who stays where he sits, -1 per held score he would push out of its slot
-    const score = (ss: number[]) => ss.reduce((x, s, gi) => x + (where(pre, group[gi].o.pid) === s ? 1 : 0)
-      - (pre[s] && keep.has(pre[s]!.pid) && !group.some((g) => g.o.pid === pre[s]!.pid) ? 1 : 0) + (s === engine[gi] ? 1e-3 : 0), 0);
-    const dfs = (gi: number) => {
-      if (gi === group.length) { const sc = score(pick); if (sc > bestScore) { bestScore = sc; best = pick.slice(); } return; }
-      for (const s of cand) {
-        const nmS = S[s].slot; const ok = fits(group[gi].o.pid, s);
-        if (used.has(s) || !(need.get(nmS) ?? 0) || (ok === null ? nmS !== S[engine[gi]].slot : !ok)) continue;
-        used.add(s); need.set(nmS, need.get(nmS)! - 1); pick.push(s);
-        dfs(gi + 1);
-        used.delete(s); need.set(nmS, need.get(nmS)! + 1); pick.pop();
-      }
-    };
-    dfs(0);
-    return best;
-  };
-  // held scores: stay where they sit when that slot is free, the rest matched to free slots they can play (the
-  // engine's slot first); if that fails, the engine's own placement
-  const placeHolds = (hs: { o: Occ; slot: number }[], t: Lineup, prev: Lineup) => {
-    const free = () => L.map((_, i) => i).filter((i) => !t[i]);
-    const ok = (h: { o: Occ; slot: number }, s: number) => { const f = fits(h.o.pid, s); return f === null ? s === h.slot || S[s].slot === S[h.slot]?.slot : f; };
-    const match = (items: { o: Occ; slot: number }[], slots: number[]): Map<number, number> | null => {
-      const owner = new Map<number, number>(); // slot -> item
-      const tryItem = (i: number, seen: Set<number>): boolean => {
-        const order = [items[i].slot, ...slots.filter((s) => s !== items[i].slot)];
-        for (const s of order) {
-          if (!slots.includes(s) || seen.has(s) || !ok(items[i], s)) continue;
-          seen.add(s);
-          if (!owner.has(s) || tryItem(owner.get(s)!, seen)) { owner.set(s, i); return true; }
-        }
-        return false;
-      };
-      for (let i = 0; i < items.length; i++) if (!tryItem(i, new Set())) return null;
-      return owner;
-    };
-    const stay = hs.filter((h) => { const p = where(prev, h.o.pid); return p >= 0 && !t[p] && ok(h, p); });
-    for (const h of stay) t[where(prev, h.o.pid)] = h.o;
-    const rest = hs.filter((h) => !stay.includes(h));
-    let m = match(rest, free());
-    if (!m) { for (const h of stay) t[where(prev, h.o.pid)] = null; m = match(hs, free()); if (!m) { for (const h of hs) if (h.slot >= 0 && !t[h.slot]) t[h.slot] = h.o; return; } m.forEach((i, s) => { t[s] = hs[i].o; }); return; }
-    m.forEach((i, s) => { t[s] = rest[i].o; });
-  };
+  // how many positions a slot takes (PG 1, G 2, UTIL 5): a new starter goes into the narrowest slot he fits
+  const width = (s: number) => SLOT_POS[S[s].slot]?.length ?? 5;
   const at = (label: string) => L.indexOf(label);
   const tip0 = plan[0]?.tip ?? null;
   const tipTxt = (ms: number) => (etDay(ms) === etDay(a.asOf) ? clock(ms) : dayClock(ms));
@@ -139,81 +94,143 @@ export function doNow(a: DoNowInput): DoNow {
   for (const d of a.decisions) if (d.threshold != null) cutoff.set(d.pid, d.threshold);
   const benchedAt = (k: number) => new Set(plan[k].benched.map((b) => b.pid ?? pidOf(b.player)).filter(Boolean) as string[]);
   const forfeit0 = new Set((plan[0]?.forfeits ?? []).map((f) => pidOf(f.player)).filter(Boolean) as string[]);
-  // the lineup at each tip-off; ref: a first build's lineups, so a later tip-off's starters are arranged around where
-  // players will sit by then (first build: where they sit now)
-  const build = (ref: Lineup[] | null): Lineup[] => {
-  // ---- the engine's lineup at each tip-off: fixed occupants (locks, games in progress, this tip-off's starters);
-  // held scores are placed afterwards, as close as possible to where they sit ----
-  const R: Lineup[] = []; const H: { o: Occ; slot: number }[][] = [];
-  let carry: Lineup = cur.map((o) => (o?.kind === "locked" ? o : null));
-  // relabelled slots (engine slot <-> ours, same slot name) stay swapped for every later engine placement while the
-  // players involved are still in that game (locks: for good)
-  const swaps: { a: number; b: number; pids: string[] | null }[] = [];
-  const mine = new Map<string, number>(); // pid -> our slot for him (in a game / locked)
-  plan.forEach((pl, k) => {
-    const t = carry.slice(); const hs: { o: Occ; slot: number }[] = [];
-    const inGame = new Set((pl.playing ?? []).map((x) => x.pid));
-    const active = swaps.filter((w) => !w.pids || w.pids.some((x) => inGame.has(x)));
-    const map = (e: number) => active.reduce((x, w) => (x === w.a ? w.b : x === w.b ? w.a : x), e);
-    const at = (label: string) => { const e = L.indexOf(label); return e < 0 ? e : map(e); };
-    const has = (pid: string) => t.some((x) => x?.pid === pid) || hs.some((h) => h.o.pid === pid);
-    const put = (s: number, o: Occ) => { if (s >= 0 && !t[s] && !has(o.pid)) t[s] = o; };
-    const lockOcc = (pid: string, name: string, score: number | null | undefined): Occ => ({ pid, name, kind: "lock", score, lockIf: cutoff.get(pid) ?? null });
-    for (const x of pl.locks ?? []) put(at(x.slot), lockOcc(x.pid, x.player, x.score));
-    for (const x of pl.playing ?? []) put(k > 0 && mine.has(x.pid) ? mine.get(x.pid)! : at(x.slot), { pid: x.pid, name: x.player, kind: "playing", end: x.end, lockIf: cutoff.get(x.pid) ?? null });
-    const group = pl.starts.map((x) => ({ s: at(x.slot), o: { pid: x.pid, name: x.player, kind: (x.label && /free roll/.test(x.label) ? "freeRoll" : "start") as DoNowKind, proj: x.proj, lockIf: x.lockIf, label: x.label, playProb: x.playProb, end: x.end, opp: x.opp, tip: pl.tip } }))
-      .filter((g) => g.s >= 0 && !t[g.s] && !has(g.o.pid));
-    const keep = new Set([...pl.holds.map((h) => h.pid), ...(k === 0 ? a.decisions.map((d) => d.pid) : [])].filter((x) => !(k === 0 && dec.get(x)?.recommended === "BENCH")));
-    const chosen = arrange(group, t, k > 0 && ref ? ref[k - 1] : cur, keep);
-    chosen.forEach((s, gi) => { t[s] = group[gi].o; mine.set(group[gi].o.pid, s); });
-    const eng = new Set(group.map((g) => g.s)); const ours = new Set(chosen);
-    const myOnly = chosen.filter((x) => !eng.has(x));
-    for (const e of [...eng].filter((x) => !ours.has(x))) {
-      const m = myOnly.findIndex((x) => S[x].slot === S[e].slot);
-      if (m >= 0) { swaps.push({ a: e, b: myOnly[m], pids: group.map((g) => g.o.pid) }); myOnly.splice(m, 1); }
-    }
+  // ---- who is in the lineup at each tip-off (the engine's plan) and the engine's slot for him (a hint only) ----
+  // Which slot a player gets among equally good options is arbitrary in the engine (Monte-Carlo ordering, slot order),
+  // so it is never by itself a reason to move anyone: placement is re-solved here, sticky to where players sit.
+  interface Item { o: Occ; hint: number; lock: boolean }
+  const lockOcc = (pid: string, name: string, score: number | null | undefined): Occ => ({ pid, name, kind: "lock", score, lockIf: cutoff.get(pid) ?? null });
+  const tips = plan.map((pl, k) => {
+    const items: Item[] = []; const playing: Item[] = [];
+    const has = (pid: string) => items.some((x) => x.o.pid === pid) || playing.some((x) => x.o.pid === pid);
+    const add = (to: Item[], o: Occ, hint: number, lock = false) => { if (!has(o.pid)) to.push({ o, hint, lock }); };
+    for (const x of pl.locks ?? []) add(items, lockOcc(x.pid, x.player, x.score), at(x.slot), true);
+    for (const x of pl.playing ?? []) add(playing, { pid: x.pid, name: x.player, kind: "playing", end: x.end, lockIf: cutoff.get(x.pid) ?? null }, at(x.slot));
+    for (const x of pl.starts) add(items, { pid: x.pid, name: x.player, kind: (x.label && /free roll/.test(x.label) ? "freeRoll" : "start") as DoNowKind, proj: x.proj, lockIf: x.lockIf, label: x.label, playProb: x.playProb, end: x.end, opp: x.opp, tip: pl.tip }, at(x.slot));
     for (const h of pl.holds) {
       const d = k === 0 ? dec.get(h.pid) : undefined;
-      if (d?.recommended === "BENCH" || has(h.pid)) continue;
-      if (d?.recommended === "LOCK") put(at(h.slot), lockOcc(h.pid, h.player, h.score));
-      else hs.push({ o: { pid: h.pid, name: h.player, kind: "held", score: h.score, lockIf: d?.threshold ?? null }, slot: at(h.slot) });
+      if (d?.recommended === "BENCH") continue;
+      if (d?.recommended === "LOCK") add(items, lockOcc(h.pid, h.player, h.score), at(h.slot), true);
+      else add(items, { pid: h.pid, name: h.player, kind: "held", score: h.score, lockIf: d?.threshold ?? null }, at(h.slot));
     }
     if (k === 0) {
       // safety: a held score the advice keeps (HOLD / LOCK) is never dropped because the plan didn't place it
       for (const d of a.decisions) {
-        if (d.recommended === "BENCH" || has(d.pid)) continue;
-        const here = cur.findIndex((o) => o?.pid === d.pid);
-        const s = [here, ...L.map((_, i) => i).filter((i) => S[i].slot === d.recommendedSlot)].find((i) => i >= 0 && !t[i]) ?? -1;
-        if (d.recommended === "LOCK") put(s, lockOcc(d.pid, d.player, d.score));
-        else hs.push({ o: { pid: d.pid, name: d.player, kind: "held", score: d.score, lockIf: d.threshold }, slot: s });
+        if (d.recommended === "BENCH") continue;
+        const hint = [where(cur, d.pid), ...L.map((_, i) => i).filter((i) => S[i].slot === d.recommendedSlot)].find((i) => i >= 0) ?? -1;
+        if (d.recommended === "LOCK") add(items, lockOcc(d.pid, d.player, d.score), hint, true);
+        else add(items, { pid: d.pid, name: d.player, kind: "held", score: d.score, lockIf: d.threshold }, hint);
       }
     }
-    // a lock in his own slot rather than an identical one (UTIL 1 / UTIL 2): no move needed
-    t.forEach((o, s) => {
-      if (o?.kind !== "lock") return;
-      const here = k === 0 || !mine.has(o.pid) ? cur.findIndex((c) => c?.pid === o.pid) : mine.get(o.pid)!;
-      if (here >= 0 && here !== s && !t[here] && S[here].slot === S[s].slot) { t[here] = o; t[s] = null; swaps.push({ a: s, b: here, pids: null }); }
-    });
-    R.push(t); H.push(hs); carry = t.map((o) => (o && (o.kind === "locked" || o.kind === "lock") ? { ...o, kind: "locked" } : null));
+    return { items, playing };
   });
+  // the lineup at tip-off k: fixed = locks so far (carry) and players still in a game (pinned where they started);
+  // this tip-off's new locks, starters and held scores are assigned to the free slots by one search, lexicographic:
+  //   1. as many placed as possible
+  //   2. every later tip-off's lineup still placeable (fwd: a backtracking search over the later tip-offs, narrowest slot
+  //      first, first feasible path wins), so a slot is freed or a held player moved now only when a later planned
+  //      move needs it
+  //   3. as many as possible stay where they sit (prev, else Sleeper now)
+  //   4. a player who does move / comes in: the narrowest slot he fits, then the slot of a player going to the bench, then
+  //      an empty slot, then the first in Sleeper order
+  // (the engine's slot is not a tie-break: it is arbitrary among equal options, and following it made the card follow
+  // the engine's relabels.) A lock keeps the engine's slot name (consumed for the rest of the week); positions unknown ->
+  // the engine's slot name.
+  const locksOf = (u: Lineup): Lineup => u.map((o) => (o && (o.kind === "locked" || o.kind === "lock") ? { ...o, kind: "locked" as DoNowKind } : null));
+  const setup = (k: number, carry: Lineup, mine: Map<string, number>, prev: Lineup, flex: boolean) => {
+    const { items, playing } = tips[k];
+    const t = carry.slice(); const pins = new Map(mine);
+    for (const x of playing) {
+      if (where(t, x.o.pid) >= 0) continue;
+      const s = [pins.get(x.o.pid), where(cur, x.o.pid), x.hint].find((i) => i !== undefined && i >= 0 && !t[i]);
+      if (s !== undefined) { t[s] = x.o; pins.set(x.o.pid, s); }
+    }
+    const its = items.filter((it) => where(t, it.o.pid) < 0);
+    const free = L.map((_, i) => i).filter((i) => !t[i]);
+    const sits = (pid: string) => { const p = where(prev, pid); return p >= 0 ? p : where(cur, pid); };
+    const ok = (it: Item, s: number) => { const f = fits(it.o.pid, s); return it.lock || f === null ? it.hint >= 0 && S[s].slot === S[it.hint].slot : f; };
+    // (a slot whose occupant goes to the bench: one swap in Sleeper; an empty one: one move)
+    const out = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => out.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => out.add(d.pid)); }
+    const W = (it: Item, s: number) => (!flex && sits(it.o.pid) === s ? 110 : 10 - width(s) + (prev[s] && out.has(prev[s]!.pid) ? 0.3 : !prev[s] ? 0.25 : 0) + (fits(it.o.pid, s) === null && s === it.hint ? 0.01 : 0));
+    const cands = its.map((it) => free.filter((s) => ok(it, s)).sort((x, y) => W(it, y) - W(it, x) || x - y));
+    const order = its.map((_, i) => i).sort((x, y) => cands[x].length - cands[y].length || x - y);
+    const fill = (pick: number[]) => {
+      const u = t.slice(); const m = new Map(pins);
+      pick.forEach((s, j) => { if (s >= 0) { const o = its[order[j]].o; u[s] = o; if (o.kind === "start" || o.kind === "freeRoll") m.set(o.pid, s); } });
+      return { u, m };
+    };
+    return { its, cands, order, W, fill };
+  };
+  // fewest occupants of tip-offs j.. that can't be placed (0 = the plan is reachable); budget: leaves left to try
+  const fwd = (j: number, carry: Lineup, mine: Map<string, number>, prev: Lineup, budget: { n: number }): number => {
+    if (j >= plan.length) return 0;
+    const { cands, order, fill } = setup(j, carry, mine, prev, true);
+    let best = Infinity; const pick: number[] = []; const used = new Set<number>();
+    const dfs = (i: number, miss: number) => {
+      if (best === 0 || miss >= best || (budget.n <= 0 && best < Infinity)) return;
+      if (i === order.length) { budget.n--; const { u, m } = fill(pick); best = Math.min(best, miss + fwd(j + 1, locksOf(u), m, u, budget)); return; }
+      for (const s of cands[order[i]]) { if (used.has(s)) continue; used.add(s); pick.push(s); dfs(i + 1, miss); pick.pop(); used.delete(s); }
+      pick.push(-1); dfs(i + 1, miss + 1); pick.pop();
+    };
+    dfs(0, 0);
+    return best;
+  };
+  interface Placed { t: Lineup; miss: number; mine: Map<string, number> }
+  const place = (k: number, carry: Lineup, mine: Map<string, number>, prev: Lineup): Placed => {
+    const { its, cands, order, W, fill } = setup(k, carry, mine, prev, false);
+    const top = order.map((i) => (cands[i].length ? 1e4 + W(its[i], cands[i][0]) : 0));
+    const rest = top.map((_, j) => top.slice(j).reduce((x, y) => x + y, 0)).concat(0);
+    let best: number[] = order.map(() => -1); let bestSc = -Infinity; let bestMiss = its.length; let nodes = 0;
+    const pick: number[] = []; const used = new Set<number>();
+    // (search budgets: 20000 nodes here; forward search 500 leaves per candidate, 20000 in all - then first path only)
+    let fwdLeft = 20000;
+    const dfs = (j: number, sc: number) => {
+      if (++nodes > 20000 || sc + rest[j] <= bestSc) return;
+      if (j === order.length) {
+        let total = sc;
+        if (plan.length > k + 1) {
+          const { u, m } = fill(pick); const b = { n: Math.min(500, fwdLeft) };
+          total -= 1e3 * fwd(k + 1, locksOf(u), m, u, b); fwdLeft -= Math.min(500, fwdLeft) - Math.max(0, b.n);
+        }
+        if (total > bestSc) { bestSc = total; best = pick.slice(); bestMiss = pick.filter((s) => s < 0).length; }
+        return;
+      }
+      const it = its[order[j]];
+      for (const s of cands[order[j]]) {
+        if (used.has(s)) continue;
+        used.add(s); pick.push(s); dfs(j + 1, sc + 1e4 + W(it, s)); pick.pop(); used.delete(s);
+      }
+      pick.push(-1); dfs(j + 1, sc); pick.pop(); // (can't place him)
+    };
+    dfs(0, 0);
+    const { u, m } = fill(best);
+    return { t: u, miss: bestMiss, mine: m };
+  };
+  const R: Lineup[] = [];
+  {
+    let carry: Lineup = cur.map((o) => (o?.kind === "locked" ? o : null));
+    let mine = new Map<string, number>(); cur.forEach((o, s) => { if (o?.kind === "playing") mine.set(o.pid, s); });
+    let prev = cur;
+    plan.forEach((_, k) => {
+      const r = place(k, carry, mine, prev);
+      R.push(r.t); mine = r.mine; prev = r.t; carry = locksOf(r.t);
+    });
+  }
   // a later starter today whose slot nobody uses before his game: set him now (one trip to Sleeper instead of two)
   for (let k = 1; k < plan.length; k++) {
     if (etDay(plan[k].tip) !== etDay(plan[0].tip)) break;
     R[k].forEach((q, s) => {
       if (!q || (q.kind !== "start" && q.kind !== "freeRoll") || q.tip !== plan[k].tip) return;
       if (cur.some((o) => o?.pid === q.pid && o.kind === "playing")) return;
-      for (let j = 0; j < k; j++) if (R[j][s] || R[j].some((o) => o?.pid === q.pid) || H[j].some((h) => h.slot === s || h.o.pid === q.pid) || plan[j].benched.some((b) => (b.pid ?? pidOf(b.player)) === q.pid)) return;
+      for (let j = 0; j < k; j++) if (R[j][s] || R[j].some((o) => o?.pid === q.pid) || plan[j].benched.some((b) => (b.pid ?? pidOf(b.player)) === q.pid)) return;
       for (let j = 0; j < k; j++) R[j][s] = { ...q, early: true };
     });
   }
 
-  // ---- final lineups: held scores stay put when they can; previous occupants the plan doesn't use stay where they
-  // are when that's harmless ----
+  // ---- final lineups: previous occupants the plan doesn't use stay where they are when that's harmless ----
   const F: Lineup[] = [];
   let prev = cur;
   plan.forEach((_, k) => {
     const t = R[k].slice();
-    placeHolds(H[k], t, prev);
     const must = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => must.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => must.add(d.pid)); }
     prev.forEach((r, s) => {
       if (!r || r.kind === "locked" || r.kind === "lock" || t.some((x) => x?.pid === r.pid) || must.has(r.pid)) return;
@@ -226,9 +243,6 @@ export function doNow(a: DoNowInput): DoNow {
     });
     F.push(t); prev = t;
   });
-  return F;
-  };
-  const F = build(build(null));
 
   // ---- diffs ----
   const benchWhy = (r: Occ, k: number) => {
@@ -400,7 +414,9 @@ export function doNow(a: DoNowInput): DoNow {
   const tag = (o: Occ) => (o.kind === "held" ? ` (held ${f1(o.score)})` : o.kind === "freeRoll" ? " (free roll)" : o.kind === "lock" ? ` (LOCK ${f1(o.score)})` : "");
   const gets = new Set(nowChanges.flatMap((c) => (c.kind === "bench" || c.kind === "lock" ? [] : c.kind === "swap" ? c.slots : [c.row]))); // slots getting a player
   const compact = rows.filter((r, s) => gets.has(s) && r.pid).map((r, _, __, s = L.indexOf(r.slot)) => `${r.slot} ${r.player}${tag(shown[s]!)}`).join(", ");
-  return { tip: tip0, tipText: plan[0]?.when ?? null, rows, changes: nowChanges.map((c) => cap(c.text)), locks, then, bench, upToDate, compact };
+  const value = (o: Occ) => (o.kind === "start" || o.kind === "freeRoll" ? (o.proj ?? 0) * (o.playProb ?? 1) : o.score ?? null);
+  const target = (F[0] ?? []).flatMap((o, s) => (o ? [{ slot: L[s], pid: o.pid, name: o.name, kind: o.kind, tip: o.tip ?? null, value: value(o), early: !!o.early }] : []));
+  return { tip: tip0, tipText: plan[0]?.when ?? null, rows, changes: nowChanges.map((c) => cap(c.text)), locks, then, bench, upToDate, compact, target };
 }
 
 // plain-text rendering of the card (live checks, logs)

@@ -5,7 +5,7 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 `launchctl`, never `git push`. Commit your work on `engine-v2` in small, described commits.
 
 ## Commands
-- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 106 tests today)
+- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 114 tests today)
 - Bundle a research script: `npx esbuild research/X.ts --bundle --platform=node --format=cjs --outfile=research/dist/X.cjs --log-level=error`
 - Season backtest (2025-26, 23 weeks x 10 teams = 230 team-weeks), parallel over the 14 cores:
   `node research/runpar.mjs research/dist/backtest.cjs <outPrefix> <POLICY,POLICY,...> 200 KS=200`
@@ -46,6 +46,10 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
   lineup per slot before the next tip-off, diff vs Sleeper, later changes / slot reuse, reminder text; `Advice.doNow`),
   rendered by `DoNowView` in `app/live/page.tsx`, used by `scripts/notify.ts`. Live check `research/donow_live.ts`;
   tests `tests/donow.test.ts`.
+- Sticky lineups (task S, REPORT "Sticky lineups", `DEPLOY_STICKY.md`): `doNow` re-solves slot placement per tip-off
+  (sticky to Sleeper, later-tip-off feasibility via backtracking forward search; engine slot only for locks);
+  `lib/live/lineupnotify.ts` (pure: per-tip memo in `~/.sleeper-lockin/lineup-state.json`, 0.5-pt hysteresis, reasons),
+  used by `messages()` in `scripts/notify.ts`. Live check `research/s_live.ts`; tests `tests/lineupnotify.test.ts`.
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)

@@ -38,6 +38,9 @@ lock / hold / final-call reminders and the "lineup is set" cut-off reminder are 
 card's slot).
 
 ## How the target lineup is built (`lib/live/donow.ts`, pure)
+*Superseded by task S (`DEPLOY_STICKY.md`): steps 1-3 and the second pass are replaced by one sticky placement search per
+tip-off; steps 4-6 are unchanged.*
+
 Input: `me.slots` (Sleeper now), `plan` (engine lineup per tip-off, next 30 h), `decisions`.
 1. Per tip-off: fixed occupants = locks (incl. the plan's new locks at that tip-off, exact slot from the engine state),
    players still in a game, that tip-off's starters; held scores are placed afterwards.

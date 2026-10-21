@@ -8,6 +8,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import { advise, replay, type Advice } from "../lib/live/advise";
 import { doNow } from "../lib/live/donow";
+import { lineupMessage, type LineupState } from "../lib/live/lineupnotify";
 import { engineName, replayIsSlow } from "../lib/live/engine";
 import { sleeper } from "../lib/live/sources";
 import { resolveWeek } from "../lib/live/week";
@@ -21,6 +22,7 @@ import { optionOn } from "../lib/live/override";
 const DIR = path.join(os.homedir(), ".sleeper-lockin");
 const CFG = path.join(DIR, "config.json");
 const SENT = path.join(DIR, "sent.json");
+const LINEUP = path.join(DIR, "lineup-state.json"); // last lineup recommendation per tip-off (lib/live/lineupnotify.ts)
 const DATA = path.join(DIR, "data");
 const LIST = "Sleeper Lock-In";
 process.env.LOCKIN_CACHE_DIR ??= path.join(DIR, "cache");
@@ -55,8 +57,9 @@ export function irMessages(actions: IrAction[]): Msg[] {
     body: `${a.detail}${a.dropOptions?.length ? ` Other drop options: ${a.dropOptions.slice(1, 4).map((d) => `${d.name}${d.protected ? " (dynasty)" : ""}`).join(", ")}.` : ""}`,
   }));
 }
-const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
-export function messages(a: Advice, now: number): Msg[] {
+// state: the lineup memo per tip-off, updated in place (materiality / hysteresis / reasons across runs); notes: why a
+// lineup reminder was or wasn't sent (logged)
+export function messages(a: Advice, now: number, state: LineupState = {}, notes: string[] = []): Msg[] {
   const out: Msg[] = [];
   const dn = a.doNow ?? doNow(a);
   for (const d of a.decisions) {
@@ -70,18 +73,13 @@ export function messages(a: Advice, now: number): Msg[] {
   }
   const next = a.plan[0];
   if (next && next.tip - now < 75 * 60e3 && next.tip > now) {
-    const cut = next.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} ≥ ${s.lockIf}`).join(", ");
-    const startingIds = new Set(next.starts.map((s) => s.pid));
-    const scratched = a.me.slots.filter((s) => s.pid && !s.locked && /^(out|doubtful|inactive|sus)/i.test(s.injury || "") && !startingIds.has(s.pid));
-    const why = scratched.length ? `⚠️ ${scratched.map((s) => `${s.player} ${String(s.injury).toUpperCase()}`).join(", ")} → ` : "🏀 ";
-    // the concrete diff vs the Sleeper lineup (lib/live/donow.ts); locks have their own reminder above
-    const ch = dn.changes.filter((c) => !/^LOCK /.test(c));
-    const later = dn.then.find((s) => s.items.some((i) => !/lock him if/.test(i)));
-    if (ch.length) out.push({ key: `lineup|${next.tip}|${dn.rows.filter((r) => r.change && !/^LOCK /.test(r.change)).map((r) => `${r.pid ?? "-"}${r.slot}`).join(",")}`,
-      title: clip(`${why}Before ${next.when}: ${dn.compact || ch.join(", ")}`, 150),
-      body: clip(`${ch.join("; ")}.${later ? ` Then ${later.when}: ${later.items.filter((i) => !/lock him if/.test(i)).join("; ")}.` : ""} Lock if: ${cut || "–"}.`, 400) });
-    else if (cut) out.push({ key: `cutoffs|${next.tip}`, title: `🏀 ${next.when} tip-off — lineup is set`, body: `Lock if: ${cut}.` });
+    // the concrete diff vs the Sleeper lineup (lib/live/donow.ts), only when material (lib/live/lineupnotify.ts);
+    // locks have their own reminder above
+    const r = lineupMessage(a, dn, now, state[String(next.tip)]);
+    state[String(next.tip)] = r.memo; notes.push(r.note);
+    if (r.msg) out.push(r.msg);
   }
+  for (const [k, m] of Object.entries(state)) if (m.tip < now - 86400e3) delete state[k];
   return out;
 }
 
@@ -120,7 +118,11 @@ async function main() {
   log(`engine ${engineName()}: advice ${a.cached ? "cached" : "computed"} in ${((Date.now() - now) / 1000).toFixed(0)} s since start`);
   if (!process.env.DRY_RUN) logAdvice(DATA, a.season, a);
   const sent: Record<string, number> = fs.existsSync(SENT) ? JSON.parse(fs.readFileSync(SENT, "utf8")) : {};
-  const msgs = messages(a, now);
+  const lineupState: LineupState = fs.existsSync(LINEUP) ? JSON.parse(fs.readFileSync(LINEUP, "utf8")) : {};
+  const notes: string[] = [];
+  const msgs = messages(a, now, lineupState, notes);
+  for (const x of notes) log(`lineup: ${x}`);
+  if (!process.env.DRY_RUN) fs.writeFileSync(LINEUP, JSON.stringify(lineupState));
   let n = 0;
   for (const m of msgs) {
     if (sent[m.key]) continue;
