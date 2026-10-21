@@ -5,7 +5,7 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 `launchctl`, never `git push`. Commit your work on `engine-v2` in small, described commits.
 
 ## Commands
-- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 96 tests today)
+- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 99 tests today)
 - Bundle a research script: `npx esbuild research/X.ts --bundle --platform=node --format=cjs --outfile=research/dist/X.cjs --log-level=error`
 - Season backtest (2025-26, 23 weeks x 10 teams = 230 team-weeks), parallel over the 14 cores:
   `node research/runpar.mjs research/dist/backtest.cjs <outPrefix> <POLICY,POLICY,...> 200 KS=200`
@@ -39,6 +39,9 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 - NBA roster check (task R, REPORT "NBA roster check", `DEPLOY_ROSTERCHECK.md`; switch `"rosterCheck"`, default ON):
   `lib/live/nbarosters.ts` (ESPN team rosters -> `rosterCheck` fixes: waived = no games for his Sleeper team, signed
   elsewhere = new team's games; fail-safe), used by buildWeek / Waivers / oppscan. Live check `research/r_live.ts`.
+- Live lock state (task L-held, REPORT "Live state: held vs locked", `DEPLOY_HELD.md`): `inferSlot` in `lib/live/week.ts`
+  (held unless evidence of a lock; both teams); Out players in the plan (`unlikely` / free roll in `lib/live/advise.ts`).
+  Live check `research/held_live.ts`; tests `tests/held.test.ts`.
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)
