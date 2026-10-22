@@ -4,7 +4,10 @@
 //  - rows: the 9 starting slots in Sleeper order -> player + short status + the change to make now
 //  - changes: the Sleeper moves to make now, in a safe order (free slots first, held players never via the bench)
 //  - then: later changes (after a game ends / before a later tip-off) and the lock checks when games end
-// A change that involves a player who is in a game right now (or his slot) waits until that game ends.
+// Task T2 (Sleeper: a player can be moved at any time, even during his game; moving him between starting slots keeps
+// the game, benching him mid-game forfeits it and frees the slot): a player in a game can move between starting slots
+// now; only taking him out of the lineup or locking him waits until his game ends (this card never benches a player who
+// is playing). An Out player in a game in progress scores 0 anyway: benching him now forfeits nothing.
 import type { Advice, Decision, TipPlan } from "./advise";
 
 export function slotLabels(names: string[]) {
@@ -117,7 +120,7 @@ export function doNow(a: DoNowInput): DoNow {
     const has = (pid: string) => items.some((x) => x.o.pid === pid) || playing.some((x) => x.o.pid === pid);
     const add = (to: Item[], o: Occ, hint: number, lock = false) => { if (!has(o.pid)) to.push({ o, hint, lock }); };
     for (const x of pl.locks ?? []) add(items, lockOcc(x.pid, x.player, x.score), at(x.slot), true);
-    for (const x of pl.playing ?? []) add(playing, { pid: x.pid, name: x.player, kind: "playing", end: x.end, lockIf: x.dnp ? null : cutoff.get(x.pid) ?? null, ...(x.dnp ? { dnp: true, team: x.team } : {}) }, at(x.slot));
+    for (const x of (pl.playing ?? []).filter((y) => !y.dnp)) add(playing, { pid: x.pid, name: x.player, kind: "playing", end: x.end, lockIf: x.dnp ? null : cutoff.get(x.pid) ?? null, ...(x.dnp ? { dnp: true, team: x.team } : {}) }, at(x.slot));
     for (const x of pl.starts) add(items, { pid: x.pid, name: x.player, kind: (x.label && /free roll/.test(x.label) ? "freeRoll" : "start") as DoNowKind, proj: x.proj, lockIf: x.lockIf, label: x.label, playProb: x.playProb, end: x.end, opp: x.opp, tip: pl.tip }, at(x.slot));
     for (const h of pl.holds) {
       const d = k === 0 ? dec.get(h.pid) : undefined;
@@ -136,9 +139,10 @@ export function doNow(a: DoNowInput): DoNow {
     }
     return { items, playing };
   });
-  // the lineup at tip-off k: fixed = locks so far (carry) and players still in a game (pinned where they started);
-  // this tip-off's new locks, starters and held scores are assigned to the free slots by one search, lexicographic:
-  //   1. as many placed as possible
+  // the lineup at tip-off k: fixed = locks so far (carry); players still in a game (they must keep a starting slot but
+  // may move between starting slots - task T2), this tip-off's new locks, starters and held scores are assigned to the
+  // free slots by one search, lexicographic:
+  //   1. as many placed as possible (players in a game first)
   //   2. every later tip-off's lineup still placeable (fwd: a backtracking search over the later tip-offs, narrowest slot
   //      first, first feasible path wins), so a slot is freed or a held player moved now only when a later planned
   //      move needs it
@@ -152,23 +156,20 @@ export function doNow(a: DoNowInput): DoNow {
   const setup = (k: number, carry: Lineup, mine: Map<string, number>, prev: Lineup, flex: boolean) => {
     const { items, playing } = tips[k];
     const t = carry.slice(); const pins = new Map(mine);
-    for (const x of playing) {
-      if (where(t, x.o.pid) >= 0) continue;
-      const s = [pins.get(x.o.pid), where(cur, x.o.pid), x.hint].find((i) => i !== undefined && i >= 0 && !t[i]);
-      if (s !== undefined) { t[s] = x.o; pins.set(x.o.pid, s); }
-    }
-    const its = items.filter((it) => where(t, it.o.pid) < 0);
+    // (a player in a game: his slot so far is the hint - positions unknown -> a slot of the same name)
+    const live = playing.map((x) => ({ ...x, hint: [pins.get(x.o.pid), where(cur, x.o.pid), x.hint].find((i) => i !== undefined && i >= 0) ?? -1 }));
+    const its = [...live, ...items].filter((it) => where(t, it.o.pid) < 0);
     const free = L.map((_, i) => i).filter((i) => !t[i]);
     const sits = (pid: string) => { const p = where(prev, pid); return p >= 0 ? p : where(cur, pid); };
     const ok = (it: Item, s: number) => { const f = fits(it.o.pid, s); return it.lock || f === null ? it.hint >= 0 && S[s].slot === S[it.hint].slot : f; };
     // (a slot whose occupant goes to the bench: one swap in Sleeper; an empty one: one move)
     const out = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => out.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => out.add(d.pid)); }
-    const W = (it: Item, s: number) => (!flex && sits(it.o.pid) === s ? 110 : 10 - width(s) + (prev[s] && out.has(prev[s]!.pid) ? 0.3 : !prev[s] ? 0.25 : 0) + (fits(it.o.pid, s) === null && s === it.hint ? 0.01 : 0));
+    const W = (it: Item, s: number) => (it.o.kind === "playing" ? 1e5 : 0) + (!flex && sits(it.o.pid) === s ? 110 : 10 - width(s) + (prev[s] && out.has(prev[s]!.pid) ? 0.3 : !prev[s] ? 0.25 : 0) + (fits(it.o.pid, s) === null && s === it.hint ? 0.01 : 0));
     const cands = its.map((it) => free.filter((s) => ok(it, s)).sort((x, y) => W(it, y) - W(it, x) || x - y));
     const order = its.map((_, i) => i).sort((x, y) => cands[x].length - cands[y].length || x - y);
     const fill = (pick: number[]) => {
       const u = t.slice(); const m = new Map(pins);
-      pick.forEach((s, j) => { if (s >= 0) { const o = its[order[j]].o; u[s] = o; if (o.kind === "start" || o.kind === "freeRoll") m.set(o.pid, s); } });
+      pick.forEach((s, j) => { if (s >= 0) { const o = its[order[j]].o; u[s] = o; if (o.kind === "start" || o.kind === "freeRoll" || o.kind === "playing") m.set(o.pid, s); } });
       return { u, m };
     };
     return { its, cands, order, W, fill };
@@ -221,7 +222,7 @@ export function doNow(a: DoNowInput): DoNow {
   const R: Lineup[] = [];
   {
     let carry: Lineup = cur.map((o) => (o?.kind === "locked" ? o : null));
-    let mine = new Map<string, number>(); cur.forEach((o, s) => { if (o?.kind === "playing") mine.set(o.pid, s); });
+    let mine = new Map<string, number>(); cur.forEach((o, s) => { if (o?.kind === "playing" && !o.dnp) mine.set(o.pid, s); });
     let prev = cur;
     plan.forEach((_, k) => {
       const r = place(k, carry, mine, prev);
@@ -247,7 +248,7 @@ export function doNow(a: DoNowInput): DoNow {
     const must = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => must.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => must.add(d.pid)); }
     prev.forEach((r, s) => {
       if (!r || r.kind === "locked" || r.kind === "lock" || t.some((x) => x?.pid === r.pid) || must.has(r.pid)) return;
-      const keep: Occ = { ...r, kind: r.kind === "held" ? "held" : "idle", early: false };
+      const keep: Occ = { ...r, kind: r.kind === "held" ? "held" : r.dnp && k === 0 ? "playing" : "idle", early: false };
       if (!t[s]) { t[s] = keep; return; }
       // displaced: take the slot the newcomer left (a single swap in Sleeper), or keep a held score in any free slot
       const from = prev.findIndex((o) => o?.pid === t[s]!.pid);
@@ -260,6 +261,7 @@ export function doNow(a: DoNowInput): DoNow {
   // ---- diffs ----
   const benchWhy = (r: Occ, k: number) => {
     const inj = injury.get(r.pid);
+    if (r.dnp) return ` now (${inj || "out"} - not playing in his game in progress, scores 0: benching him forfeits nothing)`;
     if (r.kind === "held" || (k === 0 && curHeld.has(r.pid))) return ` (lets go of his held ${f1(r.score ?? curHeld.get(r.pid))})`;
     const b = plan[k]?.benched.find((x) => (x.pid ?? pidOf(x.player)) === r.pid);
     if (inj && /^(out|doubtful|inactive|sus)/i.test(inj)) return ` (${inj} - ruled out)`;
@@ -275,8 +277,11 @@ export function doNow(a: DoNowInput): DoNow {
       if (r?.pid !== q.pid) {
         const from = p.findIndex((o) => o?.pid === q.pid);
         const gone = r && !t.some((x) => x?.pid === r.pid) ? [r.pid] : [];
-        if (from >= 0 && r && t[from]?.pid === r.pid) { if (s < from) out.push({ kind: "swap", text: `swap ${q.name} (${L[from]}) ↔ ${r.name} (${L[s]})`, pids: [q.pid, r.pid], slots: [s, from], row: s, held: q.kind === "held" || r.kind === "held" }); }
-        else if (from >= 0) out.push({ kind: "move", text: `move ${q.name} ${L[from]} → ${L[s]}${q.kind === "held" ? ` (held ${f1(q.score)} - keep him in a starting slot, never via the bench)` : ""}`, pids: [q.pid, ...gone], slots: [from, s], row: s, held: q.kind === "held" });
+        // (a player in a game moved between starting slots keeps the game - task T2)
+        const inGame = (o: Occ | null | undefined) => !!o && ((o.kind === "playing" && !o.dnp) || (k > 0 && (o.kind === "start" || o.kind === "freeRoll") && !o.early && o.end != null && o.end > plan[k].tip));
+        const ig = inGame(p[from]) || (r && inGame(r)) ? " (in-game moves between starting slots keep the game)" : "";
+        if (from >= 0 && r && t[from]?.pid === r.pid) { if (s < from) out.push({ kind: "swap", text: `swap ${q.name} (${L[from]}) ↔ ${r.name} (${L[s]})${ig}`, pids: [q.pid, r.pid], slots: [s, from], row: s, held: q.kind === "held" || r.kind === "held" }); }
+        else if (from >= 0) out.push({ kind: "move", text: `move ${q.name} ${L[from]} → ${L[s]}${inGame(p[from]) ? " (in his game now - moving between starting slots keeps it)" : q.kind === "held" ? ` (held ${f1(q.score)} - keep him in a starting slot, never via the bench)` : ""}`, pids: [q.pid, ...gone], slots: [from, s], row: s, held: q.kind === "held" });
         else out.push({ kind: "in", text: `put ${q.name} in ${L[s]}`, pids: [q.pid, ...gone], slots: [s], row: s });
       }
       if (q.kind === "lock") out.push({ kind: "lock", text: `LOCK ${q.name} in ${L[s]}${k > 0 || cur.some((o) => o?.pid === q.pid && o.kind === "playing") ? (q.lockIf != null ? ` if he scores ≥ ${f1(q.lockIf)}` : "") : ""}`, pids: [q.pid], slots: [s], row: s });
@@ -293,10 +298,12 @@ export function doNow(a: DoNowInput): DoNow {
   const order = (cs: Change[]) => cs.map((c, i) => [c, i] as const).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map((x) => x[0]);
   const orderL = <T extends { c: Change }>(xs: T[]) => { const o = order(xs.map((x) => x.c)); return o.map((c) => xs.find((x) => x.c === c)!); };
 
-  // changes that wait for a game in progress: anything touching such a player or his slot (closed under "touches a
-  // slot whose occupant has to wait")
-  const split = (cs: Change[], p: Lineup, live: Map<string, number>) => {
-    const wait = new Map(live); const dep = new Map<Change, number>(); let grew = true;
+  // changes that wait for a game in progress: anything touching a player in a game who leaves the lineup or is locked
+  // (he can only be locked after it ends; benched mid-game he'd forfeit it), or his slot (closed under "touches a slot
+  // whose occupant has to wait"). Moves of a player in a game between starting slots don't wait (task T2).
+  const split = (cs: Change[], p: Lineup, t: Lineup, live: Map<string, number>) => {
+    const wait = new Map([...live].filter(([pid]) => { const o = t.find((x) => x?.pid === pid); return !o || o.kind === "lock" || o.kind === "locked"; }));
+    const dep = new Map<Change, number>(); let grew = true;
     const touched = (c: Change) => [...c.pids, ...c.slots.map((s) => p[s]?.pid ?? "")];
     while (grew) {
       grew = false;
@@ -330,13 +337,14 @@ export function doNow(a: DoNowInput): DoNow {
   let shown: Lineup = cur;
   if (plan.length) {
     const live0 = new Map<string, number>();
-    cur.forEach((o) => { if (o?.kind === "playing" && !(plan[0].playing ?? []).some((x) => x.pid === o.pid)) live0.set(o.pid, o.end ?? plan[0].tip); });
+    cur.forEach((o) => { if (o?.kind === "playing" && !o.dnp && !(plan[0].playing ?? []).some((x) => x.pid === o.pid)) live0.set(o.pid, o.end ?? plan[0].tip); });
     const c0 = diff(cur, F[0], 0);
-    const sp = split(c0, cur, live0);
+    const sp = split(c0, cur, F[0], live0);
     nowChanges = order(sp.now);
     // the lineup to set now: the target, except slots still waiting for a game in progress
     const waitSlots = new Set(sp.later.flatMap((x) => x.c.slots));
-    shown = F[0].map((o, s) => (waitSlots.has(s) ? cur[s] : o));
+    // (a player in his game now who only moves keeps his "in game now" status, not the plan's held estimate)
+    shown = F[0].map((o, s) => { if (waitSlots.has(s)) return cur[s]; const c = o ? cur.find((x) => x?.pid === o.pid && x.kind === "playing" && !x.dnp) : undefined; return c && o!.kind === "held" ? c : o; });
     for (const { c, end } of orderL(sp.later)) {
       const st = step(end, true, plan[0].tip); st.items.push(c.text);
       c.pids.concat(c.slots.map((s) => cur[s]?.pid ?? "")).forEach((x) => { if (live0.has(x) && live0.get(x) === end) st.after.add(nm(x)); });
@@ -345,8 +353,8 @@ export function doNow(a: DoNowInput): DoNow {
     for (let k = 1; k < plan.length; k++) {
       const p = F[k - 1];
       const live = new Map<string, number>();
-      p.forEach((o) => { if (o && (o.kind === "start" || o.kind === "freeRoll" || o.kind === "playing") && !o.early && o.end != null && !(plan[k].playing ?? []).some((x) => x.pid === o.pid)) live.set(o.pid, o.end); });
-      const sp2 = split(diff(p, F[k], k), p, live);
+      p.forEach((o) => { if (o && (o.kind === "start" || o.kind === "freeRoll" || o.kind === "playing") && !o.dnp && !o.early && o.end != null && !(plan[k].playing ?? []).some((x) => x.pid === o.pid)) live.set(o.pid, o.end); });
+      const sp2 = split(diff(p, F[k], k), p, F[k], live);
       for (const c of order(sp2.now)) { step(plan[k].tip - 1, true, plan[k].tip).items.push(c.text); noteLater(c, `before ${tipTxt(plan[k].tip)}`); }
       for (const { c, end } of orderL(sp2.later)) {
         const st = step(end, true, plan[k].tip); st.items.push(c.text);
@@ -398,7 +406,7 @@ export function doNow(a: DoNowInput): DoNow {
       }
       case "freeRoll": return `free roll - ${injury.get(o.pid) || "injured"}, ${Math.round((o.playProb ?? 0) * 100)}% to play (${tipTxt(o.tip!)})`;
       case "playing":
-        if (o.dnp) return `${cap(injury.get(o.pid) || "out")} - scores 0; stuck in this slot until ${o.team ? `the ${o.team}` : "his"} game ends${o.end ? ` ~${clock(r5(o.end))}` : ""} (Sleeper locks him at tip)`;
+        if (o.dnp) return `${cap(injury.get(o.pid) || "out")} - not playing in ${o.team ? `the ${o.team}` : "his"} game in progress, scores 0; bench him any time - forfeits nothing, the slot is free now`;
         return `in game now${o.end ? ` (ends ~${clock(r5(o.end))})` : ""}${lk(o.lockIf)}`;
       case "idle": {
         if (tip0 === null) return "no game left - can stay";

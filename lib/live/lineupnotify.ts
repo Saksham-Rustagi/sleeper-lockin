@@ -87,7 +87,7 @@ export function lineupMessage(a: Pick<Advice, "plan" | "me" | "decisions">, dn: 
   if (prev?.key === key) return { msg: null, memo, note: "same changes as the last reminder" };
   if (prev?.sent && !why.length) return { msg: null, memo, note: `changes without a material reason after "${prev.sent === "set" ? "lineup is set" : "set your lineup"}": not sent (${ch.join("; ")})` };
   const startingIds = new Set(next.starts.map((s) => s.pid));
-  const scratched = a.me.slots.filter((s) => s.pid && !s.locked && s.state !== "playing" && /^(out|doubtful|inactive|sus)/i.test(s.injury || "") && !startingIds.has(s.pid));
+  const scratched = a.me.slots.filter((s) => s.pid && !s.locked && (s.state !== "playing" || s.dnp) && /^(out|doubtful|inactive|sus)/i.test(s.injury || "") && !startingIds.has(s.pid));
   const pre = scratched.length ? `⚠️ ${scratched.map((s) => `${s.player} ${String(s.injury).toUpperCase()}`).join(", ")} → ` : prev?.sent ? "🔄 " : "🏀 ";
   const later = dn.then.find((s) => s.items.some((i) => !/lock him if/.test(i)));
   const because = prev?.sent && why.length ? `Changed because: ${why.join("; ")}. ` : "";

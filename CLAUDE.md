@@ -53,6 +53,9 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 - Late tips / Out in a game in progress (task T, REPORT "Late tips and Out players", `DEPLOY_LATETIP.md`): `lateTip`,
   `expectedEnd` (ESPN period / clock), `outInGame` in `lib/live/week.ts` (`LiveGame.late` / `dnp`), `TipPlan.late`,
   card texts in `lib/live/donow.ts`; tests `tests/latetip.test.ts` (stubbed backend at 7:40 PM Oct 21).
+- Mid-game moves (task T2, REPORT "Mid-game moves", `DEPLOY_MIDGAME.md`): a dnp player is not pinned (bench now, forfeits
+  nothing); the Do-now card re-places players in a game between starting slots (only benching / locking them waits for
+  the game end). The engine still treats a playing player's slot as fixed. Live check `research/t2_live.cjs`.
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)

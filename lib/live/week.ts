@@ -47,7 +47,7 @@ export interface LiveGame {
   proj: number; mu: number; sd: number; status: "pre" | "in" | "post"; actual: number | null; played: boolean | null;
   projOverride?: string; // "projection override: based on last N games (...)" when the minutes override replaced Sleeper's projection
   late?: number; // task T: scheduled tip of a game that hasn't tipped yet although it's past (tip = expected tip)
-  dnp?: boolean; // task T: in progress, he is Out / inactive and has no stats: scores 0 (pinned in his slot until it ends)
+  dnp?: boolean; // task T: in progress, he is Out / inactive and has no stats: scores 0 (task T2: not pinned - his slot is free now)
 }
 export interface LiveTeam {
   rosterId: number; ownerId: string; teamName: string; pids: string[]; names: string[]; positions: string[][];
@@ -260,6 +260,10 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
         const x = inferSlot({ pts, override: ov, pid, overridePts: ov ? mu?.players_points?.[ov] ?? null : null, games: gs });
         if (x.note && i >= 0) notes.push(`${rosterId === o.rosterId ? "" : "Opponent's "}${tw.names[i]} (${slotNames[s]}): ${x.kind} - ${x.why}.`);
         if (x.kind === "locked") { st.lockedBy[s] = i; st.isLocked[i] = 1; st.lockedPts[s] = x.pts; lockSource[s] = x.source; }
+        // task T2 (Sleeper: a player can be moved / benched at any time; benching him mid-game forfeits that game and frees
+        // the slot): Out with no stats in a game in progress scores 0 whether he stays or not, so benching him forfeits
+        // nothing - his slot is free now (not pinned; the game is started, so nobody plays it)
+        else if (x.kind === "inGame" && games[x.gi].dnp) st.started[x.gi] = 1;
         else if (x.kind === "inGame") { st.inGame[i] = x.gi; st.pinned[s] = i; st.pinnedUntil[s] = games[x.gi].end; st.started[x.gi] = 1; }
         else if (x.kind === "held") { st.pendingX[i] = x.pts; st.started[x.gi] = 1; }
       });
