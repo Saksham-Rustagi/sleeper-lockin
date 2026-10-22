@@ -78,16 +78,16 @@ export function lineupMessage(a: Pick<Advice, "plan" | "me" | "decisions">, dn: 
   const cut = next.starts.filter((s) => s.lockIf !== null).map((s) => `${s.player} ≥ ${s.lockIf}`).join(", ");
   if (!ch.length) {
     if (!cut) return { msg: null, memo, note: "lineup is set (no cut-offs)" };
-    const key = `cutoffs|${next.tip}`;
+    const key = `cutoffs|${next.late ?? next.tip}`; // (a late tip's expected time moves: key by the scheduled one)
     if (prev?.key === key) return { msg: null, memo, note: "lineup is set (already said)" };
     return { msg: { key, title: `🏀 ${next.when} tip-off — lineup is set`, body: `Lock if: ${cut}.` }, memo: { ...memo, sent: "set", key }, note: "lineup is set" };
   }
   // the changes, keyed by what they do (who goes where), not by their wording
-  const key = `lineup|${next.tip}|${dn.rows.filter((r) => r.change && !/^LOCK /.test(r.change)).map((r) => `${r.pid ?? "-"}${r.slot}`).join(",")}`;
+  const key = `lineup|${next.late ?? next.tip}|${dn.rows.filter((r) => r.change && !/^LOCK /.test(r.change)).map((r) => `${r.pid ?? "-"}${r.slot}`).join(",")}`;
   if (prev?.key === key) return { msg: null, memo, note: "same changes as the last reminder" };
   if (prev?.sent && !why.length) return { msg: null, memo, note: `changes without a material reason after "${prev.sent === "set" ? "lineup is set" : "set your lineup"}": not sent (${ch.join("; ")})` };
   const startingIds = new Set(next.starts.map((s) => s.pid));
-  const scratched = a.me.slots.filter((s) => s.pid && !s.locked && /^(out|doubtful|inactive|sus)/i.test(s.injury || "") && !startingIds.has(s.pid));
+  const scratched = a.me.slots.filter((s) => s.pid && !s.locked && s.state !== "playing" && /^(out|doubtful|inactive|sus)/i.test(s.injury || "") && !startingIds.has(s.pid));
   const pre = scratched.length ? `⚠️ ${scratched.map((s) => `${s.player} ${String(s.injury).toUpperCase()}`).join(", ")} → ` : prev?.sent ? "🔄 " : "🏀 ";
   const later = dn.then.find((s) => s.items.some((i) => !/lock him if/.test(i)));
   const because = prev?.sent && why.length ? `Changed because: ${why.join("; ")}. ` : "";

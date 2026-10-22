@@ -2940,3 +2940,21 @@ Live check (`research/s_live.ts`, read-only copy of the notifier's cached advice
 
 Tests 114/114 (8 new: swap-only → no change / no reminder, injury change → reminder with reason, hysteresis across runs,
 "set" then reasonless change → silent, later-move feasibility forcing a move now, relabel invariance, worst-case time).
+
+## Late tips and Out players in a game in progress (task T, 2026-10-21, urgent live fix)
+Live at 7:36-7:44 PM ET: CHI @ TOR (scheduled 7:30) was still "pre"; the plan only covers events after "now", so the
+7:30 group was skipped and the card said "Bench Caleb Wilson (no game today)", "Bench Collin Murray-Boyles (no game
+today)", "Leonard Miller: no game at 8:00 PM - can stay". Anthony Black (Out) was in a slot while ATL @ ORL was in
+progress, and the card gave him "lock if >= 23.2" (the Out tag was applied to his next game, not this one).
+Fix (live mode only; backtests / replay unchanged; details and deploy in `DEPLOY_LATETIP.md`):
+- late tip: tips at max(scheduled, now) (next 5-min mark, kept before the next scheduled group), ends ~2h15 later;
+  card "plays 7:30 PM (late tip)", next tip-off = that game; notifier memo keyed by the scheduled tip.
+- games in progress: expected end from ESPN's period / clock (2.5 s per clock s + 15 min halftime).
+- Out + no stats in a game in progress: DNP (play probability 0 for that game), no lock cut-off, "Out - scores 0; stuck in
+  this slot until the ORL game ends ~X (Sleeper locks him at tip)", nothing held afterwards (the slot is reused).
+- "no game today" only when he has no game on that date ("next game 10:00 PM" / "his game today is over" otherwise).
+Tests: `tests/latetip.test.ts` (5; incl. buildWeek + advice on a stubbed backend at 7:40 PM: Wilson / Murray-Boyles /
+Miller start at the 7:45 expected tip, Black dnp, no lock call). Live check 7:57 PM (own cache dir, engine p10b, 20 s):
+Black "Out - scores 0; stuck in this slot until the ORL game ends ~9:35 PM", no "lock him if" for him, Jalen Green into his
+SG at ~9:35; Wilson / Murray-Boyles / Miller in their game (CHI @ TOR had tipped by then, so case 1 is covered by the
+stubbed test only).

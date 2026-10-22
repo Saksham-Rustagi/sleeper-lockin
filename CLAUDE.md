@@ -5,7 +5,7 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 `launchctl`, never `git push`. Commit your work on `engine-v2` in small, described commits.
 
 ## Commands
-- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 114 tests today)
+- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 119 tests today)
 - Bundle a research script: `npx esbuild research/X.ts --bundle --platform=node --format=cjs --outfile=research/dist/X.cjs --log-level=error`
 - Season backtest (2025-26, 23 weeks x 10 teams = 230 team-weeks), parallel over the 14 cores:
   `node research/runpar.mjs research/dist/backtest.cjs <outPrefix> <POLICY,POLICY,...> 200 KS=200`
@@ -50,6 +50,9 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
   (sticky to Sleeper, later-tip-off feasibility via backtracking forward search; engine slot only for locks);
   `lib/live/lineupnotify.ts` (pure: per-tip memo in `~/.sleeper-lockin/lineup-state.json`, 0.5-pt hysteresis, reasons),
   used by `messages()` in `scripts/notify.ts`. Live check `research/s_live.ts`; tests `tests/lineupnotify.test.ts`.
+- Late tips / Out in a game in progress (task T, REPORT "Late tips and Out players", `DEPLOY_LATETIP.md`): `lateTip`,
+  `expectedEnd` (ESPN period / clock), `outInGame` in `lib/live/week.ts` (`LiveGame.late` / `dnp`), `TipPlan.late`,
+  card texts in `lib/live/donow.ts`; tests `tests/latetip.test.ts` (stubbed backend at 7:40 PM Oct 21).
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)

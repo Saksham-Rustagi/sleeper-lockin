@@ -75,8 +75,9 @@ export function messages(a: Advice, now: number, state: LineupState = {}, notes:
   if (next && next.tip - now < 75 * 60e3 && next.tip > now) {
     // the concrete diff vs the Sleeper lineup (lib/live/donow.ts), only when material (lib/live/lineupnotify.ts);
     // locks have their own reminder above
-    const r = lineupMessage(a, dn, now, state[String(next.tip)]);
-    state[String(next.tip)] = r.memo; notes.push(r.note);
+    const mk = String(next.late ?? next.tip); // (a late tip's expected time moves every few minutes: memo by the scheduled one)
+    const r = lineupMessage(a, dn, now, state[mk]);
+    state[mk] = r.memo; notes.push(r.note);
     if (r.msg) out.push(r.msg);
   }
   for (const [k, m] of Object.entries(state)) if (m.tip < now - 86400e3) delete state[k];
