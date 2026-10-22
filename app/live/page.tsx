@@ -233,6 +233,12 @@ function DoNowView({ d }: { d: DoNow }) {
           <div className="text-sm text-purple-800 dark:text-purple-200">Do it {l.by} - his next game replaces the score otherwise.</div>
         </div>
       ))}
+      {(d.forfeits ?? []).map((f) => (
+        <div key={f.pid} className="rounded-lg border-2 border-red-500 bg-red-50 dark:bg-red-900/30 p-3">
+          <div className="text-lg font-bold text-red-800 dark:text-red-200">⚠️ BENCH {f.player} NOW (forfeits his {fmt(f.pts)})</div>
+          <div className="text-sm text-red-800 dark:text-red-200">{f.text}. Benching him mid-game forfeits this game only (he keeps his later games); his slot is free at once.</div>
+        </div>
+      ))}
       <div>
         <div className="font-semibold mb-1">Set your lineup to{d.tipText ? ` (before the ${d.tipText} tip-off)` : ""}</div>
         <div className="divide-y rounded-lg border">
@@ -264,6 +270,7 @@ function DoNowView({ d }: { d: DoNow }) {
         </div>
       )}
       {d.bench.length > 0 && <div className="text-xs text-gray-600 dark:text-gray-300"><span className="font-semibold">Bench:</span> {d.bench.join(" · ")}</div>}
+      {(d.midgameNotes ?? []).map((m, i) => <div key={i} className="text-xs text-gray-500">In-game: {m}.</div>)}
     </div>
   );
 }

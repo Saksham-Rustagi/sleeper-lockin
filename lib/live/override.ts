@@ -11,9 +11,11 @@ import os from "os";
 import path from "path";
 
 // Task R: "rosterCheck" (DEFAULT ON; false / LOCKIN_ROSTER_CHECK=0 turns it off) - lib/live/nbarosters.ts.
-type Opt = "minutesOverride" | "opportunityAlerts" | "rosterCheck";
-const ENV: Record<Opt, string> = { minutesOverride: "LOCKIN_MINUTES_OVERRIDE", opportunityAlerts: "LOCKIN_OPPORTUNITY_ALERTS", rosterCheck: "LOCKIN_ROSTER_CHECK" };
-const DEFAULT_ON: Partial<Record<Opt, boolean>> = { rosterCheck: true };
+// Task T3: "midgameForfeit" (DEFAULT ON; false / LOCKIN_MIDGAME_FORFEIT=0 turns it off): games in progress use the in-game
+// final-score estimate (lib/live/ingame.ts) and the plan may bench a player mid-game (lib/engine/midgame.ts, DEPLOY_MIDGAME.md).
+type Opt = "minutesOverride" | "opportunityAlerts" | "rosterCheck" | "midgameForfeit";
+const ENV: Record<Opt, string> = { minutesOverride: "LOCKIN_MINUTES_OVERRIDE", opportunityAlerts: "LOCKIN_OPPORTUNITY_ALERTS", rosterCheck: "LOCKIN_ROSTER_CHECK", midgameForfeit: "LOCKIN_MIDGAME_FORFEIT" };
+const DEFAULT_ON: Partial<Record<Opt, boolean>> = { rosterCheck: true, midgameForfeit: true };
 let memo: { at: number; cfg: Record<string, unknown> } | null = null;
 export function optionOn(name: Opt): boolean {
   if (typeof window !== "undefined") return false;

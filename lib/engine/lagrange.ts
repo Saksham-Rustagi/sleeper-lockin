@@ -56,7 +56,7 @@ export function gameDist(tw: TeamWeek, gi: number, tilt = 0): ScoreDist {
     ? { kind: "discrete", x: Array.from(tw.resid.q, (z) => Math.max(-5, mu + g.sd * z)), w: Array.from(tw.resid.q, () => 1 / tw.resid!.q.length) }
     : { kind: "normal", mu, sd: g.sd, floor: -5 };
 }
-const pPlayOf = (tw: TeamWeek, gi: number) => { const p = tw.games[gi].p; const ov = tw.pNext?.[p]; return ov != null && tw.nextGameIdx?.[p] === gi ? ov : null; };
+const pPlayOf = (tw: TeamWeek, gi: number) => { const g = tw.games[gi]; if (g.pPlay !== undefined) return g.pPlay; const ov = tw.pNext?.[g.p]; return ov != null && tw.nextGameIdx?.[g.p] === gi ? ov : null; };
 export function fromTeamWeek(tw: TeamWeek): LInstance {
   if (tw.avail) throw new Error("lagrange: roster windows (avail/gone) not supported");
   const games: LGame[] = tw.games.map((g, gi) => ({ p: g.p, tip: g.tip, end: g.end, dist: gameDist(tw, gi), pPlay: pPlayOf(tw, gi) }));

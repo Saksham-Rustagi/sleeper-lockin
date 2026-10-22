@@ -80,6 +80,10 @@ export async function espnDay(date: string): Promise<EspnGame[]> {
     ...(e.status.type.state === "in" && e.status.period ? { period: e.status.period, clock: e.status.clock ?? 0 } : {}),
   }));
 }
+// ESPN game summary (box score with on-court / ejected flags, the injury list) of a game in progress (task T3)
+export async function espnSummary(id: string): Promise<any> {
+  return getJSON<any>(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${id}`, 1 * MIN);
+}
 // ESPN team ids and current rosters (task R, lib/live/nbarosters.ts: Sleeper keeps a waived player's team for days)
 export async function espnTeams(): Promise<{ id: string; team: string }[]> {
   const j = await getJSON<any>("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams", 24 * HOUR);

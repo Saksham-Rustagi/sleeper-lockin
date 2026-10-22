@@ -66,6 +66,8 @@ export function runChecked(tw: E.TeamWeek, pol: E.Policy, events: E.Ev[], actual
   const lastStartCall = (): StartCall | null => startCall; // (read through a function: it is set inside the hook closure)
   let overrides = 0, tipoffs = 0;
   const hooks: E.Hooks = {
+    // (task T3: the mid-game forfeit hook, passed through; it acts only with in-game information, never in backtests)
+    ...(inner?.beforeGroup ? { beforeGroup: inner.beforeGroup } : {}),
     decideLock: (s, p, tt, evIdx, ev) => (inner?.decideLock ? inner.decideLock(s, p, tt, evIdx, ev) : undefined) as any,
     decideStarts: (s, tt, evIdx, tipping, pending, gameOf, slotOf, free) => {
       const alt = inner?.decideStarts ? inner.decideStarts(s, tt, evIdx, tipping, pending, gameOf, slotOf, free) : undefined;

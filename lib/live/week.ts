@@ -1,10 +1,13 @@
 // Build an engine TeamWeek (+ reconstructed State) for a Sleeper roster from live or historical data.
 import * as E from "../engine/core";
 import { gameDist, injuryPlayProb, fantasyPoints, MODEL } from "../engine/model";
-import { sleeper, espnDay, type League, type GameRow, type SleeperPlayer, type Matchup } from "./sources";
+import { sleeper, espnDay, espnSummary, type League, type GameRow, type SleeperPlayer, type Matchup } from "./sources";
 import { minutesOverrides } from "./oppscan";
 import type { Override } from "./opportunity";
 import { nbaRosters, rosterCheck, type RosterFix } from "./nbarosters";
+import { inGameEstimate, outReason, parseEspnLive, type EspnLive, type InGameEst } from "./ingame";
+import { pidMatcher } from "./boxscores";
+import { optionOn } from "./override";
 
 // holdYield: a held score never blocks a player tipping off - it must be locked or let go (backtest +2.2 pts/wk live;
 // fixes "dropping a bench player gains points", which a sound rule can't do).
@@ -48,6 +51,9 @@ export interface LiveGame {
   projOverride?: string; // "projection override: based on last N games (...)" when the minutes override replaced Sleeper's projection
   late?: number; // task T: scheduled tip of a game that hasn't tipped yet although it's past (tip = expected tip)
   dnp?: boolean; // task T: in progress, he is Out / inactive and has no stats: scores 0 (task T2: not pinned - his slot is free now)
+  // task T3 ("midgameForfeit"): in progress and he has played: his points / minutes so far and the estimate of his final
+  // score for this game (the engine's mu / sd for it; out = why he won't play again in it)
+  inGame?: InGameEst;
 }
 export interface LiveTeam {
   rosterId: number; ownerId: string; teamName: string; pids: string[]; names: string[]; positions: string[][];
@@ -141,9 +147,9 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   const prevProj = week > 1 ? await sleeper.weekProjections(season, week - 1).catch(() => [] as GameRow[]) : [];
   const weekGames = sched.filter((g) => g.week === week);
   const dates = [...new Set(weekGames.map((g) => g.date))].sort();
-  const espn = new Map<string, { tip: number; state: "pre" | "in" | "post"; period?: number; clock?: number }>();
+  const espn = new Map<string, { id: string; tip: number; state: "pre" | "in" | "post"; period?: number; clock?: number }>();
   await Promise.all(dates.map(async (d) => {
-    for (const g of await espnDay(d).catch(() => [])) for (const t of g.teams) espn.set(`${d}|${t}`, { tip: g.tip, state: g.state, period: g.period, clock: g.clock });
+    for (const g of await espnDay(d).catch(() => [])) for (const t of g.teams) espn.set(`${d}|${t}`, { id: g.id, tip: g.tip, state: g.state, period: g.period, clock: g.clock });
   }));
   const schedTips = [...new Set([...espn.values()].filter((g) => g.state === "pre").map((g) => g.tip))];
   // Injury tags: refresh every 4 min when any game tips within 2h (late scratches), otherwise hourly.
@@ -160,6 +166,18 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   const statRow = new Map(wstats.map((r) => [`${r.player_id}|${r.date}`, r]));
   // task R: current NBA rosters (ESPN; live only, null when the fetch fails or "rosterCheck" is off)
   const nbaR = mode === "live" ? await nbaRosters() : null;
+  // task T3 ("midgameForfeit"): games in progress use the in-game estimate of the final score (lib/live/ingame.ts); ESPN's
+  // summaries of the games in progress for my and my opponent's players (on court, ejected, fouls, injury list)
+  const midgame = mode === "live" && optionOn("midgameForfeit");
+  const espnLive = new Map<string, EspnLive>();
+  if (midgame) {
+    const myMu0 = matchups.find((m) => m.roster_id === o.rosterId);
+    const rids = new Set([o.rosterId, ...matchups.filter((m) => myMu0?.matchup_id && m.matchup_id === myMu0.matchup_id).map((m) => m.roster_id)]);
+    const teams = new Set(rosters.filter((r) => rids.has(r.roster_id)).flatMap((r) => r.players || []).map((p) => players[p]?.team).filter(Boolean));
+    const ids = new Map<string, number>(); for (const [k, g] of espn) if (g.state === "in" && teams.has(k.split("|")[1])) ids.set(g.id, g.tip);
+    await Promise.all([...ids].map(async ([id, tip]) => { try { espnLive.set(id, parseEspnLive(await espnSummary(id), tip)); } catch { /* the estimate without it */ } }));
+  }
+  const matchEspn = espnLive.size ? pidMatcher(players) : null;
 
   const build = (rosterId: number): LiveTeam => {
     const roster = rosters.find((r) => r.roster_id === rosterId)!;
@@ -213,8 +231,17 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
         if (status === "in" && end <= asOf) end = asOf + 15 * 60e3;
         const dnp = mode === "live" && status === "in" && outInGame(pl(pid).injury_status, srow?.stats);
         const d = gameDist(proj);
-        games.push({ gi: -1, pid, date: g.date, tip, end, team, opp: g.home.team === team ? g.away.team : g.home.team, proj, mu: d.mu, sd: d.sd, status, actual, played,
-          ...(ov ? { projOverride: ov.label } : {}), ...(late ? { late: sched } : {}), ...(dnp ? { dnp: true } : {}) });
+        // task T3: he has played in this game in progress -> his final score given what he has so far
+        let inGame: InGameEst | undefined;
+        if (midgame && status === "in" && !dnp && (srow?.stats?.sp ?? 0) > 0 && ek?.period) {
+          const lv = espnLive.get(ek.id); const me1 = (x: { name: string; team: string }) => x.team === team && matchEspn!(x.name, team) === pid;
+          const ep = lv ? lv.players.find(me1) : undefined;
+          const fouls = Math.max(srow!.stats.pf ?? 0, ep?.fouls ?? 0);
+          const out = outReason({ ejected: ep?.ejected, fouls, tagOut: (injuryPlayProb(pl(pid).injury_status) ?? 1) <= 0.03, onCourt: ep ? ep.onCourt : null, espnOutAfterTip: !!lv?.outAfterTip.some(me1) });
+          inGame = inGameEstimate({ pts: fantasyPoints(srow!.stats, S), sec: srow!.stats.sp, fouls, period: ek.period, clock: ek.clock ?? 0, preMu: d.mu, preSd: d.sd, projSec: pr?.stats?.sp ?? null, out });
+        }
+        games.push({ gi: -1, pid, date: g.date, tip, end, team, opp: g.home.team === team ? g.away.team : g.home.team, proj, mu: inGame?.mu ?? d.mu, sd: inGame?.sd ?? d.sd, status, actual, played,
+          ...(ov ? { projOverride: ov.label } : {}), ...(late ? { late: sched } : {}), ...(dnp ? { dnp: true } : {}), ...(inGame ? { inGame } : {}) });
       }
     });
     games.sort((a, b) => a.tip - b.tip); games.forEach((g, i) => (g.gi = i));
@@ -228,7 +255,8 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
     const tw: E.TeamWeek = {
       slots: slotNames.map((s) => E.SLOT_MASK[s] ?? 31), slotNames,
       pmask: pids.map((p) => E.posMask(pl(p).fantasy_positions || ["UTIL"])), names: pids.map((p) => pl(p).full_name || `${pl(p).first_name} ${pl(p).last_name}`),
-      games: games.map((g) => ({ p: pidx.get(g.pid)!, tip: g.tip, end: g.end, mu: g.mu, sd: g.sd, projRaw: g.proj, actual: g.actual ?? 0, played: !!g.played })),
+      games: games.map((g) => ({ p: pidx.get(g.pid)!, tip: g.tip, end: g.end, mu: g.mu, sd: g.sd, projRaw: g.proj, actual: g.actual ?? 0, played: !!g.played,
+        ...(g.inGame ? { pPlay: 1, live: { pts: g.inGame.pts } } : {}) })),
       byPlayer, lastPlayed0, dnp: { p1: MODEL.P1, p0: MODEL.P0 },
     };
     if (mode === "live") {

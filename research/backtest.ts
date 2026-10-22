@@ -4,6 +4,7 @@ import fs from "fs";
 import * as E from "./engine";
 
 import { S, fitModel, teamWeek } from "./btcommon";
+import { midgameHooks, newMidgameStats } from "../lib/engine/midgame";
 const [wFrom, wTo, polNames, outFile, Karg] = process.argv.slice(2);
 const K = Number(Karg ?? 200);
 
@@ -54,6 +55,7 @@ for (let week = Number(wFrom); week <= Number(wTo); week++) {
     for (const pn of pols) {
       const pol = polFor(pn, week); const t0 = Date.now();
       const evs = E.buildEvents(tw, pol.chain);
+      const mkHooks = () => {
       let hooks: E.Hooks | undefined;
       if (pol.rollout) {
         const base: E.Policy = { ...(pol.lockAware ? POLICIES.P2LA : POLICIES.P2), eps: pol.eps, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs };
@@ -62,7 +64,15 @@ for (let week = Number(wFrom); week <= Number(wTo); week++) {
         hooks = E.rolloutHooks(tw, base, evs, pol.rollout.objective, pol.rollout.K, pol.rollout.margin, week * 1000 + Number(rid), real, opp);
       }
       if (pn === "P7" || pn === "P2S" || /^P7H/.test(pn)) hooks = E.startRolloutHooks(tw, { ...POLICIES.P2LA, cutoff: pol.cutoff, holdYield: pol.holdYield, legacyBugs: pol.legacyBugs }, evs, Number(process.env.KS || K), week * 1000 + Number(rid), real, hooks);
+      return hooks;
+      };
+      let hooks = mkHooks();
+      // env MIDGAME=1 (task T3): hooks wrapped by the mid-game forfeit option at every tip-off; without in-game information
+      // it never evaluates anything (row[<p>_mg] = [tip-offs seen, checks]) and the totals are unchanged
+      const mst = newMidgameStats();
+      if (process.env.MIDGAME) hooks = midgameHooks(tw, evs, hooks, { pol, base: POLICIES.P2LAH, makeInner: mkHooks, realised: real, seed: week * 1000 + Number(rid), opts: { first: false } }, mst);
       const res = E.simulate(tw, pol, evs, real.actual, real.played, E.initState(tw), 0, hooks);
+      if (process.env.MIDGAME) row[pn + "_mg"] = [mst.groups, mst.checks];
       row[pn] = Math.round(res.total * 10) / 10; row[pn + "_ms"] = Date.now() - t0; row[pn + "_locks"] = res.st.locks; row[pn + "_moves"] = res.st.lockMoves;
     }
     results.push(row);
