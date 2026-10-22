@@ -54,7 +54,7 @@ test("nothing to do: the lineup already matches; until the next game end with a 
   assert.deepEqual(d.then[0].items, ["Garland: lock him if he scores ≥ 24.0"]);
 });
 
-test("slot reuse: a game in progress now; the later starter goes into his slot after it ends", () => {
+test("slot reuse: a player in a game moves between starting slots now (task T2), the later starter takes his slot", () => {
   const d = doNow({
     asOf: ET(20), decisions: [],
     // (G and both UTILs taken: Garland can only play PG, so Wallace has to move once his game ends)
@@ -62,15 +62,14 @@ test("slot reuse: a game in progress now; the later starter goes into his slot a
       players: [pl("Wallace", "PG/SG"), pl("Garland", "PG"), pl("L1", "PG"), pl("L2", "C"), pl("L3", "C")] },
     plan: [tp(ET(22), { starts: [st("PG", "Garland", ET(22), 25, 24)], holds: [{ player: "Wallace", pid: "Wallace", score: 20, slot: "UTIL 1", from: "PG", move: true }] })] as any,
   });
-  // nothing can change now (he is in his game), so the table shows him there
-  assert.deepEqual(d.changes, []);
-  assert.equal(row(d, "PG").player, "Wallace"); assert.equal(row(d, "PG").status, "in game now (ends ~9:15 PM) · lock if ≥ 28.0");
-  assert.equal(row(d, "PG").later, "~9:15 PM: put Garland in PG");
-  assert.equal(row(d, "SG").status, "empty until ~9:15 PM");
+  // Sleeper lets a player in a game move between starting slots (his game still counts): no need to wait for it to end
+  assert.deepEqual(d.changes, ["Move Wallace PG → SG (in his game now - moving between starting slots keeps it)", "Put Garland in PG"]);
+  assert.equal(row(d, "SG").player, "Wallace"); assert.equal(row(d, "SG").status, "in game now (ends ~9:15 PM) · lock if ≥ 28.0");
+  assert.equal(row(d, "PG").player, "Garland"); assert.equal(row(d, "PG").later, null);
   const s = d.then[0];
-  assert.equal(s.title, "~9:15 PM, when Wallace's game ends (changes due before the 10:00 PM tip-off)");
-  assert.deepEqual(s.items, ["Wallace: lock him if he scores ≥ 28.0", "Move Wallace PG → SG (held 20.0 - keep him in a starting slot, never via the bench)", "Put Garland in PG"]);
-  assert.match(d.upToDate!, /nothing to do until ~9:15 PM, when Wallace's game ends/);
+  assert.equal(s.title, "~9:15 PM, when Wallace's game ends");
+  assert.deepEqual(s.items, ["Wallace: lock him if he scores ≥ 28.0"]);
+  assert.equal(d.upToDate, null);
 });
 
 test("later tip-off today: a free slot is set now; a reused slot changes after the earlier game ends", () => {
@@ -87,13 +86,15 @@ test("later tip-off today: a free slot is set now; a reused slot changes after t
   // Green's C is unused at 7:00 PM: set him now
   assert.equal(row(d, "C").player, "Green"); assert.match(row(d, "C").status, /plays 10:00 PM vs TOR .*set now/); assert.equal(row(d, "C").change, "put Green in C");
   assert.deepEqual(d.changes, ["Put Green in C"]);
-  // SF is Johnson's until his game ends; then Johnson (held) moves and Wells comes in
+  // SF is Johnson's at 7:00 PM; before 10:00 PM (any time, also during his game - task T2) he moves and Wells comes in
   assert.equal(row(d, "SF").change, null);
-  assert.equal(row(d, "SF").later, "~9:30 PM: put Wells in SF");
+  assert.equal(row(d, "SF").later, "before 10:00 PM: put Wells in SF");
   const s = d.then.find((x) => /Johnson's game ends/.test(x.title))!;
-  assert.match(s.title, /^~9:30 PM, when Johnson's game ends \(changes due before the 10:00 PM tip-off\)$/);
-  assert.deepEqual(s.items, ["Johnson: lock him if he scores ≥ 33.0", "Move Johnson SF → PF (held 35.0 - keep him in a starting slot, never via the bench)", "Put Wells in SF"]);
-  assert.ok(s.tentative);
+  assert.equal(s.title, "~9:30 PM, when Johnson's game ends");
+  assert.deepEqual(s.items, ["Johnson: lock him if he scores ≥ 33.0"]);
+  const b = d.then.find((x) => /^Before the 10:00 PM tip-off$/.test(x.title))!;
+  assert.deepEqual(b.items, ["Move Johnson SF → PF (held 35.0 - keep him in a starting slot, never via the bench)", "Put Wells in SF"]);
+  assert.ok(s.tentative && b.tentative);
 });
 
 test("LOCK now: banner with slot and deadline; a lock stays in his own slot of the same name", () => {
@@ -150,9 +151,9 @@ test("swap only: the engine swaps two PG/SG-eligible players (Black PG, held Wal
   assert.deepEqual(d.target.map((t) => `${t.slot} ${t.pid} ${t.kind}`), ["PG Wallace held", "SG Black freeRoll", "PF Johnson start"]);
 });
 
-test("later-move feasibility: a starter moves now only because a later starter needs his slot", () => {
+test("later-move feasibility: a starter moves (during his game - task T2) only because a later starter needs his slot", () => {
   // Black (PG/SG) sits in SG and plays at 7:00 PM (ends 9:30); Garland (SG only) plays at 9:00 PM while Black is still
-  // in his game; G and both UTILs are locked -> Black must start in PG, so SG is free for Garland at 9:00
+  // in his game; G and both UTILs are locked -> Black moves to PG before 9:00 (allowed during his game), SG for Garland
   const lk = { state: "locked", points: 20 };
   const input = (players: ReturnType<typeof pl>[]) => ({
     asOf: ET(18), decisions: [],
@@ -161,7 +162,8 @@ test("later-move feasibility: a starter moves now only because a later starter n
       tp(ET(21), { tentative: true, starts: [st("SG", "Garland", ET(21), 22, 20)], playing: [{ player: "Black", pid: "Black", slot: "PG", end: ET(21, 30) }] })] as any,
   });
   const d = doNow(input([pl("Black", "PG/SG"), pl("Garland", "SG"), pl("L1", "PG"), pl("L2", "C"), pl("L3", "C")]));
-  assert.deepEqual(d.changes, ["Move Black SG → PG", "Put Garland in SG"]); // (Garland's SG is unused before 9:00: set now)
+  assert.deepEqual(d.changes, []); // (no reason to move anyone before 7:00 PM: the move can wait until before 9:00)
+  assert.deepEqual(d.then.find((x) => /9:00 PM tip-off/.test(x.title))!.items, ["Move Black SG → PG (in his game now - moving between starting slots keeps it)", "Put Garland in SG"]);
   // same, but Garland can also play G... which is locked; and if he could play PG/SG, Black would stay -> no move
   const d2 = doNow(input([pl("Black", "PG/SG"), pl("Garland", "PG/SG"), pl("L1", "PG"), pl("L2", "C"), pl("L3", "C")]));
   assert.ok(!d2.changes.some((c) => /^Move Black/.test(c)), d2.changes.join("; "));

@@ -1,6 +1,6 @@
 // Task T (live bugs, Wed Oct 21): (1) a game whose scheduled tip has passed but is still "pre" (late tip / delay) keeps
 // its players in the plan - they start at max(scheduled, now), are never "no game today", and the card's next tip-off is
-// that game; (2) an Out player whose team's game is in progress scores 0, is stuck in his slot until it ends, gets no
+// that game; (2) an Out player whose team's game is in progress scores 0 (task T2: bench him now - forfeits nothing), gets no
 // "lock if" cut-off, and holds nothing afterwards. Pure helpers, the card (lib/live/donow.ts), and buildWeek + the
 // advice on a stubbed Sleeper + ESPN backend.
 import { test } from "node:test";
@@ -86,7 +86,7 @@ test("card: 'no game today' only when he has no game that date; a game later tod
   assert.match(ch, /Bench Rested \(no game today\)/);
 });
 
-test("card: Out player stuck in a game in progress - scores 0, no lock cut-off, his slot frees at the end", () => {
+test("card: Out player in a game in progress - scores 0, no lock cut-off, bench him now and use the slot (task T2)", () => {
   const end = ET(21, 30);
   const d = doNow({
     asOf: ET(19, 44), decisions: [],
@@ -94,10 +94,20 @@ test("card: Out player stuck in a game in progress - scores 0, no lock cut-off, 
       players: [pl("Black", "PG/SG", [game(ET(19), "in", { dnp: true })], "Out"), pl("Garland", "PG", [game(ET(22))]), pl("L1", "PG", []), pl("L2", "C", []), pl("L3", "C", [])] },
     plan: [tp(ET(22), { starts: [st("PG", "Garland", ET(22), 25, 24)], playing: [] })] as any,
   });
-  assert.equal(row(d, "PG").status, "Out - scores 0; stuck in this slot until the ATL game ends ~9:30 PM (Sleeper locks him at tip)");
+  // benching him mid-game forfeits nothing (he scores 0) and frees PG now: no waiting for the ATL game to end
+  assert.deepEqual(d.changes, ["Bench Black now (Out - not playing in his game in progress, scores 0: benching him forfeits nothing)", "Put Garland in PG"]);
+  assert.equal(row(d, "PG").player, "Garland"); assert.equal(row(d, "PG").later, null);
   const txt = doNowText(d);
-  assert.doesNotMatch(row(d, "PG").status, /lock if/i); assert.doesNotMatch(txt, /Black: lock him if/); assert.doesNotMatch(txt, /LOCK Black/);
-  assert.equal(row(d, "PG").later, "~9:30 PM: put Garland in PG");
+  assert.doesNotMatch(txt, /Black: lock him if/); assert.doesNotMatch(txt, /LOCK Black/); assert.doesNotMatch(txt, /stuck/);
+  assert.ok(d.then.every((x) => !x.items.some((i) => /Black/.test(i))));
+  // his slot not needed by anyone: he may stay (harmless), the row says so
+  const d2 = doNow({
+    asOf: ET(19, 44), decisions: [],
+    me: { slots: slots({ 0: { pid: "Black", state: "playing", gameEnd: end, injury: "Out", dnp: true, team: "ATL" } }) as any, players: [pl("Black", "PG/SG", [game(ET(19), "in", { dnp: true })], "Out")] },
+    plan: [tp(ET(22), { playing: [{ player: "Black", pid: "Black", slot: "PG", end, dnp: true, team: "ATL" }] })] as any, // (older cached advice still lists him)
+  });
+  assert.deepEqual(d2.changes, []);
+  assert.equal(row(d2, "PG").status, "Out - not playing in the ATL game in progress, scores 0; bench him any time - forfeits nothing, the slot is free now");
 });
 
 // ---- buildWeek + advice on a stubbed backend (7:40 PM: ATL @ ORL in Q2, CHI @ TOR 7:30 not tipped, UTA @ MEM 8:00) ----
@@ -156,7 +166,8 @@ test("buildWeek + advice: late CHI @ TOR players planned at the expected tip; Ou
   const b = g("1"); const bi = T.pids.indexOf("1");
   assert.equal(b.status, "in"); assert.equal(b.dnp, true); assert.equal(b.end, ET(21, 25)); // (Q2 11:40 at 7:40 PM)
   assert.equal(T.tw.nextGameIdx![bi], b.gi); assert.equal(T.tw.pNext![bi], 0);
-  assert.equal(T.st.inGame[bi], b.gi); // pinned in his slot until the game ends
+  // task T2: not pinned - benching him forfeits nothing, so his slot is free now; the game is started (nobody plays it)
+  assert.equal(T.st.inGame[bi], -1); assert.ok(!Array.from(T.st.pinned).includes(bi)); assert.equal(T.st.started[b.gi], 1);
 
   const a = await computeAdvice(ctx, 20, new Float64Array([0]), null);
   assert.equal(a.plan[0].tip, ET(19, 45)); assert.equal(a.plan[0].late, ET(19, 30)); assert.match(a.plan[0].when, /7:30 PM \(late tip/);
@@ -168,6 +179,11 @@ test("buildWeek + advice: late CHI @ TOR players planned at the expected tip; Ou
   assert.ok(a.plan.every((pl) => !pl.holds.some((h) => h.pid === "1")));
   const d = a.doNow!; const txt = doNowText(d);
   assert.doesNotMatch(txt, /no game today/); assert.doesNotMatch(txt, /Anthony Black: lock him if/); assert.doesNotMatch(txt, /Bench (Caleb Wilson|Collin Murray-Boyles|Leonard Miller)/);
-  assert.match(d.rows.find((r) => r.pid === "1")!.status, /^Out - scores 0; stuck in this slot until the ORL game ends ~9:25 PM/);
+  assert.equal(bs.stateText, "out (scores 0 - bench him, forfeits nothing)");
+  assert.doesNotMatch(txt, /stuck/);
+  const br = d.rows.find((r) => r.pid === "1");
+  // (PG is free now: either the plan uses it - "bench Black now" - or he stays there harmlessly)
+  if (br) assert.match(br.status, /^Out - not playing in the ORL game in progress, scores 0; bench him any time/);
+  else assert.ok(d.changes.some((c) => /^Bench Anthony Black now \(Out - not playing/.test(c)), d.changes.join("; "));
   assert.equal(d.tip, ET(19, 45));
 });

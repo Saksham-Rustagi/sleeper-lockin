@@ -2958,3 +2958,31 @@ Miller start at the 7:45 expected tip, Black dnp, no lock call). Live check 7:57
 Black "Out - scores 0; stuck in this slot until the ORL game ends ~9:35 PM", no "lock him if" for him, Jalen Green into his
 SG at ~9:35; Wilson / Murray-Boyles / Miller in their game (CHI @ TOR had tipped by then, so case 1 is covered by the
 stubbed test only).
+
+## Mid-game moves and Out players in a game in progress (task T2, 2026-10-21, live fix)
+Sleeper rules confirmed by the user: a player can be moved at any time, also during his game; moving him between
+starting slots keeps the game; benching him mid-game forfeits it and frees the slot at once. Task T had kept an Out
+player in a game in progress "stuck in this slot until the game ends", and the Do-now card made every change touching a
+player in a game wait for its end. Fixed in the live advice (`DEPLOY_MIDGAME.md`):
+- Out / inactive with no stats in a game in progress (`dnp`): not pinned in `buildWeek` (scores 0 either way, benching
+  forfeits nothing) -> his slot is free for the plan now; the card: "Bench X now (Out - not playing in his game in
+  progress, scores 0: benching him forfeits nothing)" + who takes the slot, immediately. Notifier: ⚠️ X OUT -> ...
+- Players playing: the card re-places them like everyone else (must keep a starting slot, sticky); moves between
+  starting slots happen now / before the next tip-off ("in his game now - moving between starting slots keeps it").
+  Only taking a playing player out of the lineup, or locking him, waits for his game end. No benching of playing
+  players (task T3).
+- Not changed: the engine (startGroup / P8 / P10 via `unpinnedOpen`) still treats a playing player's slot as taken
+  until his game ends, so its plan doesn't count on repacking. Engine change = backtest change, left for its own task.
+
+Tests: 119 green (`tests/latetip.test.ts`, `tests/donow.test.ts` updated to the rules: Out Black benched now and
+Garland in PG immediately; Wallace moves PG -> SG mid-game now instead of at 9:15; Johnson / Black moves "before the
+next tip-off"; buildWeek on the stubbed backend: Black not pinned, game started, slot state still "playing" + dnp).
+`npx tsc --noEmit` clean. Live check 8:16 PM ET (`research/t2_live.cjs`, own cache/config dirs, engine p10b, 24 s):
+
+| | before (task T) | after (task T2) |
+|---|---|---|
+| Anthony Black (SG, Out, ORL game in progress) | "stuck in this slot until the ORL game ends", SG waits | **Do now: 1. Bench Anthony Black now (forfeits nothing) 2. Put Jalen Green in SG** (10:00 PM, slot unused before) |
+| Cooper Flagg (UTIL 2, plays 8:30) -> PG for the 10:00 PM group | would wait for his game end (~11:00 PM, too late) | "Before the 10:00 PM tip-off: Move Cooper Flagg UTIL 2 → PG (in his game now - moving between starting slots keeps it)" |
+| post-game lets go / locks (J. Johnson, Murray-Boyles, Miller) | at game end | unchanged: at game end |
+
+(Flagg was already in UTIL 2 in Sleeper at 8:16, so Black's SG goes to Jalen Green rather than to Flagg.)

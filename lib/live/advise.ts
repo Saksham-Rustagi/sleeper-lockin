@@ -36,7 +36,8 @@ export interface TipPlan {
   forfeits: { player: string; score: number }[]; // held scores the plan gives up to make room (only if locking them isn't better)
   // locks the plan makes at this tip-off (the engine's decision, exact slot), and players still in an earlier game
   locks?: { player: string; pid: string; score: number; slot: string }[];
-  // dnp: Out / inactive with no stats in that game (scores 0; no lock decision; his slot frees with nothing held)
+  // dnp: Out / inactive with no stats in that game (scores 0; no lock decision; his slot frees with nothing held). Since
+  // task T2 such a player isn't pinned (his slot is free now: benching him forfeits nothing), so live advice lists none.
   playing?: { player: string; pid: string; slot: string; end: number; dnp?: boolean; team?: string }[];
 }
 export interface Advice {
@@ -66,11 +67,13 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
       return { slot, player: T.names[lp], pid: T.pids[lp], locked: true, points: st.lockedPts[s], source: src, state: "locked", stateText: src === "final" ? "locked (final game)" : src === "override" ? "locked (marked by you)" : "locked" };
     }
     const pid = T.lineup[s]; const i = pid ? T.pids.indexOf(pid) : -1;
-    const held = i >= 0 && st.inGame[i] < 0 && !Number.isNaN(st.pendingX[i]);
-    const state = i < 0 ? "empty" : st.inGame[i] >= 0 ? "playing" : held ? "held" : "idle";
+    // (task T2: Out in a game in progress isn't pinned in the engine - his slot is free - but he is still in it in Sleeper)
+    const out = i >= 0 && st.inGame[i] < 0 ? T.games.find((g) => g.pid === pid && g.status === "in" && g.dnp) : undefined;
+    const held = i >= 0 && st.inGame[i] < 0 && !out && !Number.isNaN(st.pendingX[i]);
+    const state = i < 0 ? "empty" : st.inGame[i] >= 0 || out ? "playing" : held ? "held" : "idle";
     const next = held ? T.games.find((g) => g.pid === pid && g.status === "pre" && g.tip > ctx.asOf) : undefined;
-    const stateText = held ? (next ? `held (decide by ${fmtTime(next.tip)})` : "held (last game - counts automatically)") : state;
-    const live = state === "playing" ? T.games[st.inGame[i]] : undefined;
+    const stateText = held ? (next ? `held (decide by ${fmtTime(next.tip)})` : "held (last game - counts automatically)") : out ? "out (scores 0 - bench him, forfeits nothing)" : state;
+    const live = out ?? (state === "playing" ? T.games[st.inGame[i]] : undefined);
     const th = live && !live.dnp ? lockThreshold(T, E.cloneState(st), i, live.end) : null;
     return { slot, player: i >= 0 ? T.names[i] : null, pid, locked: false, points: held ? st.pendingX[i] : null, source: null, state, stateText, ...(held ? { heldUntil: next?.tip ?? null } : {}), injury: i >= 0 ? T.injury[i] : null,
       ...(live ? { gameEnd: live.end, lockIf: th ? Math.round(th.threshold * 10) / 10 : null, team: live.team, ...(live.dnp ? { dnp: true } : {}) } : {}) };
@@ -283,7 +286,7 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
     benchedIdx.push(bIdx);
     // held scores: everyone still lockable but not playing now keeps a starting slot (assigned among free slots)
     const held: number[] = []; const w = new Float64Array(T.pids.length);
-    // (a 0 from a game he didn't play holds nothing: his slot is free - task T, e.g. Out but stuck in a game in progress)
+    // (a 0 from a game he didn't play holds nothing: his slot is free - task T, e.g. Out in a game in progress)
     const dnpZero = (p: number) => { const gi = T.tw.byPlayer[p].filter((g) => T.games[g].end <= tip && T.games[g].tip < tip).pop(); return st.pendingX[p] === 0 && gi !== undefined && !played[gi]; };
     for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0 && !dnpZero(p)) { held.push(p); w[p] = st.pendingX[p] + 1000; }
     const ha = E.assignExact(T.tw.slots, E.unpinnedOpen(st), held, T.tw.pmask, w);
