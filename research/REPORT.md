@@ -3110,6 +3110,30 @@ bench him now. Switch `"midgameForfeit"` (default on), files, rollback: `DEPLOY_
   race workers. That is up to 6 extra races + 256 continuations each. It is well within the notifier's 9-min watchdog;
   the live app has 12 race workers.
 - (The live app was not changed; these are the engine-v2 worktree's calls on live data.)
+- **What happened** (finals, for the record; one draw, not a test): Flagg finished with **34.5** (8.5 at 9:41 PM,
+  ~19.5 expected, sd 8: +1.9 sd) and would likely have been locked; Clingan scored 12.0. In hindsight, benching Flagg
+  would have cost points. Murray-Boyles 16.0 (the 10:01 cap-4 call: ~19 expected), Miller −3.0, Wilson 4.5, Coward 11.5.
+  The call was an ex-ante +2.8–3.7 by the model; how often such calls pay off for real can only be measured over many
+  live nights. (Suggested: log every live forfeit call and its outcome; the notifier's advice log already keeps the calls.)
+
+**Calibration of the in-game estimate** (`research/t3_calib.ts`).
+- Data: 35 live snapshots of 2026-10-21's 11 games (ESPN clock + Sleeper live stats every 7–8 min, `research/t3_snap.sh`).
+- 215 player-games with a projection, 3,014 in-game observations; finals from the last snapshot. Observations of one
+  player are correlated, and this is one night.
+
+| model of his final score | Q1 RMSE | Q2 | Q3 | Q4+ | all: bias | RMSE | sd(z) | 80% interval covers |
+|---|---|---|---|---|---|---|---|---|
+| pre-game model (ignores the game so far) | 10.07 | 9.78 | 9.64 | 9.62 | −1.01 | 9.70 | 1.05 | 81% |
+| no shrinkage (so far + pre-game rate × pre-game share of the remaining minutes) | 8.98 | 7.54 | 6.20 | 3.32 | −0.83 | 6.09 | 1.01 | 83% |
+| **shipped** (shrunk share and rate, ING) | 9.89 | 7.76 | 6.31 | 3.37 | −0.91 | **6.31** | **1.01** | **81%** |
+| best of the 27-point grid (kShare 24, kRate 40, sdScale 1) | | | | | −0.88 | 6.11 | 0.99 | 83% |
+
+- The shipped estimate cuts the error of the final by 35% vs the pre-game model, and its uncertainty is calibrated
+  (sd of z 1.01, 81% in the 80% interval). The decisions depend on that.
+- The early estimates run slightly high (Q1 bias −2.3).
+- More shrinkage of the rate (kRate 40) or none at all is marginally better on this night (6.1 vs 6.3). That is not
+  enough evidence from one night of correlated observations to retune. The parameters stay as shipped; candidate for a
+  multi-night refit (keep running `research/t3_snap.sh` on game nights).
 
 Checks: `npx tsc --noEmit` clean; `npm test` 132/132.
 - Also fixed: `scripts/notify.ts` set `LOCKIN_CACHE_DIR` to the live app's cache when merely imported. A first version of
