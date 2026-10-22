@@ -29,10 +29,11 @@ export interface MidgameOpts {
   z?: number;        // ... and more than z standard errors of the paired mean (default 2)
   batch?: number;    // scenarios per round (default 64)
   kMax?: number;     // scenarios per world (default 256)
-  maxCands?: number; // players evaluated per decision, lowest expected final score first (default 4)
+  maxCands?: number; // players evaluated per decision, lowest expected final score first (default 6: live 2026-10-21, a cap of 4
+                     // dropped the best candidate, a ~19.5-expected player whose slot was the one to free)
   first?: boolean;   // only at the first tip-off these hooks see (default true: the live decision)
 }
-const DEF: Required<MidgameOpts> = { minGain: 1, z: 2, batch: 64, kMax: 256, maxCands: 4, first: true };
+const DEF: Required<MidgameOpts> = { minGain: 1, z: 2, batch: 64, kMax: 256, maxCands: 6, first: true };
 
 // one evaluated player: keep / forfeit = mean week totals on the n scenarios both worlds have, gain = paired mean, se
 export interface MidgameEval {

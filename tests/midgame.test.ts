@@ -266,4 +266,10 @@ test("card + notifier: bench a player in his game now, with the reason; deferred
   assert.equal(d2.forfeits![0].now, false);
   assert.ok(!messages(early, ET(21)).some((x) => x.key.startsWith("forfeit|")));
   assert.ok(messages(early, ET(21, 45)).some((x) => x.key.startsWith("forfeit|Wilson|")));
+  // a later run names another player for the same tip-off: the reminder says it replaces the earlier call
+  const state: any = {};
+  messages(a, ET(21, 50), state);
+  const swapped: any = { ...a, plan: [{ ...a.plan[0], midgame: [{ ...k, recommended: "BENCH_NOW", deferred: undefined, text: "Bench Miller now - ..." }, { ...m, recommended: "KEEP" }] }] };
+  const g = messages(swapped, ET(21, 52), state).find((x) => x.key.startsWith("forfeit|Miller|"))!;
+  assert.match(g.body, /^Changed: bench Miller INSTEAD of Wilson \(if you already benched Wilson, leave it - don't bench both\)\. /);
 });
