@@ -380,6 +380,7 @@ function midgameCalls(T: LiveTeam, r: MidgameResult, L: string[], tip: number, a
     const text = bench
       ? (now ? `Bench ${name} now - forfeits his ${x.pts.toFixed(1)} so far${ig?.out ? ` (${ig.out})` : ""}; frees ${L[x.slot]}${forNames.length ? ` for ${forNames.join(" & ")}` : ""} at ${clockET(tip)}, +${x.gain.toFixed(1)} exp pts`
         : `Bench ${name} just before the ${clockET(tip)} tip-off - forfeits his ${x.pts.toFixed(1)} so far${ig?.out ? ` (${ig.out})` : ""}; frees ${L[x.slot]}${forNames.length ? ` for ${forNames.join(" & ")}` : ""}, +${x.gain.toFixed(1)} exp pts (re-checked as his game goes on: wait until then)`)
+      : x.pass ? `Keep ${name} in ${L[x.slot]} (in his game: ${so}) - benching him would also gain +${x.gain.toFixed(1)} exp pts, but benching ${T.names[r.pick]} is worth more (one at a time; re-checked after)`
       : x.deferred ? `Keep ${name} in ${L[x.slot]} for now (in his game: ${so}) - benching him ${later ? `before the ${clockET(later)} tip-off` : "later tonight"} may be worth +${x.gain.toFixed(1)} exp pts; re-checked then`
       : `Keep ${name} in ${L[x.slot]} (in his game: ${so}) - benching him now ${x.gain > 0 ? `gains only ${x.gain.toFixed(1)} ± ${(2 * x.se).toFixed(1)}` : `loses ${(-x.gain).toFixed(1)}`} exp pts`;
     return { player: name, pid: T.pids[x.p], slot: L[x.slot], pts: x.pts, min: ig?.min ?? null, final: x.mu, sd: x.sd, out: ig?.out ?? null,
