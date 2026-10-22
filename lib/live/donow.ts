@@ -27,7 +27,7 @@ export interface DoNowRow {
 export interface DoNowStep { t: number; when: string; title: string; items: string[]; tentative: boolean }
 export interface DoNowLock { player: string; pid: string; slot: string; score: number; by: string; text: string }
 // task T3: bench a player in a game in progress now (forfeits his points so far)
-export interface DoNowForfeit { player: string; pid: string; slot: string; pts: number; gain: number; text: string }
+export interface DoNowForfeit { player: string; pid: string; slot: string; pts: number; gain: number; text: string; tip: number; now: boolean }
 export interface DoNow {
   tip: number | null; tipText: string | null; rows: DoNowRow[]; changes: string[]; locks: DoNowLock[];
   forfeits?: DoNowForfeit[]; midgameNotes?: string[]; // task T3: bench-now calls (banner) / players kept in for now (info)
@@ -270,7 +270,7 @@ export function doNow(a: DoNowInput): DoNow {
   const benchWhy = (r: Occ, k: number) => {
     const inj = injury.get(r.pid);
     const mf = k === 0 ? mgBench.get(r.pid) : undefined;
-    if (mf) return ` now (in his game - forfeits his ${f1(mf.pts)} so far${mf.out ? `, ${mf.out}` : ""}; frees ${mf.slot}${mf.for.length ? ` for ${mf.for.join(" & ")}` : ""} at ${tipTxt(mf.tip)}, +${f1(mf.gain)} exp pts)`;
+    if (mf) return `${mf.now === false ? ` at the last moment before ${tipTxt(mf.tip)}` : " now"} (in his game - forfeits his ${f1(mf.pts)} so far${mf.out ? `, ${mf.out}` : ""}; frees ${mf.slot}${mf.for.length ? ` for ${mf.for.join(" & ")}` : ""}${mf.now === false ? "" : ` at ${tipTxt(mf.tip)}`}, +${f1(mf.gain)} exp pts${mf.now === false ? "; re-checked until then" : ""})`;
     if (r.dnp) return ` now (${inj || "out"} - not playing in his game in progress, scores 0: benching him forfeits nothing)`;
     if (r.kind === "held" || (k === 0 && curHeld.has(r.pid))) return ` (lets go of his held ${f1(r.score ?? curHeld.get(r.pid))})`;
     const b = plan[k]?.benched.find((x) => (x.pid ?? pidOf(x.player)) === r.pid);
@@ -417,7 +417,12 @@ export function doNow(a: DoNowInput): DoNow {
       case "freeRoll": return `free roll - ${injury.get(o.pid) || "injured"}, ${Math.round((o.playProb ?? 0) * 100)}% to play (${tipTxt(o.tip!)})`;
       case "playing":
         if (o.dnp) return `${cap(injury.get(o.pid) || "out")} - not playing in ${o.team ? `the ${o.team}` : "his"} game in progress, scores 0; bench him any time - forfeits nothing, the slot is free now`;
-        return `in game now${o.end ? ` (ends ~${clock(r5(o.end))})` : ""}${lk(o.lockIf)}`;
+        {
+          // (task T3: points so far and the expected final when the in-game estimate is on)
+          const ig = players.find((x) => x.pid === o.pid)?.games?.find((g) => g.status === "in")?.inGame;
+          const so = ig ? `${f1(ig.pts)} so far${ig.out ? ` - ${ig.out}` : `, ~${f1(ig.mu)} expected`}; ` : "";
+          return `in game now${o.end || ig ? ` (${so}${o.end ? `ends ~${clock(r5(o.end))}` : ""})`.replace("; )", ")") : ""}${lk(o.lockIf)}`;
+        }
       case "idle": {
         if (tip0 === null) return "no game left - can stay";
         const n = dayNote(o.pid, tip0);
@@ -444,7 +449,7 @@ export function doNow(a: DoNowInput): DoNow {
     bench.push(`${b.player} - sits ${dayClock(pl.tip)}${b.label ? ` (${b.label.replace(/: don't start/, " - don't start")})` : ` (proj ${f1(b.proj)})`}`);
   }));
   (plan[0]?.forfeits ?? []).forEach((f) => bench.push(`${f.player} - let go of his held ${f1(f.score)} (the slot is worth more)`));
-  const forfeits: DoNowForfeit[] = [...mgBench.values()].map((m) => ({ player: m.player, pid: m.pid, slot: m.slot, pts: m.pts, gain: m.gain, text: m.text }));
+  const forfeits: DoNowForfeit[] = [...mgBench.values()].map((m) => ({ player: m.player, pid: m.pid, slot: m.slot, pts: m.pts, gain: m.gain, text: m.text, tip: m.tip, now: m.now !== false }));
   const midgameNotes = (plan[0]?.midgame ?? []).filter((m) => m.recommended === "KEEP" && m.deferred !== undefined).map((m) => m.text);
   const upToDate = nowChanges.length || locks.length || forfeits.length ? null
     : !plan.length ? "Your lineup is already correct - no more games for your players this week."

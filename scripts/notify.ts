@@ -6,7 +6,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
-import { advise, replay, type Advice } from "../lib/live/advise";
+import { advise, replay, FORFEIT_LAST, type Advice } from "../lib/live/advise";
 import { doNow } from "../lib/live/donow";
 import { lineupMessage, type LineupState } from "../lib/live/lineupnotify";
 import { engineName, replayIsSlow } from "../lib/live/engine";
@@ -72,9 +72,11 @@ export function messages(a: Advice, now: number, state: LineupState = {}, notes:
       if (d.deadline - now < 75 * 60e3) out.push({ key: `final|${d.pid}|${d.deadline}`, title: `⏰ Final call on ${d.player} (${d.score.toFixed(1)}) before ${fmt(d.deadline)}`, body: `Recommendation now: ${d.recommended}. Lock if ≥ ${d.threshold ?? "?"}; otherwise his next game replaces this one.` });
     }
   }
-  // task T3: bench a player in a game in progress now (forfeits that game, frees his slot for the next tip-off) - sent at
-  // once, one per player and game; the card's change list has the same bench move
+  // task T3: bench a player in a game in progress (forfeits that game, frees his slot for the next tip-off) - sent once
+  // per player and tip-off, in the last FORFEIT_LAST before it (the call is re-checked until then; earlier, the lineup
+  // reminder already lists it as "at the last moment"); the card's change list has the same bench move
   for (const f of dn.forfeits ?? []) {
+    if (f.tip - now > FORFEIT_LAST || f.tip <= now) continue;
     const m = a.plan[0]?.midgame?.find((x) => x.pid === f.pid);
     out.push({ key: `forfeit|${f.pid}|${m?.tip ?? 0}`, title: `⚠️ BENCH ${f.player} NOW (forfeits his ${f.pts.toFixed(1)})${m?.for.length ? ` → ${m.for.join(" & ")} in ${f.slot}` : ""}`,
       body: `${f.text}. Moving him to the bench mid-game forfeits that game (he keeps his later games); his slot is free at once.${dn.changes.length ? ` Do now: ${dn.changes.join("; ")}.` : ""}` });

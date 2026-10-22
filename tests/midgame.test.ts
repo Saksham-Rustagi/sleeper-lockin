@@ -259,4 +259,11 @@ test("card + notifier: bench a player in his game now, with the reason; deferred
   const msgs = messages(a, ET(21, 50));
   const f = msgs.find((x) => x.key.startsWith("forfeit|Wilson|"))!;
   assert.ok(f); assert.match(f.title, /^⚠️ BENCH Wilson NOW \(forfeits his 1\.5\) → Green in SF$/); assert.match(f.body, /frees SF for Green/);
+  // an hour before the tip-off it serves: "at the last moment", no urgent reminder yet (it comes in the last 20 minutes)
+  const early: any = { ...a, asOf: ET(21), plan: [{ ...a.plan[0], midgame: [{ ...m, now: false }, k] }] };
+  const d2 = doNow(early);
+  assert.ok(d2.changes.some((c) => /^Bench Wilson at the last moment before 10:00 PM \(in his game - forfeits his 1\.5 so far.*re-checked until then\)$/.test(c)), d2.changes.join(" | "));
+  assert.equal(d2.forfeits![0].now, false);
+  assert.ok(!messages(early, ET(21)).some((x) => x.key.startsWith("forfeit|")));
+  assert.ok(messages(early, ET(21, 45)).some((x) => x.key.startsWith("forfeit|Wilson|")));
 });

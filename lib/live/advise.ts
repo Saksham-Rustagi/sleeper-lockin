@@ -51,6 +51,7 @@ export interface MidgameCall {
   keep: number; forfeit: number; gain: number; se: number; n: number; recommended: "BENCH_NOW" | "KEEP";
   deferred?: number | null; // KEEP for now: a clear gain that only comes at a later tip-off (that tip, null = unknown); re-checked then
   for: string[]; tip: number; text: string;
+  now?: boolean; // BENCH_NOW: the tip-off it serves is within FORFEIT_LAST (else: bench him just before it, re-checked until then)
 }
 export interface Advice {
   generatedAt: number; asOf: number; mode: "live" | "replay"; league: string; season: string; week: number; dates: string[];
@@ -330,7 +331,7 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
     const forfeits: TipPlan["forfeits"] = [];
     if (before) for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(before.pendingX[p]) && Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0) forfeits.push({ player: T.names[p], score: before.pendingX[p] });
     const late = groupGames.find((g) => g.late)?.late;
-    const mgc = first && mg.r ? midgameCalls(T, mg.r, L, late ?? tip) : undefined;
+    const mgc = first && mg.r ? midgameCalls(T, mg.r, L, late ?? tip, ctx.asOf) : undefined;
     out.push({ tip, when: late ? `${fmtTime(late)} (late tip - not tipped yet)` : fmtTime(tip), starts, benched, tentative: !first, holds, forfeits, locks, playing, ...(late ? { late } : {}), ...(mgc?.length ? { midgame: mgc } : {}) });
     first = false;
   }
@@ -365,19 +366,24 @@ function unlikely(T: LiveTeam, gi: number, proj: number): { playProb: number; ex
 
 // task T3: the mid-game forfeit evaluation of the first tip-off, for display (lib/engine/midgame.ts MidgameResult)
 const clockET = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(ms);
-function midgameCalls(T: LiveTeam, r: MidgameResult, L: string[], tip: number): MidgameCall[] {
+// A forfeit serves the tip-off it frees the slot for: done at the last moment before it (benching earlier only gives up
+// what the rest of his game shows - the call is re-checked on every refresh). "Bench now" within FORFEIT_LAST of it.
+export const FORFEIT_LAST = 20 * 60e3;
+function midgameCalls(T: LiveTeam, r: MidgameResult, L: string[], tip: number, asOf: number): MidgameCall[] {
   return r.evals.map((x) => {
     const g = T.games[x.gi]; const ig = g.inGame; const name = T.names[x.p]; const bench = x.p === r.pick;
     const forNames = x.starts.map((q) => T.names[q]);
     const so = `${x.pts.toFixed(1)} so far${ig?.out ? ` - ${ig.out}` : ig ? `, ~${x.mu.toFixed(1)} expected by the end` : ""}`;
     // (deferred: the freed slot is first used at a later tip-off before his game ends - the next such tip of mine)
     const later = x.deferred ? T.games.filter((q) => q.tip > tip && q.tip < g.end && q.status === "pre").map((q) => q.tip).sort((a, b) => a - b)[0] : undefined;
+    const now = tip - asOf <= FORFEIT_LAST;
     const text = bench
-      ? `Bench ${name} now - forfeits his ${x.pts.toFixed(1)} so far${ig?.out ? ` (${ig.out})` : ""}; frees ${L[x.slot]}${forNames.length ? ` for ${forNames.join(" & ")}` : ""} at ${clockET(tip)}, +${x.gain.toFixed(1)} exp pts`
+      ? (now ? `Bench ${name} now - forfeits his ${x.pts.toFixed(1)} so far${ig?.out ? ` (${ig.out})` : ""}; frees ${L[x.slot]}${forNames.length ? ` for ${forNames.join(" & ")}` : ""} at ${clockET(tip)}, +${x.gain.toFixed(1)} exp pts`
+        : `Bench ${name} just before the ${clockET(tip)} tip-off - forfeits his ${x.pts.toFixed(1)} so far${ig?.out ? ` (${ig.out})` : ""}; frees ${L[x.slot]}${forNames.length ? ` for ${forNames.join(" & ")}` : ""}, +${x.gain.toFixed(1)} exp pts (re-checked as his game goes on: wait until then)`)
       : x.deferred ? `Keep ${name} in ${L[x.slot]} for now (in his game: ${so}) - benching him ${later ? `before the ${clockET(later)} tip-off` : "later tonight"} may be worth +${x.gain.toFixed(1)} exp pts; re-checked then`
       : `Keep ${name} in ${L[x.slot]} (in his game: ${so}) - benching him now ${x.gain > 0 ? `gains only ${x.gain.toFixed(1)} ± ${(2 * x.se).toFixed(1)}` : `loses ${(-x.gain).toFixed(1)}`} exp pts`;
     return { player: name, pid: T.pids[x.p], slot: L[x.slot], pts: x.pts, min: ig?.min ?? null, final: x.mu, sd: x.sd, out: ig?.out ?? null,
-      keep: x.keep, forfeit: x.forfeit, gain: x.gain, se: x.se, n: x.n, recommended: bench ? "BENCH_NOW" : "KEEP", ...(x.deferred ? { deferred: later ?? null } : {}), for: forNames, tip, text };
+      keep: x.keep, forfeit: x.forfeit, gain: x.gain, se: x.se, n: x.n, recommended: bench ? "BENCH_NOW" : "KEEP", ...(x.deferred ? { deferred: later ?? null } : {}), for: forNames, tip, ...(bench ? { now } : {}), text };
   });
 }
 

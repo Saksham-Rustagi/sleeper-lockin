@@ -235,7 +235,7 @@ function DoNowView({ d }: { d: DoNow }) {
       ))}
       {(d.forfeits ?? []).map((f) => (
         <div key={f.pid} className="rounded-lg border-2 border-red-500 bg-red-50 dark:bg-red-900/30 p-3">
-          <div className="text-lg font-bold text-red-800 dark:text-red-200">⚠️ BENCH {f.player} NOW (forfeits his {fmt(f.pts)})</div>
+          <div className="text-lg font-bold text-red-800 dark:text-red-200">⚠️ BENCH {f.player} {f.now ? "NOW" : "AT THE LAST MOMENT"} (forfeits his {fmt(f.pts)})</div>
           <div className="text-sm text-red-800 dark:text-red-200">{f.text}. Benching him mid-game forfeits this game only (he keeps his later games); his slot is free at once.</div>
         </div>
       ))}
