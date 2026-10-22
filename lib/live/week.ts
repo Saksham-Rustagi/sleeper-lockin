@@ -153,7 +153,8 @@ export async function buildWeek(o: BuildOpts): Promise<WeekContext> {
   }));
   const schedTips = [...new Set([...espn.values()].filter((g) => g.state === "pre").map((g) => g.tip))];
   // Injury tags: refresh every 4 min when any game tips within 2h (late scratches), otherwise hourly.
-  const soon = [...espn.values()].some((g) => g.state !== "post" && g.tip - asOf0 < 2 * 3600e3 && g.tip - asOf0 > -30 * 60e3);
+  // (task T3, "midgameForfeit": also while a game is in progress - a tag set mid-game means "ruled out for the rest of it")
+  const soon = [...espn.values()].some((g) => g.state !== "post" && g.tip - asOf0 < 2 * 3600e3 && (g.tip - asOf0 > -30 * 60e3 || (g.state === "in" && mode === "live" && optionOn("midgameForfeit"))));
   const players = await sleeper.players(mode === "live" && soon ? 4 * 60e3 : 60 * 60e3);
   // replay mode defaults to "end of week"
   const asOf = mode === "replay" && o.asOf === undefined ? Date.parse(dates[dates.length - 1] + "T23:59:00Z") + 12 * 3600e3 : asOf0;
