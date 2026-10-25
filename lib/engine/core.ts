@@ -27,6 +27,12 @@ export interface Game {
   projRaw: number;    // raw projection shown to user (for app-baseline policy)
   actual: number;     // realised fantasy points (0 if DNP)
   played: boolean;
+  // Live only (task T3; never set in backtests, so every code path below is unchanged without it): a game in progress
+  // with in-game information. mu / sd are then his FINAL score for this game given what he has so far (lib/live/ingame.ts),
+  // pPlay its play probability (he has played: 1), live his points so far. Such a game may be forfeited mid-game
+  // (lib/engine/midgame.ts).
+  pPlay?: number;
+  live?: { pts: number };
 }
 export interface DnpModel { p1: number; p0: number } // P(play | played last), P(play | missed last)
 export interface TeamWeek {
@@ -229,6 +235,7 @@ export function dayEnd(tip: number) {
 // ---------------- valuation ----------------
 const emaxG = (tw: TeamWeek, g: Game, v: number) => (tw.resid ? emaxShape(tw.resid, g.mu, g.sd, v) : emax(g.mu, g.sd, v));
 function playProb(tw: TeamWeek, p: number, gi: number, lastPlayed: number) {
+  const fx = tw.games[gi].pPlay; if (fx !== undefined) return fx;
   const ov = tw.pNext?.[p]; if (ov != null && tw.nextGameIdx?.[p] === gi) return ov;
   return lastPlayed ? tw.dnp.p1 : tw.dnp.p0;
 }
@@ -323,7 +330,7 @@ export function playerValue(tw: TeamWeek, pol: Policy, st: State, p: number, t: 
   if (gi >= 0) {
     const g = tw.games[gi];
     if (pol.value === "stop") {
-      const pk = st.lastPlayed[p] ? tw.dnp.p1 : tw.dnp.p0;
+      const pk = g.pPlay ?? (st.lastPlayed[p] ? tw.dnp.p1 : tw.dnp.p0);
       if (legacy(pol, "stop")) return (1 - pk) * vf + pk * emaxG(tw, g, vf);
       // after this game: keep the score or wait, with the chain moved by whether he plays it
       const k = nextIdx(tw, p, t);
@@ -551,6 +558,17 @@ export interface Hooks {
   decideIndex?: (st: State, t: number, evIdx: number, ctx: IndexContext) => IndexDecision | undefined;
   // start/sit at a tip-off: may return a different player->slot map for the players tipping now
   decideStarts?: (st: State, t: number, evIdx: number, tipping: number[], pending: number[], gameOf: Map<number, number>, slotOf: Map<number, number>, free: number) => Map<number, number> | undefined;
+  // at a tip-off, before anything is decided: may forfeit players in a game in progress (forfeitGame; task T3,
+  // lib/engine/midgame.ts). Absent in every research policy: simulate() is then unchanged.
+  beforeGroup?: (st: State, t: number, evIdx: number) => void;
+}
+// Bench player p mid-game (Sleeper: benching a player whose game is in progress forfeits that game and frees his slot at
+// once; task T3). His slot is free now, the game will not count for him (its end event finds him no longer in it), he
+// keeps his later games.
+export function forfeitGame(st: State, p: number) {
+  if (st.inGame[p] < 0) return;
+  for (let s = 0; s < st.pinned.length; s++) if (st.pinned[s] === p) st.pinned[s] = -1;
+  st.inGame[p] = -1; st.pendingX[p] = NaN;
 }
 // actuals: per game realised points, played flags (scenario). Returns final total.
 export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float64Array, played: Uint8Array,
@@ -588,10 +606,10 @@ export function simulate(tw: TeamWeek, pol: Policy, events: Ev[], actual: Float6
         s = legalLock(tw, pol, st, p, s, ev);
         if (s !== null && s >= 0) doLock(st, p, s); else st.pendingX[p] = NaN;
       }
-    } else if (pol.index) {
-      indexGroup(tw, pol, st, e, i, hooks);
     } else {
-      startGroup(tw, pol, st, e, events, i, hooks);
+      if (hooks?.beforeGroup) hooks.beforeGroup(st, e.t, i);
+      if (pol.index) indexGroup(tw, pol, st, e, i, hooks);
+      else startGroup(tw, pol, st, e, events, i, hooks);
     }
   }
   let total = 0;
@@ -763,6 +781,7 @@ export function sampleScenario(tw: TeamWeek, st: State | null, t: number, r: () 
       if (g.end <= t) { last = played[gi]; continue; }
       let pk = last ? tw.dnp.p1 : tw.dnp.p0;
       const ov = tw.pNext?.[p]; if (ov != null && tw.nextGameIdx?.[p] === gi) pk = ov;
+      if (g.pPlay !== undefined) pk = g.pPlay;
       const pl = r() < pk ? 1 : 0;
       const z = tw.resid ? tw.resid.q[Math.floor(r() * tw.resid.q.length)] : randn(r);
       played[gi] = pl; actual[gi] = pl ? Math.max(-5, g.mu + g.sd * z) : 0; last = pl;

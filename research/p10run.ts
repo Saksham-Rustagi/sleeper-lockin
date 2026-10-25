@@ -13,6 +13,7 @@ import * as PL from "./policies";
 import { runChecked } from "./invariants";
 import { decisionKey } from "../lib/engine/p10";
 import { runnerUpProbe } from "./lprobe";
+import { midgameHooks, newMidgameStats } from "../lib/engine/midgame";
 
 const [week, rid, out] = [Number(process.argv[2]), process.argv[3], process.argv[4]];
 const pols = (process.env.POLS || "P10").split(";"); const NSC = Number(process.env.NSC || 0);
@@ -24,11 +25,17 @@ const row: any = { week, rid, pols: {} };
 for (const pn of pols) {
   const fresh: any[] = []; const probe = FRESH > 0 && /^P1[01]/.test(pn) ? runnerUpProbe(tw, E.buildEvents(tw, PL.policy(pn).chain), seed, real, FRESH, FRESHMIN, fresh) : undefined;
   const t0 = performance.now(); const ru = PL.runner(pn, tw, seed, real, null, undefined, probe);
+  // env MIDGAME=1 (task T3): the policy's hooks wrapped by the mid-game forfeit option at every tip-off (first: false); with
+  // no in-game information it never evaluates anything (row.pols[p].midgame: groups seen, checks = 0), totals unchanged
+  const mst = newMidgameStats();
+  if (process.env.MIDGAME) ru.hooks = midgameHooks(tw, ru.events, ru.hooks, { pol: ru.pol, base: ru.pol.index ? PL.p11Base(true) : PL.POL.P2LAH, makeInner: () => PL.runner(pn, tw, seed, real).hooks,
+    realised: real, seed, opts: { first: false } }, mst);
   const dec: string[] = []; const hd = ru.hooks?.decideIndex;
   if (process.env.DECLOG && hd) ru.hooks!.decideIndex = (st, t, i, ctx) => { const d = hd(st, t, i, ctx); dec.push(`${i}:${d ? decisionKey(d) : "-"}`); return d; };
   const r = runChecked(tw, ru.pol, ru.events, real.actual, real.played, ru.hooks, { label: `w${week} r${rid} ${pn} real` });
   const ms = performance.now() - t0;
-  row.pols[pn] = { real: r.total, msFirst: ms, stats: (ru.hooks as any)?.stats, ...(process.env.DECLOG ? { dec } : {}), ...(probe ? { fresh } : {}) };
+  row.pols[pn] = { real: r.total, msFirst: ms, stats: (ru.hooks as any)?.stats, ...(process.env.DECLOG ? { dec } : {}), ...(probe ? { fresh } : {}),
+    ...(process.env.MIDGAME ? { midgame: { groups: mst.groups, checks: mst.checks, forfeits: mst.forfeits } } : {}) };
   row[pn] = { total: r.total, recount: r.trackerTotal, rep: r.rep, overrides: r.overrides, tipoffs: r.tipoffs, ms };
   if (NSC) {
     const sc = PL.scenarios(tw, NSC, seed * 17 + 3); const t1 = performance.now();

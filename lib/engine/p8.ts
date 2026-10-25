@@ -140,6 +140,9 @@ export function continuePrices(tw: E.TeamWeek, slot = "top") { slotOf(cacheOf(tw
 // restoring arms the slot for the next run
 export function savePrices(tw: E.TeamWeek, slot = "top") { const c = CACHE.get(tw); if (!c) return null; const a = slotOf(c, slot); return { cur: a.cur, day: a.day, ends: a.ends }; }
 export function restorePrices(tw: E.TeamWeek, saved: ReturnType<typeof savePrices>, slot = "top") { if (!saved) return; const a = slotOf(cacheOf(tw), slot); a.cur = saved.cur; a.day = saved.day; a.ends = saved.ends; a.armed = true; }
+// A slot's complete bookkeeping (view, day, ends, armed, the continuation marker), restored exactly: a nested evaluation
+// (lib/engine/midgame.ts: other worlds decided on "top" inside a running simulation) leaves the outer run as it was.
+export function holdSlot(tw: E.TeamWeek, slot = "top") { const a = slotOf(cacheOf(tw), slot); const x = { ...a }; return () => { Object.assign(slotOf(cacheOf(tw), slot), x); }; }
 // A slot's price state as plain data (structured-cloneable: worker threads, lib/live/racepool.ts). A view is a pure
 // function of (team-week, the state it was solved from, t, tilt, prices): tables() of the prepared instance at the
 // minimiser's prices, so importPrices rebuilds it exactly and everything priced from it is bit-identical.
@@ -156,6 +159,7 @@ export function importPrices(tw: E.TeamWeek, snap: PriceSnap, slot = "top") {
 
 // ---------------- values from the priced DPs ----------------
 function playProb(tw: E.TeamWeek, p: number, gi: number, lp: number) {
+  const fx = tw.games[gi].pPlay; if (fx !== undefined) return fx;
   const ov = tw.pNext?.[p]; if (ov != null && tw.nextGameIdx?.[p] === gi) return ov;
   return lp ? tw.dnp.p1 : tw.dnp.p0;
 }

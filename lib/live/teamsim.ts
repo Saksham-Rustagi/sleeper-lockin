@@ -53,6 +53,7 @@ export function scenario(T: LiveTeam, k: number, salt: number, asOf: number) {
       if (T.games[gi].status === "post" || g.end <= asOf) { last = played[gi]; continue; }
       let pk = last ? T.tw.dnp.p1 : T.tw.dnp.p0;
       if (T.tw.pNext?.[i] != null && T.tw.nextGameIdx?.[i] === gi) pk = T.tw.pNext[i]!;
+      if (g.pPlay !== undefined) pk = g.pPlay; // (task T3: a game in progress he has played in)
       const pl = u1 < pk ? 1 : 0;
       const z = Math.sqrt(-2 * Math.log(Math.max(u2, 1e-12))) * Math.cos(2 * Math.PI * u3);
       played[gi] = pl; actual[gi] = pl ? Math.max(-5, g.mu + g.sd * z) : 0; last = pl;
@@ -79,7 +80,8 @@ export const TEAM_SIMS = Number(process.env.LOCKIN_SIMS || 20000);
 export function teamFingerprint(T: LiveTeam) {
   const st = T.st;
   return { pids: T.pids, injury: T.injury, lineup: T.lineup, evIdx: T.evIdx, pNext: T.tw.pNext ?? null,
-    games: T.games.map((g) => [g.pid, g.tip, g.status, g.actual, Math.round(g.proj * 10) / 10, g.played]),
+    // (task T3: a game in progress with in-game information adds its final-score estimate; unchanged otherwise)
+    games: T.games.map((g) => { const r = [g.pid, g.tip, g.status, g.actual, Math.round(g.proj * 10) / 10, g.played]; return g.inGame ? [...r, g.inGame.key] : r; }),
     st: [st.lockedBy, st.lockedPts, st.pinned, st.pendingX, st.inGame, st.lastPlayed] };
 }
 

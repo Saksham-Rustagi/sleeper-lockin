@@ -29,6 +29,7 @@ import { p10Hooks, P10C_OPTS, type P10Opts } from "../engine/p10";
 import { p11Hooks, type OppSource, type P11Opts } from "../engine/p11";
 import { POLICY } from "./week";
 import { liveRacePool } from "./racepool";
+import { midgameHooks, type MidgameResult } from "../engine/midgame";
 
 export type EngineName = "p7h" | "p8" | "p9" | "p10" | "p10b" | "p10c" | "p10b-full";
 export const ENGINES: EngineName[] = ["p7h", "p8", "p9", "p10", "p10b", "p10c", "p10b-full"];
@@ -131,6 +132,22 @@ export function planHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: numbe
   if (e === "p9") return indexRolloutHooks(tw, { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } }, events, K, seed, real);
   if (RACE.includes(e)) return p10(tw, events, seed, real, e);
   return undefined;
+}
+// Task T3 (option "midgameForfeit", lib/live/override.ts): the plan's hooks with the mid-game forfeit option
+// (lib/engine/midgame.ts). At the plan's first tip-off, every player of mine in a game in progress with in-game
+// information is evaluated: the engine's own decision with him kept vs benched now (forfeiting that game), each by a
+// fresh copy of these hooks, scored by paired continuations played by the engine's base policy (race engines: P8 on
+// the race workers; p7h: POLICY; p8: P8; p9: P8f).
+export function midgameBase(e: EngineName = engineName()): E.Policy {
+  if (e === "p7h") return POLICY;
+  if (RACE.includes(e)) return raceBase(e);
+  return e === "p9" ? { ...P8F_POLICY, index: { ...P8F_POLICY.index!, slot: "roll" } } : { ...P8_POLICY, index: { ...P8_POLICY.index!, slot: "roll" } };
+}
+export function planHooksMidgame(tw: E.TeamWeek, events: E.Ev[], K: number, seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName = engineName(),
+  opp?: OppSource | null, onResult?: (r: MidgameResult) => void): E.Hooks {
+  const mk = () => planHooks(tw, events, K, seed, real, e, opp);
+  const base = midgameBase(e);
+  return midgameHooks(tw, events, mk(), { pol: decisionPolicy(e), base, makeInner: mk, realised: real, seed, pool: base.index && raceOnWorkers() ? liveRacePool : null, onResult });
 }
 // Hooks for replaying a finished week: p7h lock simulations (as before); p8 none; p9 index rollouts; race engines: races.
 export function replayHooks(tw: E.TeamWeek, events: E.Ev[], K: number, seed: number, real: { actual: Float64Array; played: Uint8Array }, e: EngineName = engineName()): E.Hooks | undefined {

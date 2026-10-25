@@ -19,6 +19,7 @@ export interface TipMemo {
   scores: Record<string, number>;   // finished-game scores (held / locked): a new one = a game ended
   lineup: string;                   // the Sleeper lineup ("PG:pid,SG:pid,...")
   sent: "changes" | "set" | null; key: string | null;
+  forfeit?: string;                 // task T3: the player of the last mid-game forfeit reminder for this tip-off (pid)
 }
 export type LineupState = Record<string, TipMemo>;
 export interface LineupMsg { key: string; title: string; body: string }

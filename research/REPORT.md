@@ -2986,3 +2986,168 @@ next tip-off"; buildWeek on the stubbed backend: Black not pinned, game started,
 | post-game lets go / locks (J. Johnson, Murray-Boyles, Miller) | at game end | unchanged: at game end |
 
 (Flagg was already in UTIL 2 in Sleeper at 8:16, so Black's SG goes to Jalen Green rather than to Flagg.)
+
+## Mid-game forfeit: benching a player whose game is in progress (task T3, 2026-10-21/22)
+Sleeper rule (confirmed by the user): benching a player mid-game forfeits that game (he keeps his later games) and frees
+his slot at once for someone whose game hasn't started. Task T2 used it only for Out players without stats (forfeits
+nothing). T3 lets the engine weigh it for anyone: keep him (slot busy until his game ends, then hold / lock / let go) vs
+bench him now. Switch `"midgameForfeit"` (default on), files, rollback: `DEPLOY_MIDGAME.md` (T3 part).
+
+**1. In-game state → his final score for this game** (`lib/live/ingame.ts`, live only, both teams).
+- Inputs: points so far (league scoring of Sleeper's live per-game stats; equal to the matchup's `players_points` for
+  every player in a game, checked at 8:28 PM), seconds played and fouls (Sleeper), period / clock (ESPN), Sleeper's
+  projected seconds, the pre-game model (mu, sd if he plays).
+- Final ~ Normal(points so far + R x r, sd):
+  - remaining minutes R = s x remaining game minutes, share s = (projected share x 12 + minutes so far) / (12 + elapsed);
+  - points per minute r = (pre-game rate x 20 + points so far) / (20 + minutes so far), at least 25% of the pre-game rate;
+  - sd = pre-game sd x sqrt(R / projected minutes); play probability 1 for that game; mean / sd rounded to 0.5.
+- Out for the rest of the game (R = 0, final = points so far): ejected (ESPN box score), fouled out (6 fouls), Sleeper's
+  tag Out / Inactive while he has stats and ESPN doesn't show him on the court, or ESPN's injury list reporting him Out
+  after the tip. No feed states "out for the rest of the game" directly; these are the available signals. Injury tags
+  are re-read every 4 min while a game is in progress.
+- The game's expected end: unchanged (ESPN period / clock).
+- Calibration on live snapshots: "Calibration" below.
+
+**2. Engine** (`lib/engine/midgame.ts`; `core.ts`: `forfeitGame`, `Hooks.beforeGroup`, `Game.pPlay` / `Game.live`).
+- `midgameHooks` wraps any engine's hooks. At the plan's first tip-off, if anyone tips then, it evaluates every player of
+  mine in a game in progress with in-game information whose game ends after that tip-off (up to 6, lowest expected final
+  first; a cap of 4 dropped the best candidate live, see 5).
+- Two worlds per candidate, each decided by the engine itself from the same state:
+  - **keep**: the engine's complete decision at the tip-off, as without the option;
+  - **forfeit**: benched now, then the engine's complete decision.
+  Each world uses a fresh copy of the engine's hooks with the same seed (p10b: the full race on the same scenarios), with
+  the outer price state restored and continued exactly.
+- Scored by 256 paired continuations (common random numbers, own stream) played by the engine's base policy: P8 for the
+  race engines (on the race workers; identical to one thread, tested), POLICY for p7h.
+- Recommended only if both hold:
+  - the paired gain is > max(1 pt, 2 se) on all 256 scenarios (futility stop per batch of 64, no early acceptance);
+  - the freed slot changes this tip-off's decision (someone else starts, locks or keeps a held score).
+- A clear gain that only comes at a later tip-off is "deferred" and re-checked when that tip-off is next. The keep world
+  can't forfeit later, so "now vs never" overstates benching now, and waiting shows more of his game. Found on the first
+  live run: at 8:38 PM all 4 players in a game showed +2–3 pts "now vs never", all of it from the 10:00 PM tip-off; none
+  was needed at 8:30.
+- Timing: a forfeit serves the tip-off it frees the slot for, so it is due at the last moment before that tip-off:
+  - more than 20 min before: "Bench X at the last moment before 10:00 PM (...; re-checked until then)";
+  - within 20 min: "Bench X now", and the urgent reminder is sent.
+- One forfeit per refresh. A changed call for the same tip-off says it replaces the earlier one ("don't bench both").
+- The check compares points; with `objective: "win"` it still does.
+- Without in-game information (every backtest and replay) there are no candidates: `beforeGroup` returns and nothing
+  changes. Race worker protocol is now v2: a stale worker bundle that ignores `pPlay` is refused, and the race runs on one
+  thread with identical results.
+
+**3. Backtest gate: identical without in-game information** (summaries in `research/out/t3/`).
+- **Smoke.** `research/backtest.ts`, weeks 1–2, P2LAH + P7H, K = KS = 200, `MIDGAME=1` (the hook at every tip-off), vs
+  the previous bundle (Oct 13):
+  - 20 team-weeks × 2 policies, 0 totals differ (week 1: 271.85 / 281.55; week 2: 278.90 / 289.35);
+  - 1,104 tip-offs seen, 0 evaluated;
+  - the same on the final code.
+- **Standard P10b season backtest.** `research/p10run.ts`, 230 team-weeks of 2025-26, `MIDGAME=1` at every tip-off,
+  PAR 10, 1.7 h, vs the published Phase-3 run `s10`:
+  - **230/230 identical P10b totals** (mean 286.22), max |diff| 0.00;
+  - invariant reports identical 230/230; race statistics identical 230/230 (per-race logs included);
+  - 6,218 tip-offs seen, 0 with a candidate.
+
+**4. Synthetic scenarios and monotonicity.** `tests/midgame.test.ts` (11 tests) and `tests/midgame_week.test.ts` (2).
+- **Injured early** (out with 2 pts; a 25-pt player tips with no slot): bench now, for P8 and for POLICY (p7h); gain > 15.
+- **Late slot crunch** (10 pts at the half, ~20 expected; a 38-pt C tips and only his UTIL fits): bench now; gain > 8.
+- **Normal game** (15 at the half, ~30 expected) vs a 20-pt player: never. A tie: never.
+- **No candidate** without a tip-off need, or without in-game information.
+- **Deferred**: a gain only at a later tip-off → keep now; at that tip-off → bench.
+- **P10b's race as the engine**: the same call, identical with 3 worker threads.
+- **Monotonicity, 14 random weeks**: the decision applied vs keep, both then played by P8 on 300 fresh scenarios. Never
+  significantly negative, mean ≥ 0; identical when there is no forfeit.
+- **End to end on a stubbed backend** (8:40 PM, Q2):
+  - estimates for a normal game, a fouled-out player, and one ruled out mid-game (Sleeper Out + ESPN off the court);
+  - the advice benches the fouled-out player for the 9:00 PM center; card and reminder;
+  - switch off = the pre-game model and no check.
+- **At scale** (`research/t3_mono.ts` / `.py`):
+  - Setup: 230 real 2025-26 team-weeks played by P8 on the real outcomes. At up to 6 tip-offs per team-week with a
+    starter in a game in progress, his in-game state is synthesised from the real final of that game: elapsed fraction
+    from the clock, points so far = final × fraction × U(0.6, 1.4), and 15% "out for the game". The option (P8 engine,
+    the shipped settings) decides, and the decision is scored on 300 fresh model scenarios vs keep, both then played by
+    P8. 6.7 CPU-h.
+
+  | | value |
+  |---|---|
+  | decision moments / players evaluated | 1,374 / 4,455 (1–6 candidates per moment) |
+  | forfeits | 67 (4.9% of moments); 38 more clear gains deferred (only at a later tip-off) |
+  | gain of the forfeits: race (selection) / **fresh** | 2.48 / **+1.71 ± 0.66** (95% CI, clustered by team-week) |
+  | fresh gain < 0 / significantly < 0 | 10 of 67 (all ≥ −0.71) / **0** |
+  | forfeited player out for the game / normal game | +2.91 ± 1.42 (22) / +1.12 ± 0.38 (45) |
+  | option value per decision moment / per team-week | +0.083 ± 0.040 / +0.50 pts (with this synthetic mix of states) |
+  | compute | 16.6 s per decision moment on one thread (P8, kMax 256) |
+
+  - The option never lowered expected points. Its fresh gains are ~70% of the race's estimate (winner's curse, as in
+    task H) and clearly positive.
+  - How much it is worth in practice depends on how often such states occur live; the synthetic mix is not a forecast.
+
+**5. Live check.** League 1344387394811490304, roster 8, Wed 2026-10-21.
+- Setup: own cache / config, engine p10b, 6 race workers while the backtests ran (`research/t3_live.ts`).
+- Every response was recorded every 10 min (`research/t3_record.ts`; scratch, not committed). A recorded moment replays
+  deterministically: two replays of 8:49 PM gave byte-identical advice.
+
+| time (ET) | first tip-off | players in a game (pts so far → expected final) | call |
+|---|---|---|---|
+| 8:38 PM (first version) | 8:30 late tip | Wilson −1.5→5, Miller 1→5, Coward −2→8, Murray-Boyles 3→12.5 | all four "+2–3 now vs never", all from the 10:00 PM tip-off → **deferral rule added** |
+| 8:41 PM | 8:30 late tip | same | all KEEP (−0.2 … +0.95) |
+| 8:49 PM (replay) | 10:00 PM | Miller 1→5 … | **bench Miller just before the 10:00 PM tip-off** (frees UTIL 1 for Clingan, +3.3 ± 0.8); 71 min ahead → "at the last moment" |
+| 9:00 PM | 10:00 PM | Murray-Boyles 6→13.5 … | bench Murray-Boyles, +1.9 ± 0.8, said "now" an hour early → **timing rule added** |
+| 9:41 PM | 10:00 PM | Flagg 8.5→19.5, Miller 0→2, Wilson 1.5→5, Coward 7.5→14 | **⚠️ Bench Cooper Flagg now** - frees UTIL 2 for Donovan Clingan at 10:00 PM, +3.7 ± 0.8; Miller also passes (+2.2) but less |
+| 9:52 PM | 10:00 PM | Flagg 6.5→16, Miller −2→−1 | the same call, +3.6 ± 0.7 |
+| 10:01 PM (late tip) | 10:00 PM | Flagg 9.5→19.5, Murray-Boyles 16→19 | cap 4: Murray-Boyles +2.7 (Flagg not evaluated); cap 6 (replay): **Flagg again, +2.8 ± 0.8**, Murray-Boyles +0.8 → **cap raised to 6** |
+
+- **Why Flagg and not Miller** (0 so far, ~2 expected), in the engine's reasoning: Clingan (C, proj 29.6, tips 10:00)
+  fits only C or UTIL, and all three were in games. Miller's UTIL 1 frees at ~10:20 for the 10:30 starters anyway, while
+  Flagg's UTIL 2 stays blocked until ~10:50.
+- Card at 9:41 PM:
+  - banner "⚠️ Bench Cooper Flagg now - forfeits his 8.5 so far; frees UTIL 2 for Donovan Clingan at 10:00 PM, +3.7 exp pts";
+  - Do now: 1. Bench Cason Wallace (lets go of his held 5.0), 2. Bench Cooper Flagg now (in his game - ...), 3. Put
+    Collin Gillespie in PG, 4. Put Donovan Clingan in UTIL 2;
+  - rows "in game now (16.0 so far, ~22.5 expected; ends ~10:20 PM)".
+- Reminder: "⚠️ BENCH Cooper Flagg NOW (forfeits his 8.5) → Donovan Clingan in UTIL 2". With the option off, the plan at
+  10:00 PM starts only Draymond Green and Jalen Green.
+- **Latency.** On the 8:49 PM recording: advice 36–50 s with the option vs 21 s without, on this loaded machine with 6
+  race workers. That is up to 6 extra races + 256 continuations each. It is well within the notifier's 9-min watchdog;
+  the live app has 12 race workers.
+- (The live app was not changed; these are the engine-v2 worktree's calls on live data.)
+- **What happened** (finals, for the record; one draw, not a test): Flagg finished with **34.5** (8.5 at 9:41 PM,
+  ~19.5 expected, sd 8: +1.9 sd) and would likely have been locked; Clingan scored 12.0. In hindsight, benching Flagg
+  would have cost points. Murray-Boyles 16.0 (the 10:01 cap-4 call: ~19 expected), Miller −3.0, Wilson 4.5, Coward 11.5.
+  The call was an ex-ante +2.8–3.7 by the model; how often such calls pay off for real can only be measured over many
+  live nights. (Suggested: log every live forfeit call and its outcome; the notifier's advice log already keeps the calls.)
+
+**Calibration of the in-game estimate** (`research/t3_calib.ts`).
+- Data: 35 live snapshots of 2026-10-21's 11 games (ESPN clock + Sleeper live stats every 7–8 min, `research/t3_snap.sh`).
+- 215 player-games with a projection, 3,014 in-game observations; finals from the last snapshot. Observations of one
+  player are correlated, and this is one night.
+
+| model of his final score | Q1 RMSE | Q2 | Q3 | Q4+ | all: bias | RMSE | sd(z) | 80% interval covers |
+|---|---|---|---|---|---|---|---|---|
+| pre-game model (ignores the game so far) | 10.07 | 9.78 | 9.64 | 9.62 | −1.01 | 9.70 | 1.05 | 81% |
+| no shrinkage (so far + pre-game rate × pre-game share of the remaining minutes) | 8.98 | 7.54 | 6.20 | 3.32 | −0.83 | 6.09 | 1.01 | 83% |
+| **shipped** (shrunk share and rate, ING) | 9.89 | 7.76 | 6.31 | 3.37 | −0.91 | **6.31** | **1.01** | **81%** |
+| best of the 27-point grid (kShare 24, kRate 40, sdScale 1) | | | | | −0.88 | 6.11 | 0.99 | 83% |
+
+- The shipped estimate cuts the error of the final by 35% vs the pre-game model, and its uncertainty is calibrated
+  (sd of z 1.01, 81% in the 80% interval). The decisions depend on that.
+- The early estimates run slightly high (Q1 bias −2.3).
+- More shrinkage of the rate (kRate 40) or none at all is marginally better on this night (6.1 vs 6.3). That is not
+  enough evidence from one night of correlated observations to retune. The parameters stay as shipped; candidate for a
+  multi-night refit (keep running `research/t3_snap.sh` on game nights).
+
+Checks: `npx tsc --noEmit` clean; `npm test` 132/132.
+- Also fixed: `scripts/notify.ts` set `LOCKIN_CACHE_DIR` to the live app's cache when merely imported. A first version of
+  the stubbed test therefore read the live disk cache and wrote two stub entries for a fake league "MG1". Those two
+  files were removed; no entry the live app uses was written. The variable is now set in `main()` only.
+
+```
+npx esbuild research/backtest.ts --bundle --platform=node --format=cjs --outfile=research/dist/backtest_t3.cjs --log-level=error
+node research/runpar.mjs research/dist/backtest_t3.cjs t3/smoke P2LAH,P7H 200 KS=200 WEEKS=1-2 MIDGAME=1   # + t3/smokeref, old bundle
+python3 research/t3_smoke.py t3/smoke t3/smokeref P2LAH,P7H
+npx esbuild research/p10run.ts --bundle --platform=node --format=cjs --outfile=research/dist/p10run_t3.cjs --log-level=error
+node research/runtasks.mjs research/dist/p10run_t3.cjs t3/s10mg "" POLS=P10b MIDGAME=1 PAR=10 && python3 research/t3_season.py t3/s10mg s10 P10b
+npx esbuild research/t3_mono.ts --bundle --platform=node --format=cjs --outfile=research/dist/t3_mono.cjs --log-level=error
+node research/runtasks.mjs research/dist/t3_mono.cjs t3/mono "" PAR=10 && python3 research/t3_mono.py t3/mono
+bash research/t3_record_loop.sh <league> <roster> research/scratch/t3/rec        # record live moments (own dirs)
+bash research/t3_replays.sh --twice research/scratch/t3/rec/rec_<ms>.json.gz && python3 research/t3_replay_cmp.py research/scratch/t3/replay/rec_<ms>
+```

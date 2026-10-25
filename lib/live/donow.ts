@@ -7,7 +7,10 @@
 // Task T2 (Sleeper: a player can be moved at any time, even during his game; moving him between starting slots keeps
 // the game, benching him mid-game forfeits it and frees the slot): a player in a game can move between starting slots
 // now; only taking him out of the lineup or locking him waits until his game ends (this card never benches a player who
-// is playing). An Out player in a game in progress scores 0 anyway: benching him now forfeits nothing.
+// is playing - except a mid-game forfeit, task T3). An Out player in a game in progress scores 0 anyway: benching him now
+// forfeits nothing.
+// Task T3: the engine may recommend benching a player in a game in progress now (plan[0].midgame, "BENCH_NOW": forfeits
+// that game, frees his slot for this tip-off): a banner, and a bench change now (not after his game) with the reason.
 import type { Advice, Decision, TipPlan } from "./advise";
 
 export function slotLabels(names: string[]) {
@@ -23,8 +26,11 @@ export interface DoNowRow {
 }
 export interface DoNowStep { t: number; when: string; title: string; items: string[]; tentative: boolean }
 export interface DoNowLock { player: string; pid: string; slot: string; score: number; by: string; text: string }
+// task T3: bench a player in a game in progress now (forfeits his points so far)
+export interface DoNowForfeit { player: string; pid: string; slot: string; pts: number; gain: number; text: string; tip: number; now: boolean }
 export interface DoNow {
   tip: number | null; tipText: string | null; rows: DoNowRow[]; changes: string[]; locks: DoNowLock[];
+  forfeits?: DoNowForfeit[]; midgameNotes?: string[]; // task T3: bench-now calls (banner) / players kept in for now (info)
   then: DoNowStep[]; bench: string[]; upToDate: string | null;
   compact: string; // "SG Black (free roll), PG Wallace (held 5.0), F Jalen Johnson" (reminder title)
   // the target lineup at the next tip-off (who starts / holds / locks; value = expected points of tonight's game for
@@ -109,6 +115,8 @@ export function doNow(a: DoNowInput): DoNow {
   cur.forEach((o) => { if (o?.lockIf != null) cutoff.set(o.pid, o.lockIf); });
   for (const d of a.decisions) if (d.threshold != null) cutoff.set(d.pid, d.threshold);
   const benchedAt = (k: number) => new Set(plan[k].benched.map((b) => b.pid ?? pidOf(b.player)).filter(Boolean) as string[]);
+  // task T3: players in a game in progress the engine benches now (forfeit)
+  const mgBench = new Map((plan[0]?.midgame ?? []).filter((m) => m.recommended === "BENCH_NOW").map((m) => [m.pid, m]));
   const forfeit0 = new Set((plan[0]?.forfeits ?? []).map((f) => pidOf(f.player)).filter(Boolean) as string[]);
   // ---- who is in the lineup at each tip-off (the engine's plan) and the engine's slot for him (a hint only) ----
   // Which slot a player gets among equally good options is arbitrary in the engine (Monte-Carlo ordering, slot order),
@@ -163,7 +171,7 @@ export function doNow(a: DoNowInput): DoNow {
     const sits = (pid: string) => { const p = where(prev, pid); return p >= 0 ? p : where(cur, pid); };
     const ok = (it: Item, s: number) => { const f = fits(it.o.pid, s); return it.lock || f === null ? it.hint >= 0 && S[s].slot === S[it.hint].slot : f; };
     // (a slot whose occupant goes to the bench: one swap in Sleeper; an empty one: one move)
-    const out = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => out.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => out.add(d.pid)); }
+    const out = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => out.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => out.add(d.pid)); mgBench.forEach((_, p) => out.add(p)); }
     const W = (it: Item, s: number) => (it.o.kind === "playing" ? 1e5 : 0) + (!flex && sits(it.o.pid) === s ? 110 : 10 - width(s) + (prev[s] && out.has(prev[s]!.pid) ? 0.3 : !prev[s] ? 0.25 : 0) + (fits(it.o.pid, s) === null && s === it.hint ? 0.01 : 0));
     const cands = its.map((it) => free.filter((s) => ok(it, s)).sort((x, y) => W(it, y) - W(it, x) || x - y));
     const order = its.map((_, i) => i).sort((x, y) => cands[x].length - cands[y].length || x - y);
@@ -245,7 +253,7 @@ export function doNow(a: DoNowInput): DoNow {
   let prev = cur;
   plan.forEach((_, k) => {
     const t = R[k].slice();
-    const must = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => must.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => must.add(d.pid)); }
+    const must = benchedAt(k); if (k === 0) { forfeit0.forEach((p) => must.add(p)); a.decisions.filter((d) => d.recommended === "BENCH").forEach((d) => must.add(d.pid)); mgBench.forEach((_, p) => must.add(p)); }
     prev.forEach((r, s) => {
       if (!r || r.kind === "locked" || r.kind === "lock" || t.some((x) => x?.pid === r.pid) || must.has(r.pid)) return;
       const keep: Occ = { ...r, kind: r.kind === "held" ? "held" : r.dnp && k === 0 ? "playing" : "idle", early: false };
@@ -261,6 +269,8 @@ export function doNow(a: DoNowInput): DoNow {
   // ---- diffs ----
   const benchWhy = (r: Occ, k: number) => {
     const inj = injury.get(r.pid);
+    const mf = k === 0 ? mgBench.get(r.pid) : undefined;
+    if (mf) return `${mf.now === false ? ` at the last moment before ${tipTxt(mf.tip)}` : " now"} (in his game - forfeits his ${f1(mf.pts)} so far${mf.out ? `, ${mf.out}` : ""}; frees ${mf.slot}${mf.for.length ? ` for ${mf.for.join(" & ")}` : ""}${mf.now === false ? "" : ` at ${tipTxt(mf.tip)}`}, +${f1(mf.gain)} exp pts${mf.now === false ? "; re-checked until then" : ""})`;
     if (r.dnp) return ` now (${inj || "out"} - not playing in his game in progress, scores 0: benching him forfeits nothing)`;
     if (r.kind === "held" || (k === 0 && curHeld.has(r.pid))) return ` (lets go of his held ${f1(r.score ?? curHeld.get(r.pid))})`;
     const b = plan[k]?.benched.find((x) => (x.pid ?? pidOf(x.player)) === r.pid);
@@ -337,7 +347,7 @@ export function doNow(a: DoNowInput): DoNow {
   let shown: Lineup = cur;
   if (plan.length) {
     const live0 = new Map<string, number>();
-    cur.forEach((o) => { if (o?.kind === "playing" && !o.dnp && !(plan[0].playing ?? []).some((x) => x.pid === o.pid)) live0.set(o.pid, o.end ?? plan[0].tip); });
+    cur.forEach((o) => { if (o?.kind === "playing" && !o.dnp && !mgBench.has(o.pid) && !(plan[0].playing ?? []).some((x) => x.pid === o.pid)) live0.set(o.pid, o.end ?? plan[0].tip); });
     const c0 = diff(cur, F[0], 0);
     const sp = split(c0, cur, F[0], live0);
     nowChanges = order(sp.now);
@@ -366,7 +376,7 @@ export function doNow(a: DoNowInput): DoNow {
   // lock checks when games end (cut-off: the score at which locking beats holding)
   const checked = new Set<string>();
   const check = (o: Occ | null) => {
-    if (!o || (o.kind !== "start" && o.kind !== "freeRoll" && o.kind !== "playing") || o.end == null || o.lockIf == null || o.dnp) return;
+    if (!o || (o.kind !== "start" && o.kind !== "freeRoll" && o.kind !== "playing") || o.end == null || o.lockIf == null || o.dnp || (o.kind === "playing" && mgBench.has(o.pid))) return;
     const key = `${o.pid}|${o.end}`; if (checked.has(key)) return; checked.add(key);
     const st = [...steps.values()].find((x) => Math.abs(x.t - o.end!) < 60e3) ?? step(o.end, o.kind !== "playing", null);
     st.after.add(o.name);
@@ -407,7 +417,12 @@ export function doNow(a: DoNowInput): DoNow {
       case "freeRoll": return `free roll - ${injury.get(o.pid) || "injured"}, ${Math.round((o.playProb ?? 0) * 100)}% to play (${tipTxt(o.tip!)})`;
       case "playing":
         if (o.dnp) return `${cap(injury.get(o.pid) || "out")} - not playing in ${o.team ? `the ${o.team}` : "his"} game in progress, scores 0; bench him any time - forfeits nothing, the slot is free now`;
-        return `in game now${o.end ? ` (ends ~${clock(r5(o.end))})` : ""}${lk(o.lockIf)}`;
+        {
+          // (task T3: points so far and the expected final when the in-game estimate is on)
+          const ig = players.find((x) => x.pid === o.pid)?.games?.find((g) => g.status === "in")?.inGame;
+          const so = ig ? `${f1(ig.pts)} so far${ig.out ? ` - ${ig.out}` : `, ~${f1(ig.mu)} expected`}; ` : "";
+          return `in game now${o.end || ig ? ` (${so}${o.end ? `ends ~${clock(r5(o.end))}` : ""})`.replace("; )", ")") : ""}${lk(o.lockIf)}`;
+        }
       case "idle": {
         if (tip0 === null) return "no game left - can stay";
         const n = dayNote(o.pid, tip0);
@@ -434,7 +449,9 @@ export function doNow(a: DoNowInput): DoNow {
     bench.push(`${b.player} - sits ${dayClock(pl.tip)}${b.label ? ` (${b.label.replace(/: don't start/, " - don't start")})` : ` (proj ${f1(b.proj)})`}`);
   }));
   (plan[0]?.forfeits ?? []).forEach((f) => bench.push(`${f.player} - let go of his held ${f1(f.score)} (the slot is worth more)`));
-  const upToDate = nowChanges.length || locks.length ? null
+  const forfeits: DoNowForfeit[] = [...mgBench.values()].map((m) => ({ player: m.player, pid: m.pid, slot: m.slot, pts: m.pts, gain: m.gain, text: m.text, tip: m.tip, now: m.now !== false }));
+  const midgameNotes = (plan[0]?.midgame ?? []).filter((m) => m.recommended === "KEEP" && m.deferred !== undefined).map((m) => m.text);
+  const upToDate = nowChanges.length || locks.length || forfeits.length ? null
     : !plan.length ? "Your lineup is already correct - no more games for your players this week."
     : `Your lineup is already correct - nothing to do until ${until[0] ?? `the ${plan[0].when} tip-off`}.`;
   const tag = (o: Occ) => (o.kind === "held" ? ` (held ${f1(o.score)})` : o.kind === "freeRoll" ? " (free roll)" : o.kind === "lock" ? ` (LOCK ${f1(o.score)})` : "");
@@ -442,17 +459,20 @@ export function doNow(a: DoNowInput): DoNow {
   const compact = rows.filter((r, s) => gets.has(s) && r.pid).map((r, _, __, s = L.indexOf(r.slot)) => `${r.slot} ${r.player}${tag(shown[s]!)}`).join(", ");
   const value = (o: Occ) => (o.kind === "start" || o.kind === "freeRoll" ? (o.proj ?? 0) * (o.playProb ?? 1) : o.score ?? null);
   const target = (F[0] ?? []).flatMap((o, s) => (o ? [{ slot: L[s], pid: o.pid, name: o.name, kind: o.kind, tip: o.tip ?? null, value: value(o), early: !!o.early }] : []));
-  return { tip: tip0, tipText: plan[0]?.when ?? null, rows, changes: nowChanges.map((c) => cap(c.text)), locks, then, bench, upToDate, compact, target };
+  return { tip: tip0, tipText: plan[0]?.when ?? null, rows, changes: nowChanges.map((c) => cap(c.text)), locks, then, bench, upToDate, compact, target,
+    ...(forfeits.length ? { forfeits } : {}), ...(midgameNotes.length ? { midgameNotes } : {}) };
 }
 
 // plain-text rendering of the card (live checks, logs)
 export function doNowText(d: DoNow): string {
   const out: string[] = [];
   for (const l of d.locks) out.push(`🔒 ${l.text}`);
+  for (const f of d.forfeits ?? []) out.push(`⚠️ ${f.text}`);
   out.push(`Set your lineup to${d.tipText ? ` (before the ${d.tipText} tip-off)` : ""}:`);
   for (const r of d.rows) out.push(`  ${r.change ? "*" : " "} ${r.slot.padEnd(6)} ${(r.player ?? "-").padEnd(24)} ${r.status}${r.change ? `\n             -> change: ${r.change}` : ""}${r.later ? `\n             -> later ${r.later}` : ""}`);
   out.push(d.upToDate ?? `Do now, in this order:\n${d.changes.map((c, i) => `  ${i + 1}. ${c}`).join("\n")}`);
   if (d.then.length) { out.push("Then:"); for (const s of d.then) out.push(`  ${s.title}${s.tentative ? " [tentative]" : ""}\n${s.items.map((i) => `     - ${i}`).join("\n")}`); }
   if (d.bench.length) out.push(`Bench: ${d.bench.join("; ")}`);
+  for (const m of d.midgameNotes ?? []) out.push(`(in-game) ${m}`);
   return out.join("\n");
 }

@@ -20,7 +20,9 @@ import * as E from "../engine/core";
 import { importPrices, resetPrices, setMemoMax, type PriceSnap } from "../engine/p8";
 import { continuation, type RaceCtx, type RacePool, type Scen } from "../engine/p10";
 
-export const RACE_PROTOCOL = "lockin-race-v1"; // the worker bundle must contain this string (stale bundles are skipped)
+// the worker bundle must contain this string (stale bundles are skipped). v2 (task T3): games in progress carry pPlay /
+// live in-game information that a v1 bundle's engine would ignore (its continuations would differ from this thread's)
+export const RACE_PROTOCOL = "lockin-race-v2";
 const STALL_MS = Number(process.env.LOCKIN_RACE_STALL_MS || 60000);
 const HELLO_MS = 20000;
 const IDLE_MS = Number(process.env.LOCKIN_RACE_IDLE_MS || 10 * 60e3); // the app's pool is stopped after this long unused

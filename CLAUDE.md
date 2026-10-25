@@ -5,7 +5,7 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 `launchctl`, never `git push`. Commit your work on `engine-v2` in small, described commits.
 
 ## Commands
-- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 119 tests today)
+- Type check: `npx tsc --noEmit -p .`   Unit tests: `npm test` (must stay green; 132 tests today)
 - Bundle a research script: `npx esbuild research/X.ts --bundle --platform=node --format=cjs --outfile=research/dist/X.cjs --log-level=error`
 - Season backtest (2025-26, 23 weeks x 10 teams = 230 team-weeks), parallel over the 14 cores:
   `node research/runpar.mjs research/dist/backtest.cjs <outPrefix> <POLICY,POLICY,...> 200 KS=200`
@@ -56,6 +56,14 @@ You are working in an ISOLATED git worktree (`~/sleeper-engine-v2`, branch `engi
 - Mid-game moves (task T2, REPORT "Mid-game moves", `DEPLOY_MIDGAME.md`): a dnp player is not pinned (bench now, forfeits
   nothing); the Do-now card re-places players in a game between starting slots (only benching / locking them waits for
   the game end). The engine still treats a playing player's slot as fixed. Live check `research/t2_live.cjs`.
+- Mid-game forfeit (task T3, REPORT "Mid-game forfeit", `DEPLOY_MIDGAME.md` T3 part; switch `"midgameForfeit"`, default ON):
+  `lib/live/ingame.ts` (pure: final-score estimate of a game in progress from points / minutes so far + ESPN clock, out for
+  the game: ejected / fouled out / ruled out), `lib/engine/midgame.ts` (`midgameHooks`: keep vs bench-now worlds decided by
+  the engine itself, paired continuations, > max(1, 2 se) and used at this tip-off, else deferred), `core.ts`
+  `forfeitGame` + `Hooks.beforeGroup` + `Game.pPlay` / `Game.live` (no-ops without in-game information: backtests
+  unchanged; research runners `MIDGAME=1`), `planHooksMidgame` in `lib/live/engine.ts`, `TipPlan.midgame` /
+  `DoNow.forfeits`. Research: `research/t3_record.ts` (record a live moment) + `t3_live.ts` (live check / `REPLAY=`),
+  `t3_snap.sh` + `t3_calib.ts` (estimator calibration on live snapshots), `t3_mono.ts` / `.py` (at-scale study).
 - `tests/*.test.ts`: node:test unit tests.
 
 ## Sleeper Lock-In rules (verified: Sleeper support article 6522833 + community; all must be modeled)

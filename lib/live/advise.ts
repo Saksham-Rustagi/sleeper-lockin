@@ -8,7 +8,10 @@ import * as E from "../engine/core";
 import { buildWeek, POLICY, etDate, type WeekContext, type LiveTeam } from "./week";
 import { cachedCompute, fingerprint } from "./cache";
 import { teamFingerprint, teamSims, summarize, winProb, TEAM_SIMS, simCutoff } from "./teamsim";
-import { decisionPolicy, simPolicy, planHooks, replayHooks, winActive, engineDecidesHolds, engineName, WIN_OPTS } from "./engine";
+import { decisionPolicy, simPolicy, planHooks, planHooksMidgame, replayHooks, winActive, engineDecidesHolds, engineName, WIN_OPTS } from "./engine";
+import { optionOn } from "./override";
+import type { MidgameResult } from "../engine/midgame";
+import type { InGameEst } from "./ingame";
 import { liveOppSource } from "./opponent";
 import { betaAt } from "../engine/p11";
 import { doNow, slotLabels, type DoNow } from "./donow";
@@ -39,6 +42,16 @@ export interface TipPlan {
   // dnp: Out / inactive with no stats in that game (scores 0; no lock decision; his slot frees with nothing held). Since
   // task T2 such a player isn't pinned (his slot is free now: benching him forfeits nothing), so live advice lists none.
   playing?: { player: string; pid: string; slot: string; end: number; dnp?: boolean; team?: string }[];
+  // task T3 (first tip-off only, option "midgameForfeit"): every player of mine in a game in progress the engine evaluated
+  // for benching now (forfeits that game, frees his slot); recommended "BENCH_NOW" only for a clear gain
+  midgame?: MidgameCall[];
+}
+export interface MidgameCall {
+  player: string; pid: string; slot: string; pts: number; min: number | null; final: number; sd: number; out: string | null;
+  keep: number; forfeit: number; gain: number; se: number; n: number; recommended: "BENCH_NOW" | "KEEP";
+  deferred?: number | null; // KEEP for now: a clear gain that only comes at a later tip-off (that tip, null = unknown); re-checked then
+  for: string[]; tip: number; text: string;
+  now?: boolean; // BENCH_NOW: the tip-off it serves is within FORFEIT_LAST (else: bench him just before it, re-checked until then)
 }
 export interface Advice {
   generatedAt: number; asOf: number; mode: "live" | "replay"; league: string; season: string; week: number; dates: string[];
@@ -54,7 +67,8 @@ export interface TeamView {
   // dnp / team (task T): in a game in progress he is Out / inactive for (scores 0; no lock cut-off), his NBA team
   slots: { slot: string; player: string | null; pid: string | null; locked: boolean; points: number | null; source: string | null; state: string; stateText?: string; heldUntil?: number | null; injury?: string | null; gameEnd?: number; lockIf?: number | null; dnp?: boolean; team?: string }[];
   // projOverride: the minutes override replaced Sleeper's projection for this player (option "minutesOverride")
-  players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; projOverride?: string; rosterNote?: string; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null; projOverride?: string; late?: number; dnp?: boolean }[] }[];
+  // inGame (task T3): a game in progress he has played in - points / minutes so far and his expected final score
+  players: { pid: string; name: string; pos: string; injury: string | null; locked: boolean; projOverride?: string; rosterNote?: string; games: { date: string; opp: string; tip: number; status: string; proj: number; actual: number | null; projOverride?: string; late?: number; dnp?: boolean; inGame?: InGameEst }[] }[];
 }
 export interface Outlook { myMean: number; myP10: number; myP90: number; oppMean: number | null; oppP10: number | null; oppP90: number | null; winProb: number | null; sims: number }
 
@@ -83,7 +97,7 @@ function teamView(ctx: WeekContext, T: LiveTeam): TeamView {
     players: T.pids.map((pid, i) => ({
       pid, name: T.names[i], pos: T.positions[i].join("/"), injury: T.injury[i], locked: !!st.isLocked[i], ...(T.overrides?.[pid] ? { projOverride: T.overrides[pid].label } : {}),
       ...(T.rosterFix?.[pid] ? { rosterNote: T.rosterFix[pid].label } : {}), // task R: his team's current NBA roster doesn't list him
-      games: T.games.filter((g) => g.pid === pid).map((g) => ({ date: g.date, opp: g.opp, tip: g.tip, status: g.status, proj: Math.round(g.proj * 10) / 10, actual: g.actual, ...(g.projOverride ? { projOverride: g.projOverride } : {}), ...(g.late ? { late: g.late } : {}), ...(g.dnp ? { dnp: true } : {}) })),
+      games: T.games.filter((g) => g.pid === pid).map((g) => ({ date: g.date, opp: g.opp, tip: g.tip, status: g.status, proj: Math.round(g.proj * 10) / 10, actual: g.actual, ...(g.projOverride ? { projOverride: g.projOverride } : {}), ...(g.late ? { late: g.late } : {}), ...(g.dnp ? { dnp: true } : {}), ...(g.inGame ? { inGame: g.inGame } : {}) })),
     })),
   };
 }
@@ -258,7 +272,12 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
   T.lineup.forEach((pid, s) => { const i = pid ? T.pids.indexOf(pid) : -1; if (i >= 0) prevPos.set(i, s); });
   // who starts at each tip-off: decided by simulation (rule's lineup vs small changes, 200 continuations each).
   // Backtest 2025-26: +4.3 ± 2.0 pts/week over lock-only simulation.
-  const startHooks = planHooks(T.tw, T.events, START_SIMS, 4242 + ctx.week, T.real, undefined, winActive() ? liveOppSource(ctx.opp, ctx.asOf, 4242 + ctx.week) : null); const pol = decisionPolicy();
+  // task T3 ("midgameForfeit"): the first tip-off's decision may bench a player in a game in progress (lib/engine/midgame.ts)
+  const mg: { r: MidgameResult | null } = { r: null };
+  const oppSrc = winActive() ? liveOppSource(ctx.opp, ctx.asOf, 4242 + ctx.week) : null;
+  const startHooks = optionOn("midgameForfeit") ? planHooksMidgame(T.tw, T.events, START_SIMS, 4242 + ctx.week, T.real, undefined, oppSrc, (r) => { mg.r ??= r; })
+    : planHooks(T.tw, T.events, START_SIMS, 4242 + ctx.week, T.real, undefined, oppSrc);
+  const pol = decisionPolicy();
   let tips = [...new Set(T.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + hours * 3600e3).map((g) => g.tip))].sort((a, b) => a - b);
   if (!tips.length) { // nothing soon (e.g. preseason / off days): plan the next game day instead
     const nextDay = T.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0];
@@ -312,7 +331,8 @@ async function plan(ctx: WeekContext, hours: number, first0?: { st?: E.State; ti
     const forfeits: TipPlan["forfeits"] = [];
     if (before) for (let p = 0; p < T.pids.length; p++) if (!Number.isNaN(before.pendingX[p]) && Number.isNaN(st.pendingX[p]) && !st.isLocked[p] && st.inGame[p] < 0) forfeits.push({ player: T.names[p], score: before.pendingX[p] });
     const late = groupGames.find((g) => g.late)?.late;
-    out.push({ tip, when: late ? `${fmtTime(late)} (late tip - not tipped yet)` : fmtTime(tip), starts, benched, tentative: !first, holds, forfeits, locks, playing, ...(late ? { late } : {}) });
+    const mgc = first && mg.r ? midgameCalls(T, mg.r, L, late ?? tip, ctx.asOf) : undefined;
+    out.push({ tip, when: late ? `${fmtTime(late)} (late tip - not tipped yet)` : fmtTime(tip), starts, benched, tentative: !first, holds, forfeits, locks, playing, ...(late ? { late } : {}), ...(mgc?.length ? { midgame: mgc } : {}) });
     first = false;
   }
   // an unlikely player is a start only as a free roll: nobody likely to play who fits his slot is benched at a tip-off
@@ -344,6 +364,30 @@ function unlikely(T: LiveTeam, gi: number, proj: number): { playProb: number; ex
   return { playProb: pk, expected: ex, label: `${inj[0].toUpperCase() + inj.slice(1)} - ${Math.round(pk * 100)}% to play (exp ${ex.toFixed(1)})` };
 }
 
+// task T3: the mid-game forfeit evaluation of the first tip-off, for display (lib/engine/midgame.ts MidgameResult)
+const clockET = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(ms);
+// A forfeit serves the tip-off it frees the slot for: done at the last moment before it (benching earlier only gives up
+// what the rest of his game shows - the call is re-checked on every refresh). "Bench now" within FORFEIT_LAST of it.
+export const FORFEIT_LAST = 20 * 60e3;
+function midgameCalls(T: LiveTeam, r: MidgameResult, L: string[], tip: number, asOf: number): MidgameCall[] {
+  return r.evals.map((x) => {
+    const g = T.games[x.gi]; const ig = g.inGame; const name = T.names[x.p]; const bench = x.p === r.pick;
+    const forNames = x.starts.map((q) => T.names[q]);
+    const so = `${x.pts.toFixed(1)} so far${ig?.out ? ` - ${ig.out}` : ig ? `, ~${x.mu.toFixed(1)} expected by the end` : ""}`;
+    // (deferred: the freed slot is first used at a later tip-off before his game ends - the next such tip of mine)
+    const later = x.deferred ? T.games.filter((q) => q.tip > tip && q.tip < g.end && q.status === "pre").map((q) => q.tip).sort((a, b) => a - b)[0] : undefined;
+    const now = tip - asOf <= FORFEIT_LAST;
+    const text = bench
+      ? (now ? `Bench ${name} now - forfeits his ${x.pts.toFixed(1)} so far${ig?.out ? ` (${ig.out})` : ""}; frees ${L[x.slot]}${forNames.length ? ` for ${forNames.join(" & ")}` : ""} at ${clockET(tip)}, +${x.gain.toFixed(1)} exp pts`
+        : `Bench ${name} just before the ${clockET(tip)} tip-off - forfeits his ${x.pts.toFixed(1)} so far${ig?.out ? ` (${ig.out})` : ""}; frees ${L[x.slot]}${forNames.length ? ` for ${forNames.join(" & ")}` : ""}, +${x.gain.toFixed(1)} exp pts (re-checked as his game goes on: wait until then)`)
+      : x.pass ? `Keep ${name} in ${L[x.slot]} (in his game: ${so}) - benching him would also gain +${x.gain.toFixed(1)} exp pts, but benching ${T.names[r.pick]} is worth more (one at a time; re-checked after)`
+      : x.deferred ? `Keep ${name} in ${L[x.slot]} for now (in his game: ${so}) - benching him ${later ? `before the ${clockET(later)} tip-off` : "later tonight"} may be worth +${x.gain.toFixed(1)} exp pts; re-checked then`
+      : `Keep ${name} in ${L[x.slot]} (in his game: ${so}) - benching him now ${x.gain > 0 ? `gains only ${x.gain.toFixed(1)} ± ${(2 * x.se).toFixed(1)}` : `loses ${(-x.gain).toFixed(1)}`} exp pts`;
+    return { player: name, pid: T.pids[x.p], slot: L[x.slot], pts: x.pts, min: ig?.min ?? null, final: x.mu, sd: x.sd, out: ig?.out ?? null,
+      keep: x.keep, forfeit: x.forfeit, gain: x.gain, se: x.se, n: x.n, recommended: bench ? "BENCH_NOW" : "KEEP", ...(x.deferred ? { deferred: later ?? null } : {}), for: forNames, tip, ...(bench ? { now } : {}), text };
+  });
+}
+
 function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] {
   const a: string[] = [];
   for (const d of ds) {
@@ -352,6 +396,7 @@ function actionsFrom(ctx: WeekContext, ds: Decision[], pl: TipPlan[]): string[] 
     else if (d.deadline) a.push(`HOLD ${d.player} (${d.score.toFixed(1)}) in a starting slot; decide ${d.deadlineText}. Lock if nothing better shows up (cut-off ${d.threshold ?? "?"}).`);
   }
   const nxt = pl[0];
+  for (const m of nxt?.midgame ?? []) if (m.recommended === "BENCH_NOW") a.push(`${m.text}.`);
   if (nxt) {
     const current = new Set(ctx.me.lineup.filter(Boolean) as string[]);
     const moves = nxt.starts.filter((s) => !current.has(s.pid));
@@ -373,7 +418,8 @@ export async function advise(o: { leagueId: string; rosterId: number; week?: num
   const K = o.K ?? 300;
   const windowTips = [...new Set(ctx.me.games.filter((g) => g.tip > ctx.asOf && g.tip < ctx.asOf + 30 * 3600e3).map((g) => g.tip))].sort();
   if (!windowTips.length) { const nd = ctx.me.games.filter((g) => g.tip > ctx.asOf).map((g) => g.date).sort()[0]; if (nd) windowTips.push(...ctx.me.games.filter((g) => g.date === nd).map((g) => g.tip)); }
-  const fp = o.force ? String(Math.random()) : fingerprint({ v: 15, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes });
+  const fp = o.force ? String(Math.random()) : fingerprint({ v: 15, K, week: ctx.week, me: teamFingerprint(ctx.me), opp: ctx.opp ? teamFingerprint(ctx.opp) : null, windowTips, notes: ctx.notes,
+    ...(optionOn("midgameForfeit") ? { midgame: 1 } : {}) }); // (task T3: the option changes the plan; off = the old fingerprints)
   const [ms, os] = await Promise.all([teamSims(ctx.me, ctx.week, ctx.asOf), ctx.opp ? teamSims(ctx.opp, ctx.week, ctx.asOf) : Promise.resolve(null)]);
   const { value, cached } = await cachedCompute(`advise-${o.leagueId}-${o.rosterId}`, fp, () => computeAdvice(ctx, K, ms, os));
   return { ...value, doNow: doNow(value), cached, checkedAt: Date.now() }; // (pure and fast: never stale from the cache)
